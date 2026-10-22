@@ -1,0 +1,87 @@
+<Window x:Class="Bezoro.AhkManager.Presentation.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="Bezoro AHK Manager" Width="1220" Height="800" MinWidth="1000" MinHeight="720" WindowStartupLocation="CenterScreen"
+ Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13" UseLayoutRounding="True">
+ <Grid x:Name="RootLayout" Margin="24,20,24,16" Background="{StaticResource BackgroundBrush}">
+  <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+  <Grid Margin="0,0,0,16">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+   <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Image Width="36" Height="36" Source="AppIcon.png" Margin="0,0,12,0" /><StackPanel><TextBlock Text="Bezoro AHK Manager" FontSize="20" FontWeight="SemiBold" /><TextBlock Text="Seus scripts, processos e fontes de início" FontSize="12" Foreground="{StaticResource MutedBrush}" /></StackPanel></StackPanel>
+   <Button x:Name="RefreshButton" Content="_Atualizar" Grid.Column="1" Margin="12,0,8,0" Click="RefreshClicked" AutomationProperties.Name="Atualizar descoberta e processos" />
+   <Button x:Name="RegisterButton" Content="_Cadastrar .ahk" Grid.Column="2" Style="{StaticResource PrimaryButton}" Click="RegisterClicked" AutomationProperties.Name="Cadastrar arquivo sem executar" />
+  </Grid>
+  <Grid Grid.Row="1" Margin="0,0,0,16"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+   <TextBlock Text="Buscar" VerticalAlignment="Center" Margin="0,0,12,0" Foreground="{StaticResource MutedBrush}" />
+   <TextBox x:Name="SearchBox" Grid.Column="1" TextChanged="SearchChanged" ToolTip="Nome, descrição ou caminho" AutomationProperties.Name="Buscar por nome, descrição ou caminho" TabIndex="0" />
+   <Button x:Name="ClearButton" Content="Limpar" Grid.Column="2" Margin="8,0,0,0" Click="ClearClicked" />
+  </Grid>
+  <StackPanel Grid.Row="2" Margin="0,0,0,10">
+   <WrapPanel><Button x:Name="StartAllButton" Content="Iniciar todos" Click="StartAllClicked" Margin="0,0,8,4" /><Button x:Name="StopAllButton" Content="Parar todos" Click="StopAllClicked" Margin="0,0,8,4" /><Button x:Name="RestartRunningButton" Content="Reiniciar os que estão rodando" Click="RestartRunningClicked" Margin="0,0,8,4" /></WrapPanel>
+   <TextBlock x:Name="PauseText" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" />
+  </StackPanel>
+  <Grid Grid.Row="3" x:Name="Workspace">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*" MinWidth="430" /><ColumnDefinition Width="16" /><ColumnDefinition Width="400" MinWidth="320" /></Grid.ColumnDefinitions>
+   <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="6">
+    <Grid><Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+     <DockPanel Margin="15,12"><TextBlock Text="CATÁLOGO" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" /><TextBlock x:Name="CountText" HorizontalAlignment="Right" Foreground="{StaticResource MutedBrush}" FontSize="12" /></DockPanel>
+     <ListBox x:Name="ScriptList" Grid.Row="1" SelectionChanged="SelectionChanged" AutomationProperties.Name="Scripts cadastrados" KeyboardNavigation.TabNavigation="Once" TabIndex="1" />
+     <StackPanel x:Name="EmptyPanel" Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20" Visibility="Collapsed"><TextBlock x:Name="EmptyText" Text="Nenhum script cadastrado" FontSize="17" FontWeight="SemiBold" TextAlignment="Center" /><TextBlock Text="Cadastre um .ahk ou limpe a busca para continuar." Foreground="{StaticResource MutedBrush}" Margin="0,8,0,0" TextAlignment="Center" /></StackPanel>
+    </Grid>
+   </Border>
+   <GridSplitter x:Name="CatalogSplitter" Grid.Column="1" Width="4" HorizontalAlignment="Center" Background="{StaticResource LineBrush}" ShowsPreview="True" AutomationProperties.Name="Ajustar largura dos painéis" />
+   <Grid Grid.Column="2"><Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+    <ScrollViewer x:Name="DetailScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,10,0">
+     <StackPanel x:Name="DetailBody">
+      <TextBlock x:Name="SelectedTitle" Text="Selecione um script" FontSize="17" FontWeight="SemiBold" />
+      <Button x:Name="ConvertButton" Content="Converter catálogo antigo" Click="ConvertClicked" HorizontalAlignment="Left" Margin="0,8,0,4" />
+      <TextBlock x:Name="IntentText" Margin="0,8,0,8" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" />
+      <Button x:Name="RetryButton" Content="Tentar novamente" Click="RetryClicked" Visibility="Collapsed" HorizontalAlignment="Left" Margin="0,0,0,8" />
+      <TextBlock Text="Escolha para o próximo login; marcar não inicia agora e desmarcar não para agora. Fontes externas mantêm sua própria configuração." Style="{StaticResource Label}" TextWrapping="Wrap" Margin="0,0,0,8" />
+      <TextBlock Text="Solicita UAC somente ao iniciar manualmente. A preferência não indica o privilégio atual e não altera processos ou tarefas. O script também pode pedir elevação por conta própria." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8" />
+      <TextBlock x:Name="SelectedState" Foreground="{StaticResource AccentBrush}" Margin="0,6,0,20" />
+      <StackPanel x:Name="RequestPanel" Margin="0,0,0,16" Visibility="Collapsed">
+       <TextBlock Text="Pedido de início" FontWeight="SemiBold" Margin="0,0,0,8" />
+       <Button x:Name="VerifyRequestButton" Content="Verificar pedido" Click="VerifyRequestClicked" HorizontalAlignment="Left" Margin="0,0,0,8" AutomationProperties.Name="Consultar normalmente a identidade do pedido, sem UAC" />
+       <Button x:Name="RecoverRequestButton" Content="Recuperar após reinicialização" Click="RecoverRequestClicked" HorizontalAlignment="Left" Margin="0,0,0,8" AutomationProperties.Name="Confirmar prova de reinicialização e ausência sem iniciar scripts" />
+       <TextBlock x:Name="RequestText" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" />
+      </StackPanel>
+      <DockPanel Margin="0,0,0,8"><TextBlock Text="Descrição" FontWeight="SemiBold" /><TextBlock x:Name="OriginText" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Right" FontSize="12" /></DockPanel>
+      <TextBox x:Name="DescriptionBox" Height="88" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MaxLength="4000" TextChanged="DescriptionChanged" AutomationProperties.Name="Descrição do script salva no catálogo" TabIndex="2" />
+      <Button x:Name="SaveButton" Content="Salvar descrição" HorizontalAlignment="Right" Margin="0,8,0,0" Click="SaveClicked" TabIndex="3" />
+      <TextBlock Text="Salva somente no catálogo; o arquivo permanece intacto." Style="{StaticResource Label}" Margin="0,8,0,20" />
+      <TextBlock Text="Arquivo" FontWeight="SemiBold" Margin="0,0,0,8" />
+      <TextBox x:Name="PathBox" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Cascadia Mono, Consolas" FontSize="12" AutomationProperties.Name="Caminho completo do script" />
+      <Button x:Name="CopyButton" Content="Copiar caminho" HorizontalAlignment="Right" Margin="0,8,0,20" Click="CopyClicked" />
+      <TextBlock Text="Interpretador" FontWeight="SemiBold" Margin="0,0,0,8" />
+      <TextBlock x:Name="InterpreterText" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="{StaticResource MutedBrush}" />
+      <Button x:Name="InterpreterButton" Content="Escolher interpretador…" HorizontalAlignment="Left" Margin="0,8,0,16" Click="InterpreterClicked" />
+      <CheckBox x:Name="BlockedBox" Content="Bloquear início somente pelo gerenciador" Checked="BlockedChanged" Unchecked="BlockedChanged" AutomationProperties.Name="Bloqueio local de início pelo gerenciador" />
+      <TextBlock Text="Não altera atalhos, tarefas ou o supervisor externo." Style="{StaticResource Label}" Margin="0,4,0,20" />
+      <Separator Background="{StaticResource LineBrush}" Margin="0,0,0,16" />
+      <TextBlock Text="Início automático externo" FontWeight="SemiBold" Margin="0,0,0,8" />
+      <TextBlock x:Name="SourcesText" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,20" />
+      <TextBlock Text="Instâncias verificáveis" FontWeight="SemiBold" Margin="0,0,0,8" />
+      <TextBlock x:Name="InstancesText" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,16" />
+      <TextBlock x:Name="SupervisorText" Foreground="#E5C58A" Margin="0,0,0,12" />
+     </StackPanel>
+    </ScrollViewer>
+    <StackPanel Grid.Row="1" x:Name="ActionArea" Margin="0,12,0,0">
+     <ScrollViewer MaxHeight="78" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"><TextBlock x:Name="PolicyHint" Foreground="{StaticResource MutedBrush}" FontSize="12" /></ScrollViewer>
+     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+      <Button x:Name="StartButton" Content="_Iniciar" Style="{StaticResource PrimaryButton}" Click="StartClicked" Margin="0,0,6,0" />
+      <Button x:Name="StopButton" Content="_Parar" Grid.Column="1" Click="StopClicked" Margin="0,0,6,0" />
+      <Button x:Name="RestartButton" Content="_Reiniciar" Grid.Column="2" Click="RestartClicked" />
+     </Grid>
+     <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+      <Button x:Name="EditButton" Content="Editar arquivo" Click="EditClicked" Margin="0,0,12,0" />
+      <Button x:Name="RecycleButton" Content="Enviar à lixeira" Grid.Column="1" Click="RecycleClicked" />
+     </Grid>
+    </StackPanel>
+   </Grid>
+  </Grid>
+  <StackPanel Grid.Row="4" Margin="0,14,0,0">
+   <DockPanel><Button x:Name="CoverageButton" Content="Ver detalhes" DockPanel.Dock="Right" Padding="10,4" MinHeight="28" Click="CoverageClicked" /><TextBlock x:Name="CoverageText" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" Margin="0,0,12,0" /></DockPanel>
+   <ScrollViewer x:Name="CoveragePanel" Visibility="Collapsed" MaxHeight="90" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0"><TextBlock x:Name="CoverageDetailsText" Foreground="{StaticResource MutedBrush}" FontSize="12" /></ScrollViewer>
+   <Border x:Name="StatusBorder" Background="#1E2A34" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="10,8" Margin="0,8,0,0"><ScrollViewer MaxHeight="64" VerticalScrollBarVisibility="Auto"><TextBlock x:Name="StatusText" AutomationProperties.Name="Estado da última ação" /></ScrollViewer></Border>
+  </StackPanel>
+ </Grid>
+</Window>

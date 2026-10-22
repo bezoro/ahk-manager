@@ -1,0 +1,16 @@
+bin/
+obj/
+publish*/
+evidence/
+*.user
+catalog.json*
+operations.log*
+.tools/
+*.lnk
+.vs/
+.idea/
+.env
+.env.*
+*.pfx
+*.p12
+Presentation.Wpf/evidence-path.txt

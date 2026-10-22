@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net8.0-windows</TargetFramework><UseWPF>true</UseWPF>
+    <AssemblyName>Bezoro.AhkManager</AssemblyName><RootNamespace>Bezoro.AhkManager.Presentation</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <ApplicationIcon>..\Assets\AppIcon.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\App\Models.cs" Link="Domain\Models.cs" />
+    <Compile Include="..\App\CatalogStore.cs" Link="Domain\CatalogStore.cs" />
+    <Compile Include="..\App\Discovery.cs" Link="Domain\Discovery.cs" />
+    <Compile Include="..\App\ProcessControl.cs" Link="Domain\ProcessControl.cs" />
+    <Compile Include="..\App\ManualElevation.cs" Link="Domain\ManualElevation.cs" />
+    <Resource Include="..\Assets\AppIcon-48.png" Link="AppIcon.png" />
+  </ItemGroup>
+</Project>

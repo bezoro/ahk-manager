@@ -1,0 +1,401 @@
+{
+  "Schema": 1,
+  "Kind": "PreparedNormalUserSafeTests",
+  "SourceInputs": [
+    {
+      "Path": ".gitignore",
+      "SHA256": "D75644AC8E23E1DB597306F68D741DC432C5FC85FAF123F3E73053554B17D52F"
+    },
+    {
+      "Path": "App/Bezoro.AhkManager.csproj",
+      "SHA256": "D8BFAB329D55F4AAF3515668CC1E50EBEC3C14C887BA2604D4ADA0745C3C78D3"
+    },
+    {
+      "Path": "App/CatalogStore.cs",
+      "SHA256": "E2C1A398C799FD660506E3B4089D2207F35DC1570A08E962A376A122B4788B1A"
+    },
+    {
+      "Path": "App/Discovery.cs",
+      "SHA256": "DACB5F4B78A022C7D2C9FDCAB38AC78CA7F3A008EBF010358BC1831A114CE388"
+    },
+    {
+      "Path": "App/MainForm.cs",
+      "SHA256": "16FB8283DF95B38680B589200FBF5E91297E41D40BD69DF2A8C02F1FBAB36E05"
+    },
+    {
+      "Path": "App/ManualElevation.cs",
+      "SHA256": "D7808EB7AD8BA59041CB591DC3608D48462BC32F6FD5571E966D85751338C136"
+    },
+    {
+      "Path": "App/Models.cs",
+      "SHA256": "D17FC38A4C47FC32D908EB8351E637A33CD3C89FA60B8A6F96645D88FE76794E"
+    },
+    {
+      "Path": "App/ProcessControl.cs",
+      "SHA256": "BEB63C2AC3BED9A65079CA09433BBF501B20F0A1D38F1A86595309AAF2883656"
+    },
+    {
+      "Path": "App/Program.cs",
+      "SHA256": "C803918AE3D2BAB0E1CBF4E07E576638990B72E920553EC4E1BCFBF7000EA875"
+    },
+    {
+      "Path": "Assets/AppIcon-16.png",
+      "SHA256": "1FAD69C491921BA7154D63B35AFE6C4AE9A4D88EB4BC10A4BDD814CE00023E54"
+    },
+    {
+      "Path": "Assets/AppIcon-24.png",
+      "SHA256": "EDEF7059E2BFCF1686A6115C9DB0233CD9F9303A75698A91436C842B8809EE7C"
+    },
+    {
+      "Path": "Assets/AppIcon-256.png",
+      "SHA256": "4D6D3DA6AFF4E97B79CD445464A1015A6B67900057D1510FF60B1FD57FC7B089"
+    },
+    {
+      "Path": "Assets/AppIcon-32.png",
+      "SHA256": "77A9C299D1AF0A954167A1BAEA45A56826F1BD26F44E1EFEE0402283D51C7290"
+    },
+    {
+      "Path": "Assets/AppIcon-48.png",
+      "SHA256": "55924E59F132A027AF83F122244F95A573A224DCB4203E4C7F06498193D11B1F"
+    },
+    {
+      "Path": "Assets/AppIcon-master.png",
+      "SHA256": "215D9A72D5996E09386756DCAB8869F076F4DCEDC62D3A692BB31680D968E6C8"
+    },
+    {
+      "Path": "Assets/AppIcon-preview.png",
+      "SHA256": "9DC047ECB572E48583ACEBB3E47BFDF9E204E3EF841F23FA7B69C64E2B48835F"
+    },
+    {
+      "Path": "Assets/AppIcon.ico",
+      "SHA256": "04E7AF8340BF6640C26E0FF679707B8652E5DCB632723F5FEEFAEAB17E38B31C"
+    },
+    {
+      "Path": "Assets/IconPackager/IconPackager.csproj",
+      "SHA256": "65B9C7F299222451A28D32AAACC17B02C1FF5DD5339F19981446804257B7B4BA"
+    },
+    {
+      "Path": "Assets/IconPackager/Program.cs",
+      "SHA256": "0EABAA9836E00F0F6520203B2105E0BCD67137B82836B2BB8A8756FC6BBDE4EC"
+    },
+    {
+      "Path": "Bezoro.AhkManager.sln",
+      "SHA256": "7B41BC03862073939D819A6F3BF08EEA76F3E8F2E6EB48DC523C1852F34E06C4"
+    },
+    {
+      "Path": "NuGet.Config",
+      "SHA256": "2142CFB2DFA2C7FEEFBE40FABCC68B0DFECADAFA99A1DB9B70239D977CF2A7EF"
+    },
+    {
+      "Path": "Presentation.Wpf/BatchOperations.cs",
+      "SHA256": "3064760EF2E6A0566F151EE0CF23FFF3A430BAD3E803FD29736E2C25894A2767"
+    },
+    {
+      "Path": "Presentation.Wpf/BatchResultWindow.cs",
+      "SHA256": "D1525D21031419B64E565B562F1A8F36F681C70B01BE85F45EA2C206CBD9086D"
+    },
+    {
+      "Path": "Presentation.Wpf/Bezoro.AhkManager.Wpf.csproj",
+      "SHA256": "640F6D7115D644E92483075A16965456D185449E3A66EEACEEEFC076A9B563A2"
+    },
+    {
+      "Path": "Presentation.Wpf/BootContext.cs",
+      "SHA256": "C26EFC8642CB2D6087DE912F97F05A98B2D75DFA5804F93E9F5AAA449E579D32"
+    },
+    {
+      "Path": "Presentation.Wpf/BrushOperationStore.cs",
+      "SHA256": "699CEABAD2CDAE6F2B2E0A128B3BE29828AC6F51A73D1FEA2BDD928A42C95D4E"
+    },
+    {
+      "Path": "Presentation.Wpf/BrushTaskControls.cs",
+      "SHA256": "B78C1C86A8B96461E4AD43D049D720B2648028CD515AB4380B404547C6186A65"
+    },
+    {
+      "Path": "Presentation.Wpf/BrushTaskHelper.cs",
+      "SHA256": "E51B07F31518D76780C64C57E41F0871A7DC056160A4EBB75640CB5218C75328"
+    },
+    {
+      "Path": "Presentation.Wpf/ExistingInstance.cs",
+      "SHA256": "A4C813BE25333AE0AE2EABC97B13CA5E6A2D7D8AE8D62EFB90989489E251336F"
+    },
+    {
+      "Path": "Presentation.Wpf/ExitCoordinator.cs",
+      "SHA256": "711537FA0346614098C4148B77A8CA1A7553DD36E1CCB0243FB3C007BA80645E"
+    },
+    {
+      "Path": "Presentation.Wpf/FixtureElevationDispatcher.cs",
+      "SHA256": "9847F916FBD7DAF5129343A447D57C3463E8DDFB18454537E656DE099E00C580"
+    },
+    {
+      "Path": "Presentation.Wpf/Fixtures.cs",
+      "SHA256": "225CCB1E7A181FF48F4E555FE94F62825BDD9E9AB90689C44E7FE859D09FA973"
+    },
+    {
+      "Path": "Presentation.Wpf/GlobalUsings.cs",
+      "SHA256": "9EB56B713F4BD450C169F140E74FF7B6D5E456F3742A30188B947223D01628E4"
+    },
+    {
+      "Path": "Presentation.Wpf/MainWindow.xaml",
+      "SHA256": "957C7B06A9733703226E7918F163F3326753D7977152A0A2EA7D037F34C159FC"
+    },
+    {
+      "Path": "Presentation.Wpf/MainWindow.xaml.cs",
+      "SHA256": "76AE12862400EB6FEB93126E4FF15C9B8C6C2A79565C78D20BF3801A114237CE"
+    },
+    {
+      "Path": "Presentation.Wpf/Migration.cs",
+      "SHA256": "027169E980413F49AB644C46330E58CA92B7D86C4718CC7208660C18FD038D46"
+    },
+    {
+      "Path": "Presentation.Wpf/NormalMigration.cs",
+      "SHA256": "46F637E68F180E8A0C26120CE166B45F424E2936A34F0753BAFECA65437616D4"
+    },
+    {
+      "Path": "Presentation.Wpf/NormalMigrationEffects.cs",
+      "SHA256": "03C08E4D13975BB7BB98961C168D60F7A31F37CBB8CDA88589655D37AE443513"
+    },
+    {
+      "Path": "Presentation.Wpf/Program.cs",
+      "SHA256": "53EBA65C5C40D163477C45030470B1864CCDA2E5E0250AB86F71D5AF8185C40C"
+    },
+    {
+      "Path": "Presentation.Wpf/RequestLedger.cs",
+      "SHA256": "C79BD2D6C87E3D145407C01CD2D25E199BD174AEDE4E1149E1A7DEFCCA2102A7"
+    },
+    {
+      "Path": "Presentation.Wpf/Supervision.cs",
+      "SHA256": "71020B23FC33AACECA3EB7D6AFF8002BA1597AB6AA793D77FF0798FE82BF2137"
+    },
+    {
+      "Path": "Presentation.Wpf/Theme.xaml",
+      "SHA256": "0D37FF7DDF2982F48DAC513E1B37A1D2A3628E661B2FFF8FEA1536C98C9F947C"
+    },
+    {
+      "Path": "Presentation.Wpf/TrayHost.cs",
+      "SHA256": "8FBF1E91EC2C81CFCA25373C4847D648E62B6DA94B35645CF2558644F82A9D5E"
+    },
+    {
+      "Path": "Presentation.Wpf/UiSession.cs",
+      "SHA256": "67DC2A3273BFC355936E2AD884AA407E3384E543BDF8798C39409D6CBDEE2F6D"
+    },
+    {
+      "Path": "Presentation.Wpf/WindowsBrushTask.cs",
+      "SHA256": "AEDF9933694A94D90E0DF8C47236431FD7A73C5DF87A97E456BF7E7D4315465B"
+    },
+    {
+      "Path": "Presentation.Wpf/evidence-path.txt",
+      "SHA256": "0945009B457198458802EA6F1891B85FE5D6B21306D2D081E3DA8D4C5B644233"
+    },
+    {
+      "Path": "README.md",
+      "SHA256": "435E9BEDF33C316EA9FCC37974559F7A5E53B1552BCA844EB3514F2A787EF510"
+    },
+    {
+      "Path": "Tests.WpfUI/BootRecoveryChecks.cs",
+      "SHA256": "126DFCA0C2F7EE4F5132B572FCB8FBF3B572596619847ABF604E34AF654C4DDF"
+    },
+    {
+      "Path": "Tests.WpfUI/BootSupplementChecks.cs",
+      "SHA256": "9D4DEDE9DFE70CCC2F77D8E2ABA727DE5C657A76E0DCEA75FC58DBCDE4588A60"
+    },
+    {
+      "Path": "Tests.WpfUI/BrushTaskChecks.cs",
+      "SHA256": "742D12B7EA2E1B517B2227863C691B274DE7CB62B72F183E04D50A919D840645"
+    },
+    {
+      "Path": "Tests.WpfUI/DetailsSimplificationChecks.cs",
+      "SHA256": "CB3AE98CFAF300D0E130FD0909897F7831FBEDEFB315850868C6E0C10292D186"
+    },
+    {
+      "Path": "Tests.WpfUI/ElevationChecks.cs",
+      "SHA256": "9AE71498ABC8E533741C3F37C1A99E26F9439E6CA82BD198953EBEE3FF497D0F"
+    },
+    {
+      "Path": "Tests.WpfUI/ElevationFingerprintReviewChecks.cs",
+      "SHA256": "5702F10F74D31D536F518DADB914D36827419A69125B649B554F1350299C1313"
+    },
+    {
+      "Path": "Tests.WpfUI/ElevationSchemaReviewChecks.cs",
+      "SHA256": "1702BDDFD46034A9EC4DEFF60AB2D82493F85B2A24D43BF3E4F2EB87312B295F"
+    },
+    {
+      "Path": "Tests.WpfUI/ExitReviewChecks.cs",
+      "SHA256": "43DB685509DEBB9A413311BC3CA750DD0F657311E5BB2E4AF12A8328D5BF5E7E"
+    },
+    {
+      "Path": "Tests.WpfUI/FixtureBoundaryReviewChecks.cs",
+      "SHA256": "EC2888566A7C82C3F3ADC9B27E362EDE2531DFB4B1D1AF186B4ED0ADE93FABD4"
+    },
+    {
+      "Path": "Tests.WpfUI/FunctionalChecks.cs",
+      "SHA256": "A80DEF87516840A419A0DCB5BED627BE9527A3F1342A1FE867218A98AB914BBB"
+    },
+    {
+      "Path": "Tests.WpfUI/FunctionalReviewChecks.cs",
+      "SHA256": "E528BA5478C5ED90987C0244294A247DCC7FBEE938F0E807C82705454690A764"
+    },
+    {
+      "Path": "Tests.WpfUI/IntegratedChecks.cs",
+      "SHA256": "7FBC27A72BC08EF161F6B56811D3A5318CFB0F76A13BFB2199B07AEC37094AEF"
+    },
+    {
+      "Path": "Tests.WpfUI/LedgerSchemaChecks.cs",
+      "SHA256": "A5214BF94783B79C064F943C0D6FF70E38A3231BDCEB47AA760BF51961BF324F"
+    },
+    {
+      "Path": "Tests.WpfUI/ManualRenderChecks.cs",
+      "SHA256": "2528B4F29291CD1CADF2403EC5B99E9943B72C0CADA832934E6EE752775E92A0"
+    },
+    {
+      "Path": "Tests.WpfUI/ManualSafetyChecks.cs",
+      "SHA256": "4C88812CA3AFB4F2B188ADDB4791E0A5C988D9CFCE16DDB1CBCFD20A7283D1A7"
+    },
+    {
+      "Path": "Tests.WpfUI/ManualUacChecks.cs",
+      "SHA256": "0793760F0C8995567044800D37D05DFAD4AD38CC2303FDFEF7E3E1462D3D0FBA"
+    },
+    {
+      "Path": "Tests.WpfUI/NormalCutoverChecks.cs",
+      "SHA256": "F1E20B3337BD800A262E01C74E9FB225B822A0DD234978707B281E9328C81CEF"
+    },
+    {
+      "Path": "Tests.WpfUI/Program.cs",
+      "SHA256": "5119F0A8BB91DEA44C669F912B8BB9AE1973495649EA709520B6CFBEB28C8C25"
+    },
+    {
+      "Path": "Tests.WpfUI/ReopenExistingChecks.cs",
+      "SHA256": "04D356562DED2C9C4D637291C946ECE4082D4AE213F7D5C1E0B30DD7BBA1E59C"
+    },
+    {
+      "Path": "Tests.WpfUI/RetiredVisibilityChecks.cs",
+      "SHA256": "C3F1AE580E8E48400C334B95AC99720996E9A8E00474962395CEF3B1F0A8B4B5"
+    },
+    {
+      "Path": "Tests.WpfUI/Tests.WpfUI.csproj",
+      "SHA256": "91118A98E2D17DA94DCBCB2C616326176478C9DDFD5E4151177ADAC00E236513"
+    },
+    {
+      "Path": "Tests/Bezoro.AhkManager.Tests.csproj",
+      "SHA256": "31082448C8B759702F883C254FE127E97C88B910FD3B25588063C25D8D152075"
+    },
+    {
+      "Path": "Tests/NativeObservationChecks.cs",
+      "SHA256": "A5CA8F6CADADA224470D70E9566C62F345559289EE4EBF2E9F9FECC8667F36C5"
+    },
+    {
+      "Path": "Tests/NativePrivilegeChecks.cs",
+      "SHA256": "F5CCE26991B6F13156DEBCA3E7433B23DA56A1FD7FCB0C249DED92B0C5D52156"
+    },
+    {
+      "Path": "Tests/Program.cs",
+      "SHA256": "69AE41326B13890088F728BAAB2627653526E7BA7E411372456C6DD15E53DD32"
+    },
+    {
+      "Path": "VALIDATION.md",
+      "SHA256": "C51A4347F4B32CA60610BDEDAF803D5F542F5A0F5740F29E3405FBA25DE96DDB"
+    },
+    {
+      "Path": "global.json",
+      "SHA256": "9969992897AEE36FBC62DB0976390D87B1275DC0D7C6FCB937A7F81A316F97DC"
+    }
+  ],
+  "PreparedInputs": [
+    {
+      "Path": "tools/Run-SafeTests.ps1",
+      "SHA256": "0172D9005E83479C66DA272CE012576D9A416F3935C6A4E68D918B17CB64A3AE"
+    },
+    {
+      "Path": "Tests.SafeRunner/Run-FailureChecks.ps1",
+      "SHA256": "5B2EE5B9751CAAF984FFBA3E3E40238FFE7756BBD822550A37D86290A07DC644"
+    },
+    {
+      "Path": "Tests.SafeRunner/OwnedWorker.ps1",
+      "SHA256": "6C236AE4D5E937782F0854978222849C0FEFD6CD4655C33E9C7EC7CDE01BA842"
+    },
+    {
+      "Path": "SAFE-TESTS.md",
+      "SHA256": "2E9613B675622BB192EBCF872B5071374215D7A45787EAE724CA78106CEBCE12"
+    },
+    {
+      "Path": "Tests.Brush/Original-Brush.ahk",
+      "SHA256": "9662EBFA3F6C72762D76A7CC7AE2DE6AAFC12C086734EB825B2391A8F5A5C55E"
+    },
+    {
+      "Path": "Tests.Brush/New-BrushFixture.ps1",
+      "SHA256": "120589CD18267F11B250F80D34DA7CC0DB8A220A492C5D60BDF3A4F318B279AD"
+    },
+    {
+      "Path": "Tests.Brush/BrushFixture.template.ahk",
+      "SHA256": "B707A3095E63D742988F6BDE11F6A34AFBC5981FC273B846D00CDBFBF128136C"
+    },
+    {
+      "Path": "Tests.Brush/README.md",
+      "SHA256": "41B218BF366616A43D056BED9CBE2B2C7EA6661651C967A9A3D5286A7F0A33ED"
+    }
+  ],
+  "BinaryOutputs": [
+    {
+      "Path": "tools/safe-tests/bin/Bezoro.AhkManager.dll",
+      "SHA256": "A1A615EC7ECD4A33E5FF02AB951E0442AC9DF9272F76FF1F8BE6EE4D8E5E57F2"
+    },
+    {
+      "Path": "tools/safe-tests/bin/Bezoro.AhkManager.pdb",
+      "SHA256": "B98CC4C7AE1B3FACBE69CBE347EBAE1399EA0973C49F33F9B9F1FA0A732DCEC8"
+    },
+    {
+      "Path": "tools/safe-tests/bin/Tests.WpfUI.deps.json",
+      "SHA256": "03C3FD65770B8859AEDA2BC20C138E23145B3B9D01EFDA8BEED9BFAAE035580E"
+    },
+    {
+      "Path": "tools/safe-tests/bin/Tests.WpfUI.dll",
+      "SHA256": "553709CA13BC225BE6C5EBB580D826312A15ED1B014F7002B62F2A83823A4D10"
+    },
+    {
+      "Path": "tools/safe-tests/bin/Tests.WpfUI.exe",
+      "SHA256": "431AE22275D09CDFB38E785F538E440FC7047C7C778527FECACACB2A95141325"
+    },
+    {
+      "Path": "tools/safe-tests/bin/Tests.WpfUI.pdb",
+      "SHA256": "6FC099F2D521BA01D7D5492A9801899616AD1D2AA2A7D84B9058E8ABF5C3026A"
+    },
+    {
+      "Path": "tools/safe-tests/bin/Tests.WpfUI.runtimeconfig.json",
+      "SHA256": "2B025A13E8B4691FF3C56787A6D1058A5396FB3171310BCC81C1474EE4036361"
+    }
+  ],
+  "DataInputs": [
+    {
+      "Path": "tools/safe-tests/bin/fixtures/ORIGINAL-POSTREGISTER-PENDING.json",
+      "SHA256": "4900158BB1468FC00EEAFD085E800E630D05CA829FD9F397E7450B74A34CEB12"
+    }
+  ],
+  "Interpreter": {
+    "Path": "C:\\Program Files\\AutoHotkey\\v2\\AutoHotkey64.exe",
+    "Version": "2.0.29",
+    "SHA256": "0876BC360F927F2A62CEA75B12CB51268F564EDC4DA65B569894AA1A328BFD68",
+    "ProductVersion": "2.0.29"
+  },
+  "Plan": [
+    {
+      "Selector": "--brush-stopped-recovery",
+      "Count": 152
+    },
+    {
+      "Selector": "--brush-confirmation-final-read",
+      "Count": 8
+    },
+    {
+      "Selector": "--brush-register-formatting-settlement",
+      "Count": 65
+    },
+    {
+      "Selector": "--manual-uac",
+      "Count": 47
+    }
+  ],
+  "AhkExpected": {
+    "Routing": 16,
+    "Classification": 6
+  },
+  "ExistingAppEffectsAllowed": false
+}
