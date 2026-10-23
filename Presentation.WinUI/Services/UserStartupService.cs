@@ -71,14 +71,32 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter
         return new StartupInspection(complete, paths.Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray(), issues.ToImmutable());
         void Inspect(string command)
         {
-            if (!command.Contains(".ahk", StringComparison.OrdinalIgnoreCase) && !command.Contains("AutoHotkey", StringComparison.OrdinalIgnoreCase)) return;
-            if (command.Contains('%')) { complete = false; return; }
-            var args = ScriptPaths.SplitCommand(command);
-            if (args.Length == 1 && args[0].EndsWith(".ahk", StringComparison.OrdinalIgnoreCase)) { paths.Add(ScriptPaths.Canonical(args[0])); return; }
-            var script = args.Length > 0 ? ScriptPaths.ScriptFromCommand(command, args[0]) : null;
-            if (script is null) complete = false; else paths.Add(script);
+            var inspected = InspectCommand(command);
+            complete &= inspected.Complete;
+            paths.AddRange(inspected.ScriptPaths);
         }
     }, ct);
+
+    internal static StartupInspection InspectCommand(string command)
+    {
+        bool related = command.Contains("AutoHotkey", StringComparison.OrdinalIgnoreCase);
+        for (int start = 0; !related;)
+        {
+            int index = command.IndexOf(".ahk", start, StringComparison.OrdinalIgnoreCase);
+            if (index < 0) break;
+            int end = index + 4;
+            // A name such as Bezoro.AhkManager.exe is not an AHK extension.
+            // Punctuation remains relevant so malformed/unsupported forms fail closed.
+            related = end == command.Length || !char.IsLetterOrDigit(command[end]) && command[end] != '_';
+            start = end;
+        }
+        if (!related) return new(true, [], []);
+        if (command.Contains('%')) return new(false, [], []);
+        var args = ScriptPaths.SplitCommand(command);
+        if (args.Length == 1 && args[0].EndsWith(".ahk", StringComparison.OrdinalIgnoreCase)) return new(true, [ScriptPaths.Canonical(args[0])], []);
+        var script = args.Length > 0 ? ScriptPaths.ScriptFromCommand(command, args[0]) : null;
+        return script is null ? new(false, [], []) : new(true, [script], []);
+    }
 }
 
 public sealed class UserStartupService(IUserStartupAdapter adapter, string managerExecutable)

@@ -18,7 +18,7 @@ internal static class BackendChecks
     static async Task<ResponseFrame> Receive(FrameReader reader) => JsonSerializer.Deserialize(await reader.ReadAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)) ?? throw new IOException(), Protocol.Json.ResponseFrame)!;
     public static async Task RunAsync(string root)
     {
-        await Framing(); await HostBoundaries(); await QueueAndDeadlines(); await Tokens(root); await Migration(root); Startup(root);
+        await Framing(); await HostBoundaries(); await QueueAndDeadlines(); await Tokens(root); await Migration(root); Startup(root); StartupCommandChecks.Run(root, Check);
         Console.WriteLine("BACKEND checks=" + count);
     }
     static async Task Framing()
