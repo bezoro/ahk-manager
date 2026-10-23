@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../Backend/AhkManager.Backend.csproj" /></ItemGroup>
   <ItemGroup>
+    <Compile Include="../Tests.WinUI/Integration/FixtureProcessObservation.cs" Link="Integration/FixtureProcessObservation.cs" />
     <Compile Include="../Tests.WinUI/Core/ContractChecks.cs" Link="Core/ContractChecks.cs" />
     <Compile Include="../Tests.WinUI/Core/StorageChecks.cs" Link="Core/StorageChecks.cs" />
     <Compile Include="../Tests.WinUI/Core/DomainChecks.cs" Link="Core/DomainChecks.cs" />
