@@ -1,0 +1,616 @@
+<?xml version='1.0' encoding='utf-8'?>
+<root>
+  <data name="ApplicationTitle" xml:space="preserve">
+    <value>AHK Manager</value>
+  </data>
+  <data name="ShellTitleBar.Title" xml:space="preserve">
+    <value>AHK Manager</value>
+  </data>
+  <data name="ScriptsNav.Content" xml:space="preserve">
+    <value>Scripts</value>
+  </data>
+  <data name="HotkeysNav.Content" xml:space="preserve">
+    <value>Atalhos</value>
+  </data>
+  <data name="ActivityNav.Content" xml:space="preserve">
+    <value>Atividade</value>
+  </data>
+  <data name="CollectionsNav.Content" xml:space="preserve">
+    <value>COLEÇÕES</value>
+  </data>
+  <data name="AllCollectionsNav.Content" xml:space="preserve">
+    <value>Todos os scripts</value>
+  </data>
+  <data name="ManageCollectionsNav.Content" xml:space="preserve">
+    <value>Gerenciar coleções</value>
+  </data>
+  <data name="HelpNav.Content" xml:space="preserve">
+    <value>Ajuda</value>
+  </data>
+  <data name="ScriptsHeading.Text" xml:space="preserve">
+    <value>Scripts</value>
+  </data>
+  <data name="ScriptsSubtitle.Text" xml:space="preserve">
+    <value>Organize e controle seus scripts AutoHotkey v2.</value>
+  </data>
+  <data name="RefreshButton.ToolTipService.ToolTip" xml:space="preserve">
+    <value>Atualizar</value>
+  </data>
+  <data name="RefreshButton.AutomationProperties.Name" xml:space="preserve"><value>Atualizar scripts</value></data>
+  <data name="AddButton.AutomationProperties.Name" xml:space="preserve"><value>Adicionar script</value></data>
+  <data name="AddButtonLabel.Text" xml:space="preserve">
+    <value>Adicionar script</value>
+  </data>
+  <data name="AddFiles.Text" xml:space="preserve">
+    <value>Escolher arquivos…</value>
+  </data>
+  <data name="AddFolder.Text" xml:space="preserve">
+    <value>Adicionar pasta…</value>
+  </data>
+  <data name="SearchBox.PlaceholderText" xml:space="preserve">
+    <value>Pesquisar nome, arquivo ou descrição</value>
+  </data>
+  <data name="SearchBox.AutomationProperties.Name" xml:space="preserve">
+    <value>Pesquisar scripts</value>
+  </data>
+  <data name="StatusBox.AutomationProperties.Name" xml:space="preserve">
+    <value>Filtrar por estado</value>
+  </data>
+  <data name="SortBox.AutomationProperties.Name" xml:space="preserve">
+    <value>Ordenar scripts</value>
+  </data>
+  <data name="FilterAll.Content" xml:space="preserve">
+    <value>Todos os status</value>
+  </data>
+  <data name="FilterRunning.Content" xml:space="preserve">
+    <value>Em execução</value>
+  </data>
+  <data name="FilterStopped.Content" xml:space="preserve">
+    <value>Parados</value>
+  </data>
+  <data name="FilterProblems.Content" xml:space="preserve">
+    <value>Com problemas</value>
+  </data>
+  <data name="SortName.Content" xml:space="preserve">
+    <value>Nome</value>
+  </data>
+  <data name="SortStatus.Content" xml:space="preserve">
+    <value>Estado</value>
+  </data>
+  <data name="SortCollection.Content" xml:space="preserve">
+    <value>Coleção</value>
+  </data>
+  <data name="NameColumn.Text" xml:space="preserve">
+    <value>Script</value>
+  </data>
+  <data name="StatusColumn.Text" xml:space="preserve">
+    <value>Status</value>
+  </data>
+  <data name="LoginColumn.Text" xml:space="preserve">
+    <value>Com o Windows</value>
+  </data>
+  <data name="LoginColumn.ToolTipService.ToolTip" xml:space="preserve"><value>Iniciar com o Windows</value></data>
+  <data name="LoginColumn.AutomationProperties.Name" xml:space="preserve"><value>Iniciar com o Windows</value></data>
+  <data name="ScriptList.AutomationProperties.Name" xml:space="preserve">
+    <value>Scripts cadastrados</value>
+  </data>
+  <data name="EmptyTitle.Text" xml:space="preserve">
+    <value>Nenhum script nesta visualização</value>
+  </data>
+  <data name="EmptyBody.Text" xml:space="preserve">
+    <value>Adicione arquivos .ahk ou ajuste a pesquisa e os filtros. Adicionar um arquivo não o executa.</value>
+  </data>
+  <data name="InspectorTitle.Text" xml:space="preserve">
+    <value>Selecione um script</value>
+  </data>
+  <data name="StartAction.Content" xml:space="preserve">
+    <value>Iniciar</value>
+  </data>
+  <data name="StopAction.Content" xml:space="preserve">
+    <value>Parar</value>
+  </data>
+  <data name="RestartAction.Content" xml:space="preserve">
+    <value>Reiniciar</value>
+  </data>
+  <data name="PauseAction.Content" xml:space="preserve">
+    <value>Alternar pausa</value>
+  </data>
+  <data name="SuspendAction.Content" xml:space="preserve">
+    <value>Alternar atalhos</value>
+  </data>
+  <data name="EditAction.Content" xml:space="preserve">
+    <value>Editar</value>
+  </data>
+  <data name="FolderAction.Content" xml:space="preserve">
+    <value>Pasta</value>
+  </data>
+  <data name="CapabilityNote.Text" xml:space="preserve">
+    <value>Alternar pausa envia uma solicitação; o estado da pausa pode não ser observável. Alternar atalhos controla a suspensão de hotkeys, uma função diferente. A atividade registra a solicitação e o resultado observado.</value>
+  </data>
+  <data name="NameDraft.Header" xml:space="preserve">
+    <value>Nome de exibição</value>
+  </data>
+  <data name="DescriptionDraft.Header" xml:space="preserve">
+    <value>Descrição</value>
+  </data>
+  <data name="CollectionDraft.Header" xml:space="preserve">
+    <value>Coleção</value>
+  </data>
+  <data name="HotkeysDraft.Header" xml:space="preserve">
+    <value>Atalhos manuais — um por linha</value>
+  </data>
+  <data name="AdminDraft.Content" xml:space="preserve">
+    <value>Solicitar execução como administrador</value>
+  </data>
+  <data name="BlockedDraft.Content" xml:space="preserve">
+    <value>Bloquear novas execuções</value>
+  </data>
+  <data name="SaveDraftAction.Content" xml:space="preserve">
+    <value>Salvar metadados</value>
+  </data>
+  <data name="RemoveAction.Content" xml:space="preserve">
+    <value>Remover do catálogo</value>
+  </data>
+  <data name="RecoverAction.Content" xml:space="preserve">
+    <value>Verificar recuperação</value>
+  </data>
+  <data name="OtherFilter.Header" xml:space="preserve">
+    <value>Filtrar nesta página</value>
+  </data>
+  <data name="On" xml:space="preserve">
+    <value>Sim</value>
+  </data>
+  <data name="Off" xml:space="preserve">
+    <value>Não</value>
+  </data>
+  <data name="StartupScript" xml:space="preserve">
+    <value>Iniciar com Windows</value>
+  </data>
+  <data name="HotkeysPartial" xml:space="preserve">
+    <value>Análise parcial: atalhos dinâmicos e outros programas podem não ser detectados.</value>
+  </data>
+  <data name="AdministratorRequested" xml:space="preserve">
+    <value>Privilégio: administrador solicitado</value>
+  </data>
+  <data name="StandardPrivilege" xml:space="preserve">
+    <value>Privilégio: padrão solicitado</value>
+  </data>
+  <data name="SelectScript" xml:space="preserve">
+    <value>Selecione um script</value>
+  </data>
+  <data name="BlockedMetadata" xml:space="preserve">
+    <value>Execução bloqueada</value>
+  </data>
+  <data name="ProcessUnconfirmed" xml:space="preserve">
+    <value>Nenhum processo comprovado nesta observação.</value>
+  </data>
+  <data name="ProcessFormat" xml:space="preserve">
+    <value>PID {0} · AutoHotkey {1}
+Início: {2}
+Origem: {3}
+Tempo em execução: {4} (observado às {5})</value>
+  </data>
+  <data name="FooterFormat" xml:space="preserve">
+    <value>{0} scripts · {1} em execução · {2} problemas · Atualizado às {3}</value>
+  </data>
+  <data name="FooterNotObservedFormat" xml:space="preserve"><value>{0} scripts · {1} em execução · {2} problemas · Sem observação confirmada</value></data>
+  <data name="CompactInspector.Header" xml:space="preserve"><value>Detalhes do script</value></data>
+  <data name="CompactInspector.AutomationProperties.Name" xml:space="preserve"><value>Expandir detalhes e ações do script selecionado</value></data>
+  <data name="ManagerActivity" xml:space="preserve"><value>Gerenciador</value></data>
+  <data name="RemovedScriptActivity" xml:space="preserve"><value>Script removido</value></data>
+  <data name="NotObserved" xml:space="preserve">
+    <value>ainda não realizada</value>
+  </data>
+  <data name="NoCollection" xml:space="preserve">
+    <value>Sem coleção</value>
+  </data>
+  <data name="PossibleConflict" xml:space="preserve">
+    <value>Possível conflito</value>
+  </data>
+  <data name="StartupConsentTitle" xml:space="preserve">
+    <value>Iniciar com o Windows?</value>
+  </data>
+  <data name="StartupConsentMessage" xml:space="preserve">
+    <value>Para iniciar estes scripts no próximo logon, o AHK Manager precisa iniciar com o Windows. Será criada uma entrada por usuário. Isso não inicia o script agora.</value>
+  </data>
+  <data name="Enable" xml:space="preserve">
+    <value>Habilitar</value>
+  </data>
+  <data name="Continue" xml:space="preserve">
+    <value>Continuar</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Cancelar</value>
+  </data>
+  <data name="Save" xml:space="preserve">
+    <value>Salvar</value>
+  </data>
+  <data name="ConfirmOperation" xml:space="preserve">
+    <value>Confirme a operação sobre este arquivo. O processo e a seleção serão verificados novamente.</value>
+  </data>
+  <data name="RemoveTitle" xml:space="preserve">
+    <value>Remover?</value>
+  </data>
+  <data name="RemoveMessage" xml:space="preserve">
+    <value>Remover apenas o cadastro e a intenção de início automático. O arquivo permanece no disco e um processo já em execução continua rodando.</value>
+  </data>
+  <data name="RemoveCollectionMessage" xml:space="preserve">
+    <value>Os scripts desta coleção voltarão a ficar sem coleção. Nenhum arquivo ou processo será removido.</value>
+  </data>
+  <data name="Page_hotkeys" xml:space="preserve">
+    <value>Atalhos</value>
+  </data>
+  <data name="Page_activity" xml:space="preserve">
+    <value>Atividade</value>
+  </data>
+  <data name="Page_collections" xml:space="preserve">
+    <value>Coleções</value>
+  </data>
+  <data name="Page_help" xml:space="preserve">
+    <value>Ajuda</value>
+  </data>
+  <data name="ManageCollections" xml:space="preserve">
+    <value>Gerenciar coleções</value>
+  </data>
+  <data name="CopyDetails" xml:space="preserve">
+    <value>Copiar detalhes</value>
+  </data>
+  <data name="ImportLegacy" xml:space="preserve">
+    <value>Importar catálogo anterior…</value>
+  </data>
+  <data name="Copied" xml:space="preserve">
+    <value>Detalhes copiados.</value>
+  </data>
+  <data name="CollectionCount" xml:space="preserve">
+    <value>{0} scripts</value>
+  </data>
+  <data name="ChooseCollection" xml:space="preserve">
+    <value>Nova coleção ou escolha uma existente</value>
+  </data>
+  <data name="CollectionName" xml:space="preserve">
+    <value>Nome da coleção</value>
+  </data>
+  <data name="Remove" xml:space="preserve">
+    <value>Remover</value>
+  </data>
+  <data name="ImportMessage" xml:space="preserve">
+    <value>Importar {0} scripts deste catálogo? O arquivo anterior não será alterado. Preferências importadas não habilitam o início do Windows.</value>
+  </data>
+  <data name="Interpreter" xml:space="preserve">
+    <value>Executável do AutoHotkey v2</value>
+  </data>
+  <data name="AutoDetect" xml:space="preserve">
+    <value>Detecção automática de uma instalação v2 válida</value>
+  </data>
+  <data name="Editor" xml:space="preserve">
+    <value>Editor de texto</value>
+  </data>
+  <data name="DefaultEdit" xml:space="preserve">
+    <value>Usar a associação segura Editar do Windows</value>
+  </data>
+  <data name="EditorArguments" xml:space="preserve">
+    <value>Argumentos do editor — um por linha; use {file} para o arquivo</value>
+  </data>
+  <data name="Theme" xml:space="preserve">
+    <value>Aparência</value>
+  </data>
+  <data name="ThemeSystem" xml:space="preserve">
+    <value>Seguir o Windows</value>
+  </data>
+  <data name="ThemeLight" xml:space="preserve">
+    <value>Clara</value>
+  </data>
+  <data name="ThemeDark" xml:space="preserve">
+    <value>Escura</value>
+  </data>
+  <data name="ManagerLogin" xml:space="preserve">
+    <value>Iniciar o Manager com o Windows</value>
+  </data>
+  <data name="ShowAtLogin" xml:space="preserve">
+    <value>Mostrar a janela ao iniciar com o Windows</value>
+  </data>
+  <data name="CloseBehavior" xml:space="preserve">
+    <value>Ao fechar a janela</value>
+  </data>
+  <data name="HideToTray" xml:space="preserve">
+    <value>Manter na área de notificação</value>
+  </data>
+  <data name="ExitManager" xml:space="preserve">
+    <value>Sair do Manager</value>
+  </data>
+  <data name="RestoreBackup" xml:space="preserve">
+    <value>Restaurar cópia de segurança</value>
+  </data>
+  <data name="RestoreBackupMessage" xml:space="preserve">
+    <value>Restaurar a cópia válida anterior do catálogo? O estado atual será preservado para diagnóstico.</value>
+  </data>
+  <data name="StartupExplanation" xml:space="preserve">
+    <value>São preferências separadas: iniciar o Manager, mostrar sua janela e iniciar cada script. Desabilitar o Manager no logon mantém as preferências dos scripts, mas elas ficam inativas. Sair do Manager não encerra os scripts.</value>
+  </data>
+  <data name="Settings" xml:space="preserve">
+    <value>Preferências</value>
+  </data>
+  <data name="UnexpectedError" xml:space="preserve">
+    <value>Não foi possível concluir a operação.</value>
+  </data>
+  <data name="DiagnosticDetails" xml:space="preserve">
+    <value>Detalhes técnicos</value>
+  </data>
+  <data name="DuplicateCount" xml:space="preserve">
+    <value>{0} arquivos já estavam cadastrados.</value>
+  </data>
+  <data name="ShowManager" xml:space="preserve">
+    <value>Abrir AHK Manager</value>
+  </data>
+  <data name="HideManager" xml:space="preserve"><value>Ocultar AHK Manager</value></data>
+  <data name="TrayRunning" xml:space="preserve">
+    <value>{0} scripts rodando</value>
+  </data>
+  <data name="HelpSafetyTitle" xml:space="preserve">
+    <value>Controle com identidade comprovada</value>
+  </data>
+  <data name="HelpSafety" xml:space="preserve">
+    <value>Parar solicita o encerramento normal do script e aguarda a saída. Um script pode recusar. Não há encerramento forçado automático. Processos inacessíveis ou ambíguos permanecem não confirmados. Sair do Manager mantém os scripts rodando.</value>
+  </data>
+  <data name="HelpStartupTitle" xml:space="preserve">
+    <value>Início automático</value>
+  </data>
+  <data name="HelpStartup" xml:space="preserve">
+    <value>O início por usuário é opcional. Scripts administrativos exigem confirmação manual e não são iniciados automaticamente. O catálogo anterior e seus agendamentos não são modificados.</value>
+  </data>
+  <data name="HelpHotkeysTitle" xml:space="preserve">
+    <value>Atalhos e conflitos</value>
+  </data>
+  <data name="HelpKeysTitle" xml:space="preserve">
+    <value>Teclado e edição</value>
+  </data>
+  <data name="HelpKeys" xml:space="preserve">
+    <value>Ctrl+F pesquisa; F5 atualiza. Tab percorre os controles. Editar usa um editor configurado ou a associação Editar do Windows; não executa a associação Abrir de arquivos .ahk.</value>
+  </data>
+  <data name="Origin_None" xml:space="preserve">
+    <value>não disponível</value>
+  </data>
+  <data name="Origin_Manager" xml:space="preserve">
+    <value>Manager</value>
+  </data>
+  <data name="Origin_External" xml:space="preserve">
+    <value>externa</value>
+  </data>
+  <data name="Origin_Recovered" xml:space="preserve">
+    <value>recuperada</value>
+  </data>
+  <data name="HotkeyOrigin_Parsed" xml:space="preserve">
+    <value>lido do código</value>
+  </data>
+  <data name="HotkeyOrigin_Manual" xml:space="preserve">
+    <value>informado manualmente</value>
+  </data>
+  <data name="HotkeyOrigin_Unanalysed" xml:space="preserve">
+    <value>não analisado</value>
+  </data>
+  <data name="Status_Stopped" xml:space="preserve">
+    <value>Parado</value>
+  </data>
+  <data name="Status_Running" xml:space="preserve">
+    <value>Em execução</value>
+  </data>
+  <data name="Status_Unknown" xml:space="preserve">
+    <value>Não confirmado</value>
+  </data>
+  <data name="Status_Multiple" xml:space="preserve">
+    <value>Múltiplas instâncias</value>
+  </data>
+  <data name="Status_Missing" xml:space="preserve">
+    <value>Arquivo ausente</value>
+  </data>
+  <data name="Status_Blocked" xml:space="preserve">
+    <value>Bloqueado</value>
+  </data>
+  <data name="Outcome_Accepted" xml:space="preserve">
+    <value>Solicitação aceita</value>
+  </data>
+  <data name="Outcome_Pending" xml:space="preserve">
+    <value>Resultado pendente</value>
+  </data>
+  <data name="Outcome_Confirmed" xml:space="preserve">
+    <value>Confirmado</value>
+  </data>
+  <data name="Outcome_Partial" xml:space="preserve">
+    <value>Concluído parcialmente</value>
+  </data>
+  <data name="Outcome_CancelledBeforeDispatch" xml:space="preserve">
+    <value>Cancelado antes do envio</value>
+  </data>
+  <data name="Outcome_Failed" xml:space="preserve">
+    <value>Não concluído</value>
+  </data>
+  <data name="Outcome_Unknown" xml:space="preserve">
+    <value>Resultado não confirmado</value>
+  </data>
+  <data name="Operation_Start" xml:space="preserve">
+    <value>Iniciar</value>
+  </data>
+  <data name="Operation_Stop" xml:space="preserve">
+    <value>Parar</value>
+  </data>
+  <data name="Operation_Restart" xml:space="preserve">
+    <value>Reiniciar</value>
+  </data>
+  <data name="Operation_TogglePause" xml:space="preserve">
+    <value>Pausar ou retomar execução</value>
+  </data>
+  <data name="Operation_ToggleSuspend" xml:space="preserve">
+    <value>Suspender ou retomar atalhos</value>
+  </data>
+  <data name="Operation_Edit" xml:space="preserve">
+    <value>Editar script</value>
+  </data>
+  <data name="Operation_OpenFolder" xml:space="preserve">
+    <value>Abrir pasta</value>
+  </data>
+  <data name="Operation_Recover" xml:space="preserve">
+    <value>Verificar recuperação</value>
+  </data>
+  <data name="Reason_None" xml:space="preserve">
+    <value />
+  </data>
+  <data name="Reason_InvalidPath" xml:space="preserve">
+    <value>Caminho inválido.</value>
+  </data>
+  <data name="Reason_MissingFile" xml:space="preserve">
+    <value>Arquivo não encontrado.</value>
+  </data>
+  <data name="Reason_UnsupportedInterpreter" xml:space="preserve">
+    <value>Escolha uma instalação válida do AutoHotkey v2.</value>
+  </data>
+  <data name="Reason_AccessDenied" xml:space="preserve">
+    <value>Sem acesso suficiente para comprovar o processo.</value>
+  </data>
+  <data name="Reason_ObservationIncomplete" xml:space="preserve">
+    <value>Observação incompleta: o estado não está confirmado.</value>
+  </data>
+  <data name="Reason_AlreadyRunning" xml:space="preserve">
+    <value>Já existe uma execução comprovada.</value>
+  </data>
+  <data name="Reason_MultipleInstances" xml:space="preserve">
+    <value>Há múltiplas instâncias; selecione e encerre a ambiguidade fora do Manager.</value>
+  </data>
+  <data name="Reason_IdentityChanged" xml:space="preserve">
+    <value>A identidade do processo mudou. Atualize antes de continuar.</value>
+  </data>
+  <data name="Reason_WindowUnverified" xml:space="preserve">
+    <value>A janela do script não pôde ser comprovada.</value>
+  </data>
+  <data name="Reason_CapabilityUnverified" xml:space="preserve">
+    <value>Esta função não possui observação de estado comprovada e permanece indisponível.</value>
+  </data>
+  <data name="Reason_EffectOwnerUnavailable" xml:space="preserve">
+    <value>Outro Manager controla os efeitos nesta sessão. Feche-o para habilitar operações.</value>
+  </data>
+  <data name="Reason_LegacyGuard" xml:space="preserve">
+    <value>Há um controle ou pedido pendente no Manager anterior. Resolva-o antes de continuar.</value>
+  </data>
+  <data name="Reason_PendingOperation" xml:space="preserve">
+    <value>Há uma operação pendente. Verifique a recuperação antes de tentar novamente.</value>
+  </data>
+  <data name="Reason_StaleSelection" xml:space="preserve">
+    <value>A seleção ou a observação mudou. Revise o script e tente novamente.</value>
+  </data>
+  <data name="Reason_ReadOnlySettings" xml:space="preserve">
+    <value>Catálogo aberto somente para leitura. Use a recuperação nas Preferências.</value>
+  </data>
+  <data name="Reason_InvalidSettings" xml:space="preserve">
+    <value>Configurações inválidas. O arquivo foi preservado.</value>
+  </data>
+  <data name="Reason_UnsupportedSchema" xml:space="preserve">
+    <value>Versão de catálogo não suportada. O arquivo foi preservado.</value>
+  </data>
+  <data name="Reason_RecoveredBackup" xml:space="preserve">
+    <value>Uma cópia de segurança válida está disponível para recuperação explícita.</value>
+  </data>
+  <data name="Reason_ConcurrentSettingsChange" xml:space="preserve">
+    <value>O arquivo mudou fora do Manager. Atualize antes de salvar.</value>
+  </data>
+  <data name="Reason_StorageFailure" xml:space="preserve">
+    <value>Não foi possível gravar as configurações com segurança.</value>
+  </data>
+  <data name="Reason_Cancelled" xml:space="preserve">
+    <value>Operação cancelada.</value>
+  </data>
+  <data name="Reason_DispatchFailed" xml:space="preserve">
+    <value>Não foi possível enviar a operação.</value>
+  </data>
+  <data name="Reason_ExitNotObserved" xml:space="preserve">
+    <value>A saída do processo não foi observada no prazo. Nenhuma nova execução foi iniciada.</value>
+  </data>
+  <data name="Reason_StateNotObservable" xml:space="preserve">
+    <value>Não foi possível observar o estado solicitado.</value>
+  </data>
+  <data name="Reason_RestartPartial" xml:space="preserve">
+    <value>O script anterior saiu, mas a nova execução não foi confirmada.</value>
+  </data>
+  <data name="Reason_LaunchUncertain" xml:space="preserve">
+    <value>O resultado da execução é incerto. Use a recuperação antes de repetir.</value>
+  </data>
+  <data name="Reason_StartupConsentRequired" xml:space="preserve">
+    <value>É necessário consentir com o início do Manager no logon.</value>
+  </data>
+  <data name="Reason_StartupEntryConflict" xml:space="preserve">
+    <value>Existe uma entrada de início conflitante. Ela não foi alterada.</value>
+  </data>
+  <data name="Reason_StartupInactive" xml:space="preserve">
+    <value>O Manager não inicia com o Windows; os scripts marcados permanecem inativos no logon.</value>
+  </data>
+  <data name="Reason_StartupAlreadyProcessed" xml:space="preserve">
+    <value>O início deste logon já foi processado.</value>
+  </data>
+  <data name="Reason_ImportSourceChanged" xml:space="preserve">
+    <value>O catálogo de origem mudou. Revise uma nova prévia.</value>
+  </data>
+  <data name="Reason_ImportInvalid" xml:space="preserve">
+    <value>O catálogo anterior não pôde ser importado.</value>
+  </data>
+  <data name="Reason_ImportAvailable" xml:space="preserve">
+    <value>Há um catálogo anterior disponível para importação explícita.</value>
+  </data>
+  <data name="Reason_FolderLimitReached" xml:space="preserve">
+    <value>A pasta excedeu o limite da busca. A importação pode estar incompleta.</value>
+  </data>
+  <data name="Reason_PartialAnalysis" xml:space="preserve">
+    <value>A análise de atalhos é parcial.</value>
+  </data>
+  <data name="Reason_IncludeUnresolved" xml:space="preserve">
+    <value>Um arquivo incluído não pôde ser resolvido com segurança.</value>
+  </data>
+  <data name="Reason_IncludeLimitReached" xml:space="preserve">
+    <value>A análise atingiu o limite de arquivos incluídos.</value>
+  </data>
+  <data name="Reason_DynamicHotkeys" xml:space="preserve">
+    <value>Atalhos dinâmicos não podem ser determinados pela análise estática.</value>
+  </data>
+  <data name="Reason_PossibleConflict" xml:space="preserve">
+    <value>Há um possível conflito de atalhos; os contextos podem ser diferentes.</value>
+  </data>
+  <data name="Reason_EditorUnavailable" xml:space="preserve">
+    <value>Nenhum editor seguro foi encontrado. Configure um editor nas Preferências.</value>
+  </data>
+  <data name="Reason_ActivityUnavailable" xml:space="preserve">
+    <value>Não foi possível gravar ou ler o histórico de atividade.</value>
+  </data>
+  <data name="Reason_InvalidMetadata" xml:space="preserve">
+    <value>Revise os metadados informados.</value>
+  </data>
+  <data name="Reason_ManualElevationRequired" xml:space="preserve">
+    <value>A execução administrativa exige confirmação manual; não há elevação automática.</value>
+  </data>
+  <data name="Reason_ExternalStartupConflict" xml:space="preserve">
+    <value>Há outra fonte de início automático para este script. Ela não foi alterada.</value>
+  </data>
+  <data name="GlobalRecovery.Content" xml:space="preserve">
+    <value>Verificar pendências</value>
+  </data>
+  <data name="ScriptsCounts" xml:space="preserve">
+    <value>{0} scripts · {1} em execução</value>
+  </data>
+  <data name="HotkeyColumn.Text" xml:space="preserve">
+    <value>Atalho principal</value>
+  </data>
+  <data name="FileSection.Text" xml:space="preserve">
+    <value>ARQUIVO</value>
+  </data>
+  <data name="ExecutionSection.Text" xml:space="preserve">
+    <value>EXECUÇÃO</value>
+  </data>
+  <data name="HotkeysSection.Text" xml:space="preserve">
+    <value>ATALHOS</value>
+  </data>
+  <data name="ActivitySection.Text" xml:space="preserve">
+    <value>ATIVIDADE RECENTE</value>
+  </data>
+  <data name="MetadataExpander.Header" xml:space="preserve">
+    <value>Editar metadados</value>
+  </data>
+  <data name="NoRelatedActivity" xml:space="preserve">
+    <value>Nenhuma atividade registrada para este script.</value>
+  </data>
+</root>

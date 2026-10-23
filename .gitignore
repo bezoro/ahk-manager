@@ -1,6 +1,8 @@
 bin/
 obj/
 publish*/
+artifacts/
+TestResults/
 evidence/
 *.user
 catalog.json*

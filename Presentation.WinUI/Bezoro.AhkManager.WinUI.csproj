@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.22000.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.22000.0</SupportedOSPlatformVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <DefaultLanguage>pt-BR</DefaultLanguage>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>../Assets/AppIcon.ico</ApplicationIcon>
+    <AssemblyName>Bezoro.AhkManager.WinUI</AssemblyName>
+    <RootNamespace>Bezoro.AhkManager.WinUI</RootNamespace>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="[2.5.1]" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="[8.4.2]" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="[10.0.26100.9169]" PrivateAssets="all" />
+    <PackageReference Include="System.Management" Version="[10.0.13]" />
+    <InternalsVisibleTo Include="Bezoro.AhkManager.WinUI.Tests" />
+    <Content Include="../Assets/AppIcon.ico" Link="Assets/AppIcon.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../Assets/AppIcon-32.png" Link="Assets/AppIcon-32.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="PublishNativeXamlResources" AfterTargets="Publish">
+    <ItemGroup>
+      <NativeXamlPublishResource Include="$(TargetDir)$(AssemblyName).pri" />
+      <NativeXamlPublishResource Include="$(TargetDir)**\*.xbf" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(NativeXamlPublishResource.Identity)')" Text="Missing generated native XAML resource %(NativeXamlPublishResource.Identity)" />
+    <Copy SourceFiles="@(NativeXamlPublishResource)" DestinationFiles="@(NativeXamlPublishResource->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+</Project>
