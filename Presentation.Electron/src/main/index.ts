@@ -6,6 +6,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
 import { LifecycleIntent, orderlyShutdown } from './lifecycle.js';
+import { createDiagnostics, type PageDiagnostics } from './diagnostics.js';
 import {hostText as t} from '../shared/host-pt-BR.js';
 import { APP_URL, assetFromUrl, CSP, DocumentGuard, packagedBackend, type DocumentLease } from './security.js';
 import { capturePlacement, restorePlacement } from './placement.js';
@@ -24,6 +25,8 @@ let controller:ManagerController|null=null;
 let tray:Tray|null=null;
 let trayRegistered=false;
 let material:ThemeState['material']='solid';
+let diagnostics:PageDiagnostics|null=null;
+let diagnosticSelection:string|null=null;
 let ready=false;
 let rendererReady=false;
 const lifecycle=new LifecycleIntent(process.argv.includes('--login'));
@@ -110,6 +113,21 @@ async function start():Promise<void> {
   await serveAssets();lockSession();
   const supportsMica=Number(os.release().split('.')[2]??0)>=22621;
   window=new BrowserWindow({width:1200,height:780,minWidth:760,minHeight:560,show:false,title:t.title,backgroundColor:'#00000000',titleBarStyle:'hidden',titleBarOverlay:{height:44},autoHideMenuBar:true,webPreferences:{preload:path.join(__dirname,'../preload/index.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,allowRunningInsecureContent:false,devTools:false,spellcheck:false}});
+  diagnostics=createDiagnostics(process.argv,{
+    capture:async()=>{if(!window||window.isDestroyed()||window.webContents.getURL()!==APP_URL)throw new Error('Diagnostic document unavailable');const size=window.getContentBounds();if(size.width>4096||size.height>4096)throw new Error('Diagnostic viewport exceeds bound');return (await window.webContents.capturePage()).toPNG();},
+    summary:()=>({rendererPid:window?.webContents.getOSProcessId(),url:window?.webContents.getURL(),viewport:window?.getContentBounds(),material,theme:controller?.state.snapshot?.settings.theme??'System',revision:controller?.state.snapshot?.revision??null,selectedId:diagnosticSelection,scriptCount:controller?.state.snapshot?.scripts.length??0}),
+  });
+  if(diagnostics){
+    diagnostics.record('runtime',{electron:process.versions.electron,chromium:process.versions.chrome,node:process.versions.node,disableGpu:app.commandLine.hasSwitch('disable-gpu'),disableDirectComposition:app.commandLine.hasSwitch('disable-direct-composition')});
+    window.webContents.on('console-message',details=>diagnostics?.record('console',{level:details.level,message:details.message,line:details.lineNumber}));
+    window.webContents.on('preload-error',(_event,_preload,error)=>diagnostics?.record('preload-error',{message:error.message}));
+    window.webContents.on('did-fail-load',(_event,code,description,_url,mainFrame)=>diagnostics?.record('did-fail-load',{code,description,mainFrame}));
+    window.webContents.on('render-process-gone',(_event,details)=>diagnostics?.record('render-process-gone',{reason:details.reason,exitCode:details.exitCode}));
+    window.webContents.on('did-finish-load',()=>diagnostics?.record('did-finish-load'));
+    window.on('unresponsive',()=>diagnostics?.record('unresponsive'));window.on('responsive',()=>diagnostics?.record('responsive'));
+    app.on('child-process-gone',(_event,details)=>diagnostics?.record('child-process-gone',{type:details.type,reason:details.reason,exitCode:details.exitCode}));
+    app.once('will-quit',()=>diagnostics?.close());
+  }
   Menu.setApplicationMenu(null);
   if(supportsMica&&!nativeTheme.shouldUseHighContrastColors){try{window.setBackgroundMaterial('mica');material='mica';}catch{material='solid';}}
   if(material==='solid')window.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#202020':'#f7f7f7');
@@ -135,6 +153,7 @@ async function start():Promise<void> {
   ready=true;
   await runLogin();
   if(lifecycle.shouldShowAtStartup(controller.state.snapshot?.settings.showWindowAtLogin??false,trayRegistered))show();
+  if(window.isVisible())diagnostics?.initialReady();
 }
 async function startBackend():Promise<void> {
   if(quitting)throw new Error(t.closing);
@@ -219,6 +238,6 @@ function registerIpc():void {
   bind('restoreBackup',none,()=>controller!.restoreBackup());bind('recoverPending',none,()=>controller!.recoverPending());
   bind('retryBackend',none,async()=>{await startBackend();if(backend?.ready)await runLogin();});
   bind('copyText',shape({text:text(65536)}),v=>clipboard.writeText(v.text));
-  ipcMain.on('manager:updateSelection',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);controller!.updateSelection(body===null?null:assertSelection(body));}catch{/* Untrusted fire-and-forget messages cannot alter host authority. */}});
+  ipcMain.on('manager:updateSelection',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);const selected=body===null?null:assertSelection(body);controller!.updateSelection(selected);diagnosticSelection=selected?.scriptId??null;diagnostics?.selectionCommitted(diagnosticSelection);}catch{/* Untrusted fire-and-forget messages cannot alter host authority. */}});
   ipcMain.on('manager:documentReady',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);requireValid(body,none,'document ready');rendererReady=true;deliverPreferences();}catch{/* No authority for invalid readiness signals. */}});
 }
