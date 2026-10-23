@@ -5,7 +5,7 @@ import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
-import { LifecycleIntent, orderlyShutdown } from './lifecycle.js';
+import { LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown } from './lifecycle.js';
 import { createDiagnostics, type PageDiagnostics } from './diagnostics.js';
 import {hostText as t} from '../shared/host-pt-BR.js';
 import { APP_URL, assetFromUrl, CSP, DocumentGuard, packagedBackend, type DocumentLease } from './security.js';
@@ -30,6 +30,8 @@ let diagnosticSelection:string|null=null;
 let ready=false;
 let rendererReady=false;
 const lifecycle=new LifecycleIntent(process.argv.includes('--login'));
+const stopExit=new StopExitIntent();
+let stopExitProgress={done:0,total:0};
 let quitting=false;
 let quitComplete=false;
 const documentScope=new AsyncLocalStorage<()=>boolean>();
@@ -156,6 +158,7 @@ async function start():Promise<void> {
   if(window.isVisible())diagnostics?.initialReady();
 }
 async function startBackend():Promise<void> {
+  if(stopExit.active)throw new Error(t.stopExitBusy);
   if(quitting)throw new Error(t.closing);
   if(!controller)throw new Error('Controller unavailable');
   if(backend&&!backend.exited)throw new Error(t.backendStillAlive(backend.pid));
@@ -176,7 +179,7 @@ async function startBackend():Promise<void> {
     controller.setConnection('ready');
   }catch(error){controller.setConnection('failed',safeError(error));show();}
 }
-async function runLogin():Promise<void> {if(!backend?.ready||!lifecycle.takeLogin())return;await backend.request('runLogin',{}).catch(error=>controller?.setConnection('failed',safeError(error)));}
+async function runLogin():Promise<void> {if(stopExit.active||quitting||!backend?.ready||!controller||!lifecycle.takeLogin())return;await controller.runLogin().catch(error=>controller?.setConnection('failed',safeError(error)));}
 function createTray():void {
   try{
     const image=nativeImage.createFromPath(path.join(process.resourcesPath,'tray.png'));
@@ -187,15 +190,26 @@ function createTray():void {
 function updateTray():void {
   if(!tray||tray.isDestroyed())return;
   const running=controller?.state.snapshot?.scripts.filter(s=>s.status==='Running')??[];
-  tray.setContextMenu(Menu.buildFromTemplate([{label:t.tray.open,click:()=>{lifecycle.requestExplicitActivation();show();}},{label:window?.isVisible()?t.tray.hide:t.tray.show,click:()=>{lifecycle.requestExplicitActivation();if(window?.isVisible())window.hide();else show();updateTray();}},{type:'separator'},{label:t.tray.running(running.length),submenu:running.length?running.map(s=>({label:s.friendlyName,enabled:false})):[{label:t.tray.noneRunning,enabled:false}]},{label:t.tray.preferences,click:showPreferences},{type:'separator'},{label:t.tray.exit,click:()=>void quit()}]));
+  tray.setContextMenu(Menu.buildFromTemplate([{label:t.tray.open,click:()=>{lifecycle.requestExplicitActivation();show();}},{label:window?.isVisible()?t.tray.hide:t.tray.show,click:()=>{lifecycle.requestExplicitActivation();if(window?.isVisible())window.hide();else show();updateTray();}},{type:'separator'},{label:t.tray.running(running.length),submenu:running.length?running.map(s=>({label:s.friendlyName,enabled:false})):[{label:t.tray.noneRunning,enabled:false}]},{label:t.tray.preferences,enabled:!stopExit.active,click:showPreferences},{type:'separator'},{label:t.tray.exit,enabled:!stopExit.active&&!quitting,click:()=>void quit()},{label:t.tray.stopExit,enabled:!stopExit.active&&!quitting&&controller?.state.connection==='ready',click:()=>void stopScriptsAndQuit()},{label:t.tray.stopping(stopExitProgress.done,stopExitProgress.total),visible:stopExit.active,enabled:false},{label:t.tray.cancelStopExit,visible:stopExit.active,click:()=>{stopExit.cancel();updateTray();}}]));
+}
+async function stopScriptsAndQuit():Promise<void> {
+  if(quitting||!controller||!stopExit.begin())return;
+  stopExitProgress={done:0,total:0};updateTray();
+  try{
+    const receipt=await controller.stopScriptsForExit({cancelled:()=>stopExit.cancelled,progress:(done,total)=>{stopExitProgress={done,total};updateTray();}});
+    if(stopExit.complete(receipt.canExit)){await quit();return;}
+    updateTray();show();if(window)await dialog.showMessageBox(window,{type:'warning',title:t.stopExitPartialTitle,message:t.stopExitPartialTitle,detail:t.stopExitPartial(receipt),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+  }catch(error){stopExit.complete(false);updateTray();show();dialog.showErrorBox(t.stopExitPartialTitle,safeError(error));}
 }
 async function closeWindow():Promise<void> {
+  if(stopExit.active){stopExit.cancel();updateTray();return;}
   if(quitting)return;
   try{await controller?.savePlacement();}catch(error){controller?.setConnection('failed',safeError(error));}
   if(lifecycle.closeAction(controller?.state.snapshot?.settings.closeBehavior??'Exit',trayRegistered)==='hide'){window?.hide();updateTray();}
   else await quit();
 }
 async function quit():Promise<void> {
+  if(stopExit.active){stopExit.cancel();updateTray();return;}
   if(quitting||quitComplete)return;quitting=true;
   controller?.setConnection('closing');
   let timer:ReturnType<typeof setTimeout>|undefined;
@@ -205,7 +219,7 @@ async function quit():Promise<void> {
     reportPlacementFailure:error=>controller?.setConnection('closing',safeError(error)),
   });
   try{
-    await Promise.race([orderly(),new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(t.shutdownDeadline(backend?.pid??null))),15000);})]);
+    await Promise.race([orderly(),new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(t.shutdownDeadline(backend?.pid??null))),SHUTDOWN_DEADLINE_MS);})]);
     tray?.destroy();quitComplete=true;app.quit();
   }catch(error){quitting=false;controller?.setConnection('failed',safeError(error));show();dialog.showErrorBox(t.shutdownUnconfirmed,safeError(error));}
   finally{clearTimeout(timer);}

@@ -1,6 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LifecycleIntent, orderlyShutdown, type ShutdownBoundary } from '../../src/main/lifecycle.js';
+import { LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, withinDeadline, type ShutdownBoundary } from '../../src/main/lifecycle.js';
+import { ManagerController } from '../../src/main/controller.js';
+import { snapshot } from './fixtures.js';
+
+test('keep-scripts orderly exit never prepares or performs a Stop',async()=>{
+  const actions:string[]=[];const controller=new ManagerController({request:async<T>(action:string)=>{actions.push(action);return {} as T;}},{files:async()=>[],confirm:async()=>{throw new Error('No consent in keep-scripts exit');},alive:()=>true,placement:()=>snapshot().settings.window},()=>{});controller.setSnapshot(snapshot());controller.setConnection('ready');
+  await orderlyShutdown({drain:()=>controller.drain(),backendPresent:()=>true,backendExited:()=>false,persistPlacement:()=>controller.savePlacement(),shutdownBackend:async()=>{actions.push('shutdown');},reportPlacementFailure:()=>{}});
+  assert.deepEqual(actions,['saveSettings','shutdown']);
+});
+test('repeated stop/close/OS quit cancellation cannot become implicit exit or duplicate shutdown',()=>{
+  const intent=new StopExitIntent();assert.equal(intent.begin(),true);assert.equal(intent.begin(),false);intent.cancel();intent.cancel();assert.equal(intent.complete(true),false);assert.equal(intent.active,false);
+  assert.equal(intent.begin(),true);assert.equal(intent.complete(false),false);assert.equal(intent.begin(),true);assert.equal(intent.complete(true),true);assert.equal(intent.complete(true),false);
+});
+test('cancellation after all-stopped receipt but before quit transition still vetoes exit',()=>{
+  const intent=new StopExitIntent();intent.begin();intent.cancel();assert.equal(intent.complete(true),false);
+});
+test('final observation and orderly shutdown use independent bounded phases, with late results suppressed',async()=>{
+  for(const budget of [30000,SHUTDOWN_DEADLINE_MS]){
+    let expire!:()=>void,finish!:(value:boolean)=>void;let cleared=false;
+    const phase=withinDeadline(()=>new Promise<boolean>(resolve=>finish=resolve),budget,(fn,ms)=>{assert.equal(ms,budget);expire=fn;return ()=>{cleared=true;};});
+    const rejected=assert.rejects(phase,/DeadlineExceeded/);expire();await rejected;finish(true);assert.equal(cleared,true);
+  }
+  assert.equal(SHUTDOWN_DEADLINE_MS,15000);
+});
 test('normal explicit launch remains visible even when login later redirects into the primary instance',()=>{
   const lifecycle=new LifecycleIntent(false);lifecycle.requestLogin();assert.equal(lifecycle.shouldShowAtStartup(false,true),true);
 });

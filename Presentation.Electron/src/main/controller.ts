@@ -1,9 +1,19 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ActivityQuery, ActivitySnapshot, CatalogResult, HostState, ImportPreview, ManagerSettings, ManagerSnapshot, OperationResult, ScriptMetadata, ScriptOperation, SelectionContext, WindowPlacement } from '../shared/contracts.js';
+import type { ActivityQuery, ActivitySnapshot, CatalogResult, HostState, ImportPreview, ManagerSettings, ManagerSnapshot, OperationResult, ProcessIdentity, ScriptMetadata, ScriptOperation, ScriptSnapshot, SelectionContext, WindowPlacement } from '../shared/contracts.js';
 import type { PreparedOperation, ProfileMigrationPreview } from './backend.js';
 import { MAX_PENDING } from './backend.js';
 import {hostText as t} from '../shared/host-pt-BR.js';
+import {withinDeadline} from './lifecycle.js';
+
+export interface StopExitItem {scriptId:string;name:string;path:string;pid:number|null;outcome:'alreadyStopped'|'confirmed'|'untouched'|'unknown';reason:string}
+export interface StopExitReceipt {canExit:boolean;cancelled:boolean;expired:boolean;confirmedStops:number;items:StopExitItem[];problems:string[]}
+export interface StopExitOptions {cancelled():boolean;now?():number;progress?:(completed:number,total:number)=>void;finalObservation?:(request:()=>Promise<ManagerSnapshot>,milliseconds:number)=>Promise<ManagerSnapshot>}
+const nonblockingGlobal=new Set(['StartupInactive','StartupEntryConflict','ActivityUnavailable']);
+const blockingScript=new Set(['ObservationIncomplete','PendingOperation','AccessDenied','MultipleInstances','IdentityChanged','WindowUnverified','CapabilityUnverified','EffectOwnerUnavailable','LegacyGuard','ReadOnlySettings','StorageFailure','MissingFile']);
+function trustworthy(snapshot:ManagerSnapshot):boolean {return snapshot.effectsAvailable&&!snapshot.readOnly&&snapshot.observedAt!==null&&!snapshot.issues.some(issue=>!nonblockingGlobal.has(issue.code));}
+function rowProblem(script:ScriptSnapshot):string|null {return script.issues.find(issue=>blockingScript.has(issue.code))?.code??(script.status==='Stopped'&&script.process===null?null:script.status==='Running'&&script.process?.windowVerified&&!script.runAsAdministrator?script.process.identity.scriptPath.toLowerCase()===script.path.toLowerCase()?null:'IdentityChanged':script.runAsAdministrator?'ManualElevationRequired':script.status);}
+export function sameProcessIdentity(a:ProcessIdentity|null,b:ProcessIdentity|null):boolean {return !!a&&!!b&&a.pid===b.pid&&a.creationFileTime===b.creationFileTime&&a.executablePath.toLowerCase()===b.executablePath.toLowerCase()&&a.scriptPath.toLowerCase()===b.scriptPath.toLowerCase()&&a.userSid===b.userSid&&a.sessionId===b.sessionId&&a.scriptHash===b.scriptHash&&a.interpreterHash===b.interpreterHash;}
 
 export interface Authority { request<T>(action:string,payload:unknown):Promise<T> }
 export interface NativeBoundary {
@@ -35,6 +45,8 @@ export class ManagerController {
   private selectionEpoch=0;
   private paths=new Set<string>();
   private previews=new Map<string,{previewId:string;preview:ImportPreview;expires:number}>();
+  private stopExitActive=false;
+  private stopExitVersion=0n;
   constructor(private authority:Authority,private readonly native:NativeBoundary,private readonly publish:(state:HostState)=>void){}
   setAuthority(authority:Authority):void {this.authority=authority;this.paths.clear();this.previews.clear();this.updateSelection(null);}
   setSnapshot(snapshot:ManagerSnapshot):void {this.state={...this.state,snapshot};this.publish(this.state);}
@@ -43,13 +55,14 @@ export class ManagerController {
   private requireReady():ManagerSnapshot {if(this.state.connection!=='ready'||!this.state.snapshot)throw new Error(t.backendUnavailable);return this.state.snapshot;}
   private matches(revision:string):boolean {return this.requireReady().revision===revision;}
   private async serialize<T>(work:()=>Promise<T>):Promise<T> {
-    this.requireReady();if(this.queued>=MAX_PENDING)throw new Error(t.queueFull);
+    this.requireReady();if(this.stopExitActive)throw new Error(t.stopExitBusy);if(this.queued>=MAX_PENDING)throw new Error(t.queueFull);
     this.queued++;this.state={...this.state,busy:true};this.publish(this.state);
     const task=this.tail.then(()=>{this.requireReady();if(!this.native.alive())throw new Error(t.documentClosed);return work();});
     this.tail=task.catch(()=>undefined);
-    return task.finally(()=>{this.queued--;this.state={...this.state,busy:this.queued>0};this.publish(this.state);});
+    return task.finally(()=>{this.queued--;this.state={...this.state,busy:this.queued>0||this.stopExitActive};this.publish(this.state);});
   }
   async refresh():Promise<void> {this.requireReady();this.setSnapshot(await this.authority.request<ManagerSnapshot>('refresh',{}));}
+  async runLogin():Promise<OperationResult> {return this.serialize(()=>this.authority.request('runLogin',{}));}
   async add(kind:'scripts'|'folder'):Promise<CatalogResult|null> {return this.serialize(async()=>{const paths=await this.native.files(kind);if(!paths.length||!this.native.alive())return null;return kind==='scripts'?this.authority.request('addFiles',{paths}):this.authority.request('addFolder',{path:paths[0]});});}
   async remove(scriptId:string,revision:string):Promise<OperationResult> {return this.serialize(async()=>{
     if(!this.matches(revision))return stale();const script=this.state.snapshot!.scripts.find(s=>s.id===scriptId);if(!script)return stale();
@@ -85,7 +98,7 @@ export class ManagerController {
       return this.authority.request('perform',{planId:prepared.planId,currentSelection,confirmed});
     });
   }
-  async pick(kind:'interpreter'|'editor'):Promise<string|null> {const values=await this.native.files(kind);const value=values[0]??null;if(value&&this.native.alive())this.paths.add(path.normalize(value).toLowerCase());return this.native.alive()?value:null;}
+  async pick(kind:'interpreter'|'editor'):Promise<string|null> {if(this.stopExitActive)throw new Error(t.stopExitBusy);const values=await this.native.files(kind);const value=values[0]??null;if(value&&this.native.alive())this.paths.add(path.normalize(value).toLowerCase());return this.native.alive()?value:null;}
   async saveSettings(proposed:ManagerSettings):Promise<OperationResult> {return this.serialize(async()=>{
     const current=this.requireReady();
     for(const key of ['interpreterPath','editorPath'] as const){const value=proposed[key];if(value!==null&&value!==current.settings[key]&&!this.paths.has(path.normalize(value).toLowerCase()))throw new Error(t.selectExecutable);}
@@ -131,4 +144,77 @@ export class ManagerController {
     if(this.state.connection==='closing')await save();else await this.serialize(save);
   }
   async drain():Promise<void> {await this.tail;}
+
+  /** Native host only: never called by renderer IPC and independent of its selected row. */
+  async stopScriptsForExit(options:StopExitOptions):Promise<StopExitReceipt> {
+    const receipt:StopExitReceipt={canExit:false,cancelled:false,expired:false,confirmedStops:0,items:[],problems:[]};
+    if(this.stopExitActive){receipt.problems.push('BatchBusy');return receipt;}
+    this.stopExitActive=true;this.state={...this.state,busy:true};this.publish(this.state);
+    const now=options.now??(()=>performance.now());
+    const cancelled=()=>{if(options.cancelled()||!this.native.alive()){receipt.cancelled=true;return true;}return false;};
+    const observe=async()=>{this.requireReady();const fresh=await this.authority.request<ManagerSnapshot>('refresh',{});this.requireReady();this.setSnapshot(fresh);return fresh;};
+    try{
+      // Prior work, initial observation and native consent do not spend the dispatch budget.
+      await this.drain();if(cancelled())return receipt;
+      const initial=await observe();if(cancelled())return receipt;
+      if(!trustworthy(initial)){receipt.problems.push('ObservationUntrusted');return receipt;}
+      const cohort=initial.scripts.map(script=>({id:script.id,path:script.path,name:script.friendlyName,identity:script.process?{...script.process.identity}:null}));
+      const sameScope=(state:ManagerSnapshot)=>state.scripts.length===cohort.length&&cohort.every(original=>state.scripts.some(script=>script.id===original.id&&script.path.toLowerCase()===original.path.toLowerCase()&&script.friendlyName===original.name));
+      const approved:typeof cohort=[];
+      for(const script of initial.scripts){
+        const problem=rowProblem(script);
+        receipt.items.push({scriptId:script.id,name:script.friendlyName,path:script.path,pid:script.process?.identity.pid??null,outcome:problem?'untouched':script.status==='Stopped'?'alreadyStopped':'untouched',reason:problem??(script.status==='Stopped'?'None':'NotDispatched')});
+        if(!problem&&script.status==='Running')approved.push(cohort.find(item=>item.id===script.id)!);
+      }
+      let incomplete=receipt.items.some(item=>item.reason!=='None'&&item.reason!=='NotDispatched');
+      options.progress?.(0,approved.length);
+      if(approved.length){
+        const detail=t.stopExitConsent(receipt.items);
+        if(detail.length>64000){receipt.problems.push('ConfirmationTooLarge');return receipt;}
+        if(!await this.native.confirm(t.stopExitTitle,detail)){receipt.cancelled=true;return receipt;}
+        if(cancelled())return receipt;
+      }
+      const deadline=now()+60000,version=(++this.stopExitVersion).toString();
+      let completed=0;
+      for(const original of approved){
+        const item=receipt.items.find(row=>row.scriptId===original.id)!;
+        if(cancelled())break;
+        if(now()>=deadline){receipt.expired=true;break;}
+        const fresh=await observe();
+        if(cancelled())break;
+        if(!trustworthy(fresh)||!sameScope(fresh)){incomplete=true;receipt.problems.push('ScopeOrAuthorityChanged');break;}
+        if(now()>=deadline){receipt.expired=true;break;}
+        const target=fresh.scripts.find(script=>script.id===original.id)!;
+        if(!rowProblem(target)&&target.status==='Stopped'&&target.process===null){item.outcome='alreadyStopped';item.reason='None';options.progress?.(++completed,approved.length);continue;}
+        if(rowProblem(target)||!sameProcessIdentity(original.identity,target.process?.identity??null)){incomplete=true;item.reason=rowProblem(target)??'IdentityChanged';options.progress?.(++completed,approved.length);continue;}
+        const selection:SelectionContext={scriptId:original.id,stateRevision:fresh.revision,query:{search:'',status:'All',sort:'Name',collectionId:null,version}};
+        const prepared=await this.authority.request<PreparedOperation>('prepare',{selection,operation:'Stop'});
+        // Only known Stop tokens requiring confirmation are safe to discard this way.
+        if(prepared.plan.operation!=='Stop'||!prepared.plan.requiresConfirmation){incomplete=true;item.reason='UnexpectedPlan';break;}
+        const discard=async()=>{try{await this.authority.request('perform',{planId:prepared.planId,currentSelection:prepared.plan.selection,confirmed:false});}catch{incomplete=true;receipt.problems.push('DiscardUnconfirmed');}};
+        if(cancelled()){await discard();break;}
+        if(deadline-now()<30000){receipt.expired=true;await discard();break;}
+        if(this.state.connection!=='ready'||!this.state.snapshot){incomplete=true;item.reason='EffectOwnerUnavailable';await discard();break;}
+        const current=this.requireReady();
+        const matches=prepared.plan.allowed&&prepared.plan.scriptId===original.id&&prepared.plan.stateRevision===fresh.revision&&selectionKey(prepared.plan.selection)===selectionKey(selection)&&prepared.plan.selection.stateRevision===selection.stateRevision&&sameProcessIdentity(original.identity,prepared.plan.expectedIdentity)&&trustworthy(current)&&sameScope(current)&&current.revision===fresh.revision&&sameProcessIdentity(original.identity,current.scripts.find(script=>script.id===original.id)?.process?.identity??null);
+        if(!matches){incomplete=true;item.reason=prepared.plan.allowed?'StaleSelection':prepared.plan.reason;await discard();options.progress?.(++completed,approved.length);continue;}
+        try{
+          const result=await this.authority.request<OperationResult>('perform',{planId:prepared.planId,currentSelection:selection,confirmed:true});
+          if(result.outcome==='Confirmed'&&result.code==='None'){item.outcome='confirmed';item.reason='None';receipt.confirmedStops++;}
+          else{incomplete=true;item.outcome='unknown';item.reason=result.code==='None'?result.outcome:result.code;}
+        }catch(error){incomplete=true;item.outcome='unknown';item.reason=error instanceof Error?error.message:'Unknown';}
+        options.progress?.(++completed,approved.length);
+        if(now()>deadline){receipt.expired=true;break;}
+        if(cancelled())break;
+      }
+      // Cancellation/expiry/uncertain effects are sticky even if late observation looks stopped.
+      const final=await (options.finalObservation??withinDeadline)(observe,30000);
+      if(cancelled())incomplete=true;
+      const allStopped=trustworthy(final)&&sameScope(final)&&final.scripts.every(script=>script.status==='Stopped'&&script.process===null&&!rowProblem(script));
+      if(!allStopped)receipt.problems.push('FinalStateNotStopped');
+      receipt.canExit=allStopped&&!incomplete&&!receipt.cancelled&&!receipt.expired&&receipt.items.every(item=>item.outcome==='confirmed'||item.outcome==='alreadyStopped');
+      return receipt;
+    }catch(error){receipt.problems.push(error instanceof Error?error.message:'Unknown');return receipt;}
+    finally{this.stopExitActive=false;this.state={...this.state,busy:this.queued>0};this.publish(this.state);}
+  }
 }

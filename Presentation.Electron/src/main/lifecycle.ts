@@ -15,6 +15,22 @@ export class LifecycleIntent {
   closeAction(preference:'HideToTray'|'Exit',trayRegistered:boolean):'hide'|'exit' {return preference==='HideToTray'&&trayRegistered?'hide':'exit';}
 }
 
+/** All competing exit paths cancel stopping; none silently changes its meaning. */
+export class StopExitIntent {
+  active=false;
+  cancelled=false;
+  begin():boolean {if(this.active)return false;this.active=true;this.cancelled=false;return true;}
+  cancel():void {if(this.active)this.cancelled=true;}
+  complete(canExit:boolean):boolean {const exit=this.active&&canExit&&!this.cancelled;this.active=false;return exit;}
+}
+
+export const SHUTDOWN_DEADLINE_MS=15000;
+export async function withinDeadline<T>(request:()=>Promise<T>,milliseconds:number,schedule:(fn:()=>void,ms:number)=>()=>void=(fn,ms)=>{const timer=setTimeout(fn,ms);return ()=>clearTimeout(timer);}):Promise<T> {
+  let cancel=()=>{};
+  try{return await Promise.race([request(),new Promise<never>((_resolve,reject)=>{cancel=schedule(()=>reject(new Error('DeadlineExceeded')),milliseconds);})]);}
+  finally{cancel();}
+}
+
 export interface ShutdownBoundary {
   drain():Promise<void>;
   backendPresent():boolean;
