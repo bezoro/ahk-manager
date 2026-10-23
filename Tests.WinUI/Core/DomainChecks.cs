@@ -28,6 +28,7 @@ public static partial class CoreSuite
         var root = System.IO.Path.Combine(FixtureRoot, "hotkeys-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var path = System.IO.Path.Combine(root, "main.ahk");
+        await CheckRequirementsAsync(root);
         await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2.0\n; ^x:: comment\ntext := \"^z:: fake\"\n^!a::MsgBox 'ok'\n#HotIf WinActive('Example')\nF2::return\n#Include missing.ahk\nHotkey('F3', (*) => 0)\na::b\n");
         var result = await new HotkeyAnalyzer().AnalyzeAsync(path);
         Check(result.Hotkeys.Any(h => h.NormalizedChord == HotkeyAnalyzer.Normalize("!^a")), "static declaration detected");
@@ -36,5 +37,67 @@ public static partial class CoreSuite
         Check(result.Hotkeys.Any(h => h.Chord == "a" && h.IsRemap), "remap distinct from ordinary hotkey");
         Check(result.Issues.Any(i => i.Code == ReasonCode.IncludeUnresolved) && result.Issues.Any(i => i.Code == ReasonCode.DynamicHotkeys), "unresolved include and dynamic hotkeys keep analysis partial");
         Console.WriteLine("FIXTURE " + root);
+    }
+
+    static async Task CheckRequirementsAsync(string root)
+    {
+        var script = System.IO.Path.Combine(root, "requires.ahk");
+        var executable = System.IO.Path.Combine(root, "metadata.exe");
+        // A minimal header fixture is data only; no process or loader is involved.
+        byte[] pe = new byte[512];
+        BitConverter.GetBytes((ushort)0x5a4d).CopyTo(pe, 0);
+        BitConverter.GetBytes(128).CopyTo(pe, 0x3c);
+        BitConverter.GetBytes(0x00004550).CopyTo(pe, 128);
+        BitConverter.GetBytes((ushort)0x8664).CopyTo(pe, 132);
+        BitConverter.GetBytes((ushort)240).CopyTo(pe, 148);
+        BitConverter.GetBytes((ushort)0x20b).CopyTo(pe, 152);
+        await File.WriteAllBytesAsync(executable, pe);
+        var stable = new InterpreterInfo(executable, "2.0.30.0", "fixture");
+        async Task Requirement(string body, bool expected, InterpreterInfo? interpreter = null)
+        {
+            await File.WriteAllTextAsync(script, body);
+            bool accepted = true;
+            try { await AutoHotkeyDiscovery.ValidateScriptVersionAsync(script, interpreter ?? stable, CancellationToken.None); }
+            catch (Exception ex) when (ex is InvalidDataException or IOException) { accepted = false; }
+            Check(accepted == expected, "requires " + body.Replace('\n', '|') + " => " + expected);
+        }
+        await Requirement("#Requires AutoHotkey v2.0-rc-1", true);
+        var hyphenated = stable with { ProductVersion = "2.0-rc-1" };
+        await Requirement("#Requires AutoHotkey =2.0-rc-1", true, hyphenated);
+        await Requirement("#Requires AutoHotkey <2.0", true, hyphenated);
+        await Requirement("#Requires AutoHotkey >=2.0", false, hyphenated);
+        foreach (string requirement in new[] { "v2.0", ">=2.0", "v2.0-rc.2", "64-bit", "v2.0 64-bit", ">=1.1 <3", "=2.0.30", "<=2.0.30.0", ">2.0.29", "v2.0.30+build.4", "v02.00.030", "v2.0 ; trailing comment", "", ">=2.0 <2.1 64-bit" })
+            await Requirement("#Requires AutoHotkey " + requirement, true);
+        foreach (string requirement in new[] { "v2.1", "v1.1", "32-bit", "<2.0.30", "<=2.0.29", ">2.0.30", "=2.0.31", "=>2", "v2..0", "v2.0-rc..2", "v2.0;bad", ">=", "64-bit garbage", "64-bit 32-bit" })
+            await Requirement("#Requires AutoHotkey " + requirement, false);
+        await Requirement("#Requires AutoHotkey >=2\n#Requires AutoHotkey <2", false);
+        await Requirement("#RequiresSomething Other\n/*\n#Requires AutoHotkey v1\n*/\n(\n#Requires AutoHotkey v1\n)\n#Requires AutoHotkey v2", true);
+        await Requirement("#Requires Other v2", false);
+        await Requirement("#Requires", false);
+        var prerelease = stable with { ProductVersion = "2.0-rc.2" };
+        await Requirement("#Requires AutoHotkey >=2.0- <2", true, prerelease);
+        await Requirement("#Requires AutoHotkey v2.0", false, prerelease);
+        await Requirement("#Requires AutoHotkey =2.0.0-rc.2.0+ignored", true, prerelease);
+        await Requirement("#Requires AutoHotkey >2-rc.1 <2-rc.3", true, prerelease);
+        await Requirement("#Requires AutoHotkey >2-rc.a112 <2-rc.a20", true, stable with { ProductVersion = "2-rc.a15" });
+        await Requirement("#Requires AutoHotkey >2-rc.9", true, stable with { ProductVersion = "2-rc.a" });
+        await Requirement("#Requires AutoHotkey >=2- <2", true, stable with { ProductVersion = "2-1" });
+        await Requirement("#Requires AutoHotkey >2-rc.A", true, stable with { ProductVersion = "2-rc.a" });
+        await Requirement("#Requires AutoHotkey v2", false, stable with { ProductVersion = "invalid" });
+        await Requirement("#Requires AutoHotkey 64-bit", false, stable with { Path = System.IO.Path.Combine(root, "absent.exe") });
+        await File.WriteAllBytesAsync(executable, new byte[64]);
+        await Requirement("#Requires AutoHotkey 64-bit", false);
+        BitConverter.GetBytes((ushort)0x14c).CopyTo(pe, 132);
+        BitConverter.GetBytes((ushort)0x10b).CopyTo(pe, 152);
+        await File.WriteAllBytesAsync(executable, pe);
+        await Requirement("#Requires AutoHotkey 32-bit", true);
+        await Requirement("#Requires AutoHotkey 64-bit", false);
+        BitConverter.GetBytes(int.MaxValue).CopyTo(pe, 0x3c);
+        await File.WriteAllBytesAsync(executable, pe);
+        await Requirement("#Requires AutoHotkey 32-bit", false);
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+        bool stopped = false;
+        try { await AutoHotkeyDiscovery.ValidateScriptVersionAsync(script, stable, cancelled.Token); } catch (OperationCanceledException) { stopped = true; }
+        Check(stopped, "requires preserves cancellation");
     }
 }
