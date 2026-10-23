@@ -1,15 +1,17 @@
 # AHK Manager — Windows 11 x64
 
-Extraia a pasta inteira e abra **Bezoro.AhkManager.WinUI.exe**. Mantenha todos os arquivos juntos. Os runtimes estão incluídos; não é necessário instalar Visual Studio, SDK, certificado ou habilitar Modo de Desenvolvedor.
+**Candidato em validação.** Instalação, atualização, desinstalação e execução do programa completo ainda precisam de validação. Este documento descreve o fluxo previsto, sem afirmar aprovação para uso diário.
+
+Execute **AHK-Manager-1.0.0-Setup-x64.exe**. A instalação é por usuário e não exige administrador. O executável instalado é **Bezoro.AhkManager.exe**, acompanhado do runtime Electron e de `backend/AhkManager.Backend.exe`. Não é necessário instalar Node, npm, Visual Studio, SDK ou .NET. O pacote não tem assinatura digital de editor verificado e pode apresentar SmartScreen. Não há atualização automática.
 
 Para executar scripts, instale AutoHotkey **v2** ou escolha seu executável nas Preferências. Adicionar arquivos não os executa. Editar usa um editor seguro, não a associação Abrir de .ahk.
 
 Tema e cor de destaque seguem o Windows. Ctrl+F pesquisa; F5 atualiza. Fechar pode manter o Manager na área de notificação; sair mantém os scripts rodando. Parar solicita saída normal e pode ser recusado; não há encerramento forçado automático.
 
-Início com Windows é opcional e por usuário. Um Manager anterior aberto impede efeitos concorrentes. Importação pela Ajuda é explícita e não altera o catálogo anterior. Dados novos: %LOCALAPPDATA%/Bezoro/AhkManagerWinUI. Guarde uma cópia dessa pasta e da distribuição anterior. Não apague registros pendentes para repetir execuções incertas: use Verificar pendências. Atalhos e conflitos têm análise parcial.
+Início com Windows é opcional e por usuário. Um Manager anterior aberto impede efeitos concorrentes. Importação e migração de perfil WinUI exigem prévia e confirmação; a origem permanece intacta e a migração preserva backup e operações pendentes. Uma entrada de login anterior exige transferência explícita e verificada. Dados novos: `%LOCALAPPDATA%/Bezoro/AhkManagerElectron`. Guarde uma cópia dessa pasta e da distribuição anterior. Não apague registros pendentes para repetir execuções incertas: use Verificar pendências. Atalhos e conflitos têm análise parcial.
 
-payload-manifest.json identifica o conteúdo desta distribuição.
+A interface usa Fluent UI React; os controles web não são WinUI. Moldura, botões da janela, seletores e confirmações usam o Windows. Mica é solicitado pela API suportada, com fundo sólido quando indisponível. Os manifests do pacote identificam seus arquivos e dependências.
 
-Para atualizar, escolha **Sair** na área de notificação e substitua a pasta da distribuição por uma cópia completa da nova versão. Sair do Manager preserva os scripts em execução. Guarde a versão anterior e os dados locais antes de atualizar.
+A atualização prevista é manual: escolha **Sair do gerenciador**, desinstale a versão anterior preservando os perfis e scripts e instale a nova versão. A atualização in-place é recusada antes de remover arquivos ou alterar a entrada de login. Guarde a distribuição anterior e uma cópia dos dados; depois da reinstalação, confira a preferência de inicialização com Windows e confirme novamente seu registro, se desejar usá-la. O instalador não encerra árvores de processos.
 
-Para remover, desative **Iniciar o Manager com o Windows** nas Preferências e salve. Essa ação remove somente a entrada de login que corresponde a este Manager; entradas de outros aplicativos não são alteradas. Depois escolha **Sair** e apague a pasta da distribuição. Os scripts continuam em execução e os dados em `%LOCALAPPDATA%/Bezoro/AhkManagerWinUI` são preservados; remova esses dados separadamente somente se não quiser mais o catálogo, histórico e preferências.
+Para remover, saia do Manager e use o desinstalador do Windows. Ele oferece remover a entrada de login somente se corresponder exatamente a esta instalação, com resposta padrão Não. A remoção verifica a lista exata, hashes e caminhos antes de apagar arquivos; alterações ou redirecionamentos interrompem a operação. Arquivos alheios à lista e diretórios não vazios são preservados. Perfis, backups e scripts permanecem disponíveis; remova esses dados separadamente somente se não quiser mais catálogo, histórico e preferências.

@@ -36,6 +36,17 @@ public sealed class ManagerService : IManagerService
             new ProcessManager(owner, documentedControlsProven: true), new UserStartupService(new RegistryStartupAdapter(), Environment.ProcessPath ?? throw new InvalidOperationException("Manager executable unavailable.")),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Bezoro", "AhkManager"));
     }
+    // Trusted host composition only; no renderer or script input reaches this seam.
+    public static ManagerService CreateForTrustedStartupHost(string dataRoot, string startupHostExecutable, out IEffectOwner effectOwner)
+    {
+        string executable = ScriptPaths.Canonical(startupHostExecutable, false);
+        if (!executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(executable).Equals("AhkManager.Backend.exe", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("A validated manager host executable is required.");
+        var owner = new UserEffectOwner();
+        effectOwner = owner;
+        return new(dataRoot, owner, new ProcessManager(owner, documentedControlsProven: true),
+            new UserStartupService(new RegistryStartupAdapter(), executable),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Bezoro", "AhkManager"));
+    }
     public ManagerService(string dataRoot, IEffectOwner owner, IProcessManager processes, UserStartupService startup, string? legacyAuthorityDirectory = null)
     {
         DataRoot = ScriptPaths.LocalPath(dataRoot); this.owner = owner; this.processes = processes; this.startup = startup;

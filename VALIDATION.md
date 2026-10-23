@@ -1,4 +1,14 @@
-# Validação WinUI
+# Validação
+
+A atualização in-place está desabilitada antes de efeitos. O fluxo previsto é desinstalar preservando dados e instalar a nova versão; sua validação operacional também está pendente.
+
+**Situação atual do Electron:** implementação e verificações de compilação disponíveis; validação operacional corrente pendente. As suítes históricas frontend29/backend37 pertencem a escopos anteriores e não validam as correções posteriores. Novas regressões, cenários DOM, integração real backend/AutoHotkey, preservação dos scripts no encerramento, interface/Mica/acessibilidade, instalação/atualização/desinstalação e execução sem SDK permanecem pendentes. Nenhuma aplicação ou validação ao vivo é afirmada.
+
+O candidato Electron exige validação própria de enquadramento UTF-8/JSON, strings Int64, origem e geração do documento, navegação/CSP, seleção obsoleta, confirmação nativa, limites de fila, resultados desconhecidos sem repetição, saída observada do backend e preservação dos scripts. Typecheck, testes unitários, bundle, pacote NSIS, revisão independente, aplicação e validação ao vivo são estados separados. Os manifests e logs completos do trabalho vinculam cada resultado a suas entradas; nenhum resultado histórico aprova uma alteração posterior relevante.
+
+A prova inicial Electron mostrou apresentação real e interação com a sobreposição NVIDIA mantida, em claro/escuro e tamanhos mínimo/normal, usando GPU e sandbox padrão. Isso autoriza a migração, mas não substitui a aceitação do programa completo. Captura interna do Chromium ou a presença de `backgroundMaterial: mica` não comprova o material visível; a janela final exige captura de desktop do HWND próprio e inspeção. A distribuição final exige execução empacotada sem SDK no PATH e verificações do ciclo instalar/atualizar/remover em alvos isolados.
+
+As evidências WinUI abaixo permanecem históricas, para escopos não alterados e diagnóstico da troca de interface:
 
 As evidências finais vinculam fontes, projetos, locks, dependências, ambiente e binários. Plano aprovado não equivale a implementação revisada; compilação não prova aparência ou efeitos em AutoHotkey.
 

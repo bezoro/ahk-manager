@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier><SelfContained>true</SelfContained><RuntimeFrameworkVersion>10.0.13</RuntimeFrameworkVersion>
+    <AssemblyName>Tests.Backend</AssemblyName><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile><JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="../Backend/AhkManager.Backend.csproj" /></ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Tests.WinUI/Core/ContractChecks.cs" Link="Core/ContractChecks.cs" />
+    <Compile Include="../Tests.WinUI/Core/StorageChecks.cs" Link="Core/StorageChecks.cs" />
+    <Compile Include="../Tests.WinUI/Core/DomainChecks.cs" Link="Core/DomainChecks.cs" />
+    <Compile Include="../Tests.WinUI/Core/ManagerChecks.cs" Link="Core/ManagerChecks.cs" />
+    <Compile Include="../Tests.WinUI/Core/SafetyRegressionChecks.cs" Link="Core/SafetyRegressionChecks.cs" />
+  </ItemGroup>
+</Project>

@@ -1,5 +1,13 @@
 # Testes nativos isolados
 
+O produto ativo é Electron com backend .NET. Os testes de TypeScript usam o runner Node e adaptadores falsos: em `Presentation.Electron`, execute `npm.cmd run test -- --out <pasta-absoluta-nova>`. Não abrem janelas, executam scripts ou escrevem Run/Startup. `npm.cmd run typecheck` verifica a fronteira compartilhada e o renderer. Os testes novos do backend ficam em `Tests.Backend`; seguem os seletores explícitos daquele projeto e usam somente perfis temporários e adaptadores de inicialização falsos.
+
+Não há argumento de produto para trocar perfil, ignorar o proprietário de efeitos, desativar o sandbox ou injetar código de teste. Integração com o executável empacotado exige nome e layout finais, parentela nativa comprovada e o novo perfil normal. A primeira execução normal é uma etapa controlada após revisão; testes isolados anteriores não dependem dela.
+
+O instalador deve ser ensaiado em destino isolado, com o Manager fechado. Inicialização real permanece desautorizada nos testes. Verificar instalação, atualização, desinstalação e preservação dos dados é diferente de apenas compilar o NSIS. Uma confirmação de shutdown só vale junto com a saída observada do backend; prazo excedido é desconhecido e não autoriza matar processos ou repetir efeitos.
+
+Os seletores WinUI abaixo são históricos e não validam a interface Electron:
+
 Feche jogos e Playnite antes dos testes gráficos ou com AutoHotkey. Execute sem elevação. Não use o perfil real nem a pasta publish anterior. O executável Tests.WinUI/bin/x64/Release/net10.0-windows10.0.26100.0/win-x64/Bezoro.AhkManager.WinUI.Tests.exe exige seletor explícito e uma raiz inexistente:
 
 - `--core <pasta-nova>`: persistência, recuperação, análise, projeção e política com adaptadores isolados.

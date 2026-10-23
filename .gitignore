@@ -16,3 +16,4 @@ operations.log*
 *.pfx
 *.p12
 Presentation.Wpf/evidence-path.txt
+Presentation.Electron/node_modules/
