@@ -14,6 +14,9 @@ app.setPath('userData',path.join(output,'Chromium'));app.setPath('sessionData',p
 protocol.registerSchemesAsPrivileged([{scheme:'ahk-manager',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 let window:BrowserWindow;let material:ThemeState['material']='solid';
 let calls:{method:string;args:unknown[]}[]=[];
+type FixtureResponse = { value?: unknown; error?: string; pending?: boolean };
+const responses = new Map<string, FixtureResponse>();
+const waiting = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
 const scripts=snapshot().scripts;
 const example=scripts[0]!;
 const fixtureSnapshot:ManagerSnapshot={...snapshot(),revision:'1',collections:[{id:'33333333-3333-3333-3333-333333333333',name:'Produtividade'},{id:'44444444-4444-4444-4444-444444444444',name:'Sistema'}],scripts:[
@@ -40,9 +43,15 @@ app.whenReady().then(async()=>{
     const {method,args}=envelope;
     if(method==='calls')return calls;
     if(method==='clearCalls'){calls=[];return;}
+    if(method==='setResponse'){responses.set(String(args[0]), args[1] as FixtureResponse);return;}
+    if(method==='resolveResponse'){const pending=waiting.get(String(args[0]));if(!pending)throw new Error('No pending fixture response');waiting.delete(String(args[0]));const response=args[1] as FixtureResponse;response.error?pending.reject(new Error(response.error)):pending.resolve(response.value);return;}
+    if(method==='resetResponses'){if(waiting.size)throw new Error('Unresolved fixture response');responses.clear();return;}
+    if(method==='openPreferences'){window.webContents.send('fixture:preferences');return;}
     if(method==='setState'){requireValid(args[0],shape({snapshot:nullable(validateSnapshot),connection:oneOf('starting','ready','failed','closing'),error:nullable(text()),busy:bool}),'fixture state');state=structuredClone(args[0]) as HostState;emitState();return;}
     if(method==='setTheme'){const value=args[0] as ThemeState;window.webContents.send('fixture:theme',value);return;}
     calls.push({method,args});
+    const response=responses.get(method);
+    if(response){if(response.pending)return new Promise((resolve,reject)=>waiting.set(method,{resolve,reject}));if(response.error)throw new Error(response.error);return response.value;}
     if(method==='getState')return state;if(method==='getTheme')return currentTheme();
     if(method==='refresh'||method==='retryBackend'){emitState();return;}
     if(method==='updateSelection'||method==='copyText')return;
@@ -63,7 +72,7 @@ app.whenReady().then(async()=>{
       fs.writeFileSync(path.join(output,command.name+'.internal.png'),(await window.webContents.capturePage()).toPNG());
       const dom=await window.webContents.executeJavaScript('({width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,active:document.activeElement?.id,fixture:!!document.getElementById("fixture-warning")})');report();write(command.name+'.done.json',{dom,theme:currentTheme(),fixture:true});
     }else if(command.action==='theme'&&['system','light','dark'].includes(command.value)){nativeTheme.themeSource=command.value;emitTheme();}
-    else if(command.action==='resize'&&[760,1000,1240,1440].includes(command.width)&&[600,720,820,900].includes(command.height)){window.setSize(command.width,command.height);report();}
+    else if(command.action==='resize'&&[760,1000,1240,1440].includes(command.width)&&[560,600,720,820,900].includes(command.height)){window.setSize(command.width,command.height);report();}
     else if(command.action==='assertions'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.runScenarios()');write('assertions-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='preferences'){window.webContents.send('fixture:preferences');report();}
     else if(command.action==='close'){nativeTheme.themeSource='system';write('closed.json',{themeRestored:nativeTheme.themeSource,fixture:true});app.quit();}

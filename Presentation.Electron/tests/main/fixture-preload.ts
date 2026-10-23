@@ -17,6 +17,7 @@ const api:AhkManagerApi={
 };
 contextBridge.exposeInMainWorld('ahkManager',api);
 contextBridge.exposeInMainWorld('fixtureHarness',{
+  setResponse:(method:string,response:unknown)=>invoke('setResponse',method,response),resolveResponse:(method:string,response:unknown)=>invoke('resolveResponse',method,response),resetResponses:()=>invoke('resetResponses'),openPreferences:()=>invoke('openPreferences'),
   setState:(state:HostState)=>invoke('setState',state),setTheme:(state:ThemeState)=>invoke('setTheme',state),calls:()=>invoke('calls'),clearCalls:()=>invoke('clearCalls'),
 });
 window.addEventListener('DOMContentLoaded',()=>{
