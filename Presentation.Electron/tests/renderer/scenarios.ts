@@ -130,5 +130,16 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       assert(activeDialog() === preferences && !preferences.querySelector('.notice'), 'Unrelated completion changed preferences'); button(text.cancel, preferences).click(); await tick();
     }
   });
+  await check('list retains usable rows, scrolling, keyboard selection and separate inspector', async () => {
+    await window.fixtureHarness.setState(host); await tick(); selectScript(host.snapshot!.scripts[0]!.id); await tick();
+    const metadata = document.querySelector<HTMLDetailsElement>('.metadata-expander')!; metadata.open = true; edit(document.getElementById('draft-name') as HTMLInputElement, 'FIXTURE layout draft'); await tick();
+    await window.fixtureHarness.setResponse('saveMetadata', { value: { ...failure, detail: 'FIXTURE expanded diagnostic\n'.repeat(35) } }); button(text.save, document.querySelector('.inspector')!).click(); await until(() => !!document.querySelector('.main-column>.notice'), 'Layout notice missing');
+    const workspace = document.querySelector<HTMLElement>('.workspace')!, viewport = document.querySelector<HTMLElement>('.script-viewport')!, inspector = document.querySelector<HTMLElement>('.inspector')!;
+    const verify = (): void => { const list = viewport.getBoundingClientRect(), filters = document.querySelector('.script-filters')!.getBoundingClientRect(), details = inspector.getBoundingClientRect(); assert(viewport.clientHeight >= 106, 'No usable row area'); assert(list.top >= filters.bottom - 1, 'Filters overlap rows'); if (innerWidth <= 900 && !inspector.hidden) { assert(details.top >= list.bottom - 1, 'Inspector overlaps list'); assert(workspace.scrollHeight > workspace.clientHeight || details.bottom <= workspace.getBoundingClientRect().bottom + 1, 'Inspector unreachable'); } assert(document.querySelector('.script-row')!.getBoundingClientRect().height >= 60, 'Row collapsed'); };
+    verify(); const noticeDetails = document.querySelector<HTMLDetailsElement>('.main-column>.notice details')!; noticeDetails.open = true; const analysis = document.querySelector<HTMLDetailsElement>('.library-notice details')!; analysis.open = true; await tick(); verify();
+    viewport.scrollIntoView({ block: 'center' }); viewport.focus(); viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })); await tick(); assert(viewport.getAttribute('aria-activedescendant') === 'script-' + host.snapshot!.scripts[1]!.id, 'Keyboard selection lost'); assert(viewport.getBoundingClientRect().top < workspace.getBoundingClientRect().bottom, 'List cannot scroll into reach');
+    if (innerWidth <= 900) { button(text.hideDetails, inspector).click(); await tick(); assert(inspector.hidden, 'Details did not close'); verify(); button(text.details).click(); await tick(); assert(!inspector.hidden, 'Details did not reopen'); }
+    noticeDetails.open = false; analysis.open = false; metadata.open = false; workspace.scrollTop = 0; await tick(); verify(); await window.fixtureHarness.resetResponses();
+  });
   return results;
 }
