@@ -17,7 +17,7 @@ module.exports={
   extraMetadata:{dependencies:{},devDependencies:{}},
   electronFuses:{runAsNode:false,enableNodeOptionsEnvironmentVariable:false,enableNodeCliInspectArguments:false,enableEmbeddedAsarIntegrityValidation:true,onlyLoadAppFromAsar:true},
   win:{target:[{target:'nsis',arch:['x64']}],icon:path.join(frontend,'app.ico'),requestedExecutionLevel:'asInvoker',signAndEditExecutable:true,verifyUpdateCodeSignature:false},
-  nsis:{oneClick:false,perMachine:false,allowElevation:false,allowToChangeInstallationDirectory:true,deleteAppDataOnUninstall:false,createDesktopShortcut:false,createStartMenuShortcut:true,runAfterFinish:false,uninstallerIcon:path.join(frontend,'app.ico'),include:path.join(__dirname,'scripts/installer.nsh'),artifactName:'AHK-Manager-${version}-Setup-x64.${ext}',installerLanguages:['pt_BR'],language:'1046'},
+  nsis:{oneClick:false,perMachine:false,packElevateHelper:false,allowElevation:false,allowToChangeInstallationDirectory:true,deleteAppDataOnUninstall:false,createDesktopShortcut:false,createStartMenuShortcut:true,runAfterFinish:false,uninstallerIcon:path.join(frontend,'app.ico'),include:path.join(__dirname,'scripts/installer.nsh'),artifactName:'AHK-Manager-${version}-Setup-x64.${ext}',installerLanguages:['pt_BR'],language:'1046'},
   publish:null,
   afterSign:context=>writeOwnedFiles(context,output,path.join(frontend,'app.ico')),
 };
