@@ -4,8 +4,8 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import {hostText as t} from '../shared/host-pt-BR.js';
 import { TextDecoder } from 'node:util';
-import type { ManagerSnapshot, OperationPlan, OperationResult } from '../shared/contracts.js';
-import { array, activity, bool, catalogResult, guid, importPreview, integer, issue, nullable, object, oneOf, operationPlan, operationResult, parseStrictJson, reason, requireValid, shape, snapshot, text, type Validator } from '../shared/validation.js';
+import type { AuthorityMode, ManagerSnapshot, OperationPlan, OperationResult } from '../shared/contracts.js';
+import { array, activity, authorityMode, elevationStatus, bool, catalogResult, guid, importPreview, integer, issue, nullable, object, oneOf, operationPlan, operationResult, parseStrictJson, reason, requireValid, shape, snapshot, text, type Validator } from '../shared/validation.js';
 
 export const MAX_FRAME = 8 * 1024 * 1024;
 export const MAX_PENDING = 32;
@@ -13,6 +13,7 @@ const protocolCode = oneOf('Ok','InvalidFrame','InvalidRequest','NotAuthenticate
 const envelope = shape({version:v=>v===1,kind:oneOf('response','snapshot','parentProof'),id:nullable(text(20)),session:text(64),action:text(64),code:protocolCode,payload:()=>true,error:nullable(text(4096))});
 const migration = shape({previewId:guid,sourceRoot:text(),sourceFingerprint:text(128),fileCount:integer,pendingOperations:integer,canMigrate:bool,issues:array(issue)});
 const results: Record<string, Validator> = {
+  beginAdministration:elevationStatus,administrationStatus:elevationStatus,commitAdministration:elevationStatus,cancelAdministration:elevationStatus,
   hello:shape({protocolVersion:v=>v===1,profileRoot:text(),hostExecutable:text()}),
   load:snapshot,snapshot,refresh:snapshot,addFiles:catalogResult,addFolder:catalogResult,
   remove:operationResult,saveMetadata:operationResult,saveCollection:operationResult,removeCollection:operationResult,
@@ -31,7 +32,7 @@ export interface BackendOptions { executable:string; hostExecutable:string; crea
 export class BackendClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private pending = new Map<string,Pending>();
-  private expired = new Set<string>();
+  private expired = new Map<string,string>();
   private buffer = Buffer.alloc(0);
   private sequence = 0n;
   private failure: Error | null = null;
@@ -43,6 +44,7 @@ export class BackendClient extends EventEmitter {
   exited = false;
   ready = false;
   profileRoot:string|null = null;
+  authorityMode:AuthorityMode|null=null;
   get pid():number|null { return this.child?.pid ?? null; }
   constructor(private readonly options:BackendOptions) { super();this.session=options.session??randomBytes(32).toString('hex'); }
   async start():Promise<void> {
@@ -74,6 +76,7 @@ export class BackendClient extends EventEmitter {
     if(proof.parentPid!==process.pid||proof.childPid!==this.child.pid||typeof proof.parentCreated!=='string'||!/^\d{1,19}$/.test(proof.parentCreated)||typeof proof.parentExecutable!=='string'||path.resolve(proof.parentExecutable).toLowerCase()!==path.resolve(this.options.hostExecutable).toLowerCase()){const error=new Error('Backend parent proof mismatch');this.fail(error);throw error;}
     const hello = await this.request<{protocolVersion:number;profileRoot:string;hostExecutable:string}>('hello',{parentPid:process.pid,parentCreated:proof.parentCreated});
     if(path.resolve(hello.hostExecutable).toLowerCase()!==path.resolve(this.options.hostExecutable).toLowerCase()){const error=new Error('Authenticated host mismatch');this.fail(error);throw error;}
+    this.authorityMode=proof.authorityMode as AuthorityMode;
     this.profileRoot=hello.profileRoot;
     this.ready=true;
   }
@@ -87,8 +90,10 @@ export class BackendClient extends EventEmitter {
     if(frame.length-1>MAX_FRAME)return Promise.reject(new Error('Backend request frame too large'));
     return new Promise<T>((resolve,reject)=>{
       const timer=setTimeout(()=>{
-        this.pending.delete(id);this.expired.add(id);
-        const error=new UnknownAfterDispatchError(action,id);reject(error);this.fail(error);
+        this.pending.delete(id);this.expired.set(id,action);
+        const error=new UnknownAfterDispatchError(action,id);reject(error);
+        if(!['beginAdministration','administrationStatus','commitAdministration','cancelAdministration'].includes(action))this.fail(error);
+        else if(this.expired.size>256)this.fail(new Error('Expired response limit exceeded'));
       },timeoutMs);
       this.pending.set(id,{action,resolve:resolve as (v:unknown)=>void,reject,timer});
       // Node streams retain ordering and honor bounded pending intake; effects are never retried.
@@ -115,7 +120,7 @@ export class BackendClient extends EventEmitter {
     if(frame.code==='Ok'?frame.error!==null:frame.payload!==null)throw new Error('Inconsistent backend result envelope');
     if(frame.kind==='parentProof'){
       if(frame.id!==null||frame.action!=='hello'||frame.code!=='Ok'||!this.proofResolve||!object(frame.payload))throw new Error('Unexpected parent proof');
-      requireValid(frame.payload,shape({parentPid:integer,parentCreated:text(20),parentExecutable:text(),childPid:integer,childCreated:text(20),userSid:text(256),sessionId:integer}),'parent proof');
+      requireValid(frame.payload,shape({parentPid:integer,parentCreated:text(20),parentExecutable:text(),childPid:integer,childCreated:text(20),userSid:text(256),sessionId:integer,authorityMode}),'parent proof');
       const resolve=this.proofResolve;this.proofResolve=null;resolve(frame.payload);return;
     }
     if(frame.kind==='snapshot'){
@@ -124,7 +129,11 @@ export class BackendClient extends EventEmitter {
     }
     if(typeof frame.id!=='string')throw new Error('Invalid backend response ID');
     const pending=this.pending.get(frame.id);
-    if(!pending){if(this.expired.delete(frame.id))return;throw new Error('Unsolicited backend response');}
+    if(!pending){
+      const action=this.expired.get(frame.id);
+      if(action){if(frame.action!==action)throw new Error('Expired backend response action mismatch');if(frame.code==='Ok')requireValid(frame.payload,results[action]!,'expired backend response');this.expired.delete(frame.id);return;}
+      throw new Error('Unsolicited backend response');
+    }
     if(pending.action!==frame.action)throw new Error('Backend response action mismatch');
     if(frame.code!=='Ok'){this.pending.delete(frame.id);clearTimeout(pending.timer);pending.reject(new Error(`Backend: ${String(frame.code)}${frame.error?` (${String(frame.error)})`:''}`));return;}
     const value=requireValid(frame.payload,results[pending.action]!,'backend response');

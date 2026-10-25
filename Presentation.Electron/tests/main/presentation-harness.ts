@@ -5,7 +5,7 @@ import path from 'node:path';
 import { APP_URL,assetFromUrl,CSP } from '../../src/main/security.js';
 import type { HostState,ManagerSnapshot,ThemeState,OperationResult } from '../../src/shared/contracts.js';
 import { snapshot,scriptId } from './fixtures.js';
-import { requireValid,shape,snapshot as validateSnapshot,nullable,text,bool,oneOf } from '../../src/shared/validation.js';
+import { requireValid,shape,snapshot as validateSnapshot,nullable,text,bool,oneOf,authorityMode } from '../../src/shared/validation.js';
 const arg=(name:string)=>{const index=process.argv.indexOf(name);if(index<0)throw new Error(`Missing ${name}`);return process.argv[index+1]!;};
 const output=path.resolve(arg('--output')),frontend=path.resolve(arg('--frontend'));
 const scenariosIndex=process.argv.indexOf('--scenarios');const scenarios=scenariosIndex>=0?fs.readFileSync(path.resolve(process.argv[scenariosIndex+1]!),'utf8'):null;
@@ -25,7 +25,7 @@ const fixtureSnapshot:ManagerSnapshot={...snapshot(),revision:'1',collections:[{
   {...example,id:'66666666-6666-6666-6666-666666666666',friendlyName:'Organizar janelas',path:'C:\\FixtureIsolada\\Janelas.ahk',collectionId:'44444444-4444-4444-4444-444444444444',status:'Unknown',issues:[{code:'ObservationIncomplete',detail:'A identidade não foi confirmada nesta fixture.',scriptId:null}]},
   {...example,id:'77777777-7777-7777-7777-777777777777',friendlyName:'Modo de concentração',path:'C:\\FixtureIsolada\\Foco.ahk',hotkeys:[{chord:'Ctrl + Alt + F',normalizedChord:'^!F',origin:'Manual',context:null,sourcePath:null,line:null,isRemap:false,possibleConflict:true}]},
 ],issues:[{code:'PartialAnalysis',detail:'FIXTURE ISOLADA — dados de teste; nenhum script real.',scriptId:null}],activity:[{id:'88888888-8888-8888-8888-888888888888',timestamp:new Date().toISOString(),scriptId,operation:'Start',outcome:'Confirmed',code:'None',detail:'Fixture de apresentação; nenhum processo foi iniciado.'}],runningCount:1,problemCount:2};
-let state:HostState={snapshot:fixtureSnapshot,connection:'ready',error:null,busy:false};
+let state:HostState={snapshot:fixtureSnapshot,connection:'ready',error:null,busy:false,authorityMode:'Normal',administrationPending:false};
 const currentTheme=():ThemeState=>({dark:nativeTheme.shouldUseDarkColors,accent:`#${systemPreferences.getAccentColor().slice(0,6)}`,highContrast:nativeTheme.shouldUseHighContrastColors,reducedMotion:!systemPreferences.getAnimationSettings().shouldRenderRichAnimation,material});
 const write=(name:string,value:unknown)=>{const file=path.join(output,name);fs.writeFileSync(file+'.tmp',JSON.stringify(value,null,2));fs.renameSync(file+'.tmp',file);};
 function report(){write('state.json',{pid:process.pid,hwnd:window.getNativeWindowHandle().readBigUInt64LE().toString(),bounds:window.getBounds(),contentBounds:window.getContentBounds(),visible:window.isVisible(),focused:window.isFocused(),fixture:true,theme:currentTheme(),versions:process.versions,backend:null});}
@@ -47,7 +47,7 @@ app.whenReady().then(async()=>{
     if(method==='resolveResponse'){const pending=waiting.get(String(args[0]));if(!pending)throw new Error('No pending fixture response');waiting.delete(String(args[0]));const response=args[1] as FixtureResponse;response.error?pending.reject(new Error(response.error)):pending.resolve(response.value);return;}
     if(method==='resetResponses'){if(waiting.size)throw new Error('Unresolved fixture response');responses.clear();return;}
     if(method==='openPreferences'){window.webContents.send('fixture:preferences');return;}
-    if(method==='setState'){requireValid(args[0],shape({snapshot:nullable(validateSnapshot),connection:oneOf('starting','ready','failed','closing'),error:nullable(text()),busy:bool}),'fixture state');state=structuredClone(args[0]) as HostState;emitState();return;}
+    if(method==='setState'){requireValid(args[0],shape({snapshot:nullable(validateSnapshot),connection:oneOf('starting','ready','failed','closing'),error:nullable(text()),busy:bool,authorityMode:nullable(authorityMode),administrationPending:bool}),'fixture state');state=structuredClone(args[0]) as HostState;emitState();return;}
     if(method==='setTheme'){const value=args[0] as ThemeState;window.webContents.send('fixture:theme',value);return;}
     calls.push({method,args});
     const response=responses.get(method);
@@ -59,7 +59,7 @@ app.whenReady().then(async()=>{
     if(method==='pickInterpreter')return 'C:\\FixtureIsolada\\AutoHotkey64.exe';if(method==='pickEditor')return 'C:\\FixtureIsolada\\Editor.exe';
     if(method==='addFiles'||method==='addFolder')return {result,added:[],duplicateCount:0,issues:[]};
     if(method==='previewImport')return null;
-    if(['removeScript','saveMetadata','saveCollection','removeCollection','operate','saveSettings','commitImport','migrateProfile','transferStartup','restoreBackup','recoverPending'].includes(method))return result;
+    if(['requestAdministration','removeScript','saveMetadata','saveCollection','removeCollection','operate','saveSettings','commitImport','migrateProfile','transferStartup','restoreBackup','recoverPending'].includes(method))return result;
     throw new Error('Unknown fixture method');
   });
   nativeTheme.on('updated',emitTheme);

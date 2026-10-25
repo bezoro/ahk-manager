@@ -49,15 +49,44 @@ public sealed class WmiProcessObservationSource : IProcessObservationSource
 
 internal sealed record HeldProcess(NativeProcessIdentity Handle, ProcessSnapshot Snapshot);
 
+// Relevance bounds discovery of catalog .ahk scripts. These hints never establish
+// script identity, absence of a recognized opaque candidate, or control authority.
+internal static class ProcessRelevance
+{
+    static bool Recognized(string? executable, IReadOnlyCollection<string> configured)
+    {
+        if (string.IsNullOrWhiteSpace(executable)) return false;
+        string name = Path.GetFileName(executable);
+        return name.Equals("AutoHotkey.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("AutoHotkey64.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("AutoHotkey32.exe", StringComparison.OrdinalIgnoreCase) || configured.Any(path => ScriptPaths.Equal(path, executable) || Path.GetFileName(path).Equals(name, StringComparison.OrdinalIgnoreCase));
+    }
+    internal static bool IsCandidate(ProcessCommandRow row, IReadOnlyCollection<string> configured, string? nativeImage, string? nativeProduct)
+    {
+        if (Recognized(nativeImage, configured) || Recognized(row.Name, configured) || Recognized(row.ExecutablePath, configured) || nativeProduct?.Contains("AutoHotkey", StringComparison.OrdinalIgnoreCase) == true) return true;
+        string[] argv = row.CommandLine is string command ? ScriptPaths.SplitCommand(command) : [];
+        return argv.Length > 0 && Recognized(argv[0], configured);
+    }
+    internal static bool ReadCandidate(ProcessCommandRow row, IReadOnlyCollection<string> configured, NativeProcessIdentity native, out string? nativeImage, Func<NativeProcessIdentity, string?>? readImage = null)
+    {
+        nativeImage = readImage is null ? native.TryReadImage(out var image) ? image : null : readImage(native);
+        string? product = null;
+        if (nativeImage is not null)
+        {
+            try { product = FileVersionInfo.GetVersionInfo(nativeImage).ProductName; }
+            catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+        }
+        return IsCandidate(row, configured, nativeImage, product);
+    }
+}
+
 public sealed class ProcessObservation
 {
-    internal static List<HeldProcess> Read(IReadOnlyCollection<string> knownInterpreters, out bool complete, out ImmutableArray<Issue> issues, CancellationToken ct, IProcessObservationSource? source = null)
+    internal static List<HeldProcess> Read(IReadOnlyCollection<string> knownInterpreters, out bool complete, out ImmutableArray<Issue> issues, CancellationToken ct, IProcessObservationSource? source = null, IReadOnlyCollection<HeldProcess>? launchProofs = null, Func<NativeProcessIdentity, string?>? readImage = null)
     {
         complete = true; var found = new List<HeldProcess>(); var problems = ImmutableArray.CreateBuilder<Issue>();
         using var self = Process.GetCurrentProcess();
         using var current = WindowsIdentity.GetCurrent();
         string sid = current.User?.Value ?? "";
-        Dictionary<string, InterpreterInfo?> versions = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, InterpreterInfo> versions = new(StringComparer.OrdinalIgnoreCase);
         try
         {
             var input = (source ?? new WmiProcessObservationSource()).Read(ct);
@@ -65,41 +94,38 @@ public sealed class ProcessObservation
             foreach (var row in input.Rows)
             {
                 ct.ThrowIfCancellationRequested();
-                string name = row.Name;
-                string? executable = row.ExecutablePath;
-                bool candidate = name.StartsWith("AutoHotkey", StringComparison.OrdinalIgnoreCase) || knownInterpreters.Any(p => ScriptPaths.Equal(p, executable));
-                InterpreterInfo? interpreter = null;
-                if (executable is not null)
-                {
-                    if (!versions.TryGetValue(executable, out interpreter))
-                    {
-                        try
-                        {
-                            // Product metadata also identifies renamed interpreters; basename alone is not proof.
-                            var version = FileVersionInfo.GetVersionInfo(executable);
-                            if (version.ProductName?.Contains("AutoHotkey", StringComparison.OrdinalIgnoreCase) == true) { candidate = true; interpreter = AutoHotkeyDiscovery.Validate(executable); }
-                        }
-                        catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is System.ComponentModel.Win32Exception) { }
-                        versions[executable] = interpreter;
-                    }
-                    if (interpreter is not null) candidate = true;
-                }
-                if (!candidate) continue;
+                // Session data is independent of the mutable AHK caption. Native identity is
+                // acquired before image classification, including renamed/opaque interpreters.
                 if (row.SessionId is int session && session != self.SessionId) continue;
-                if (interpreter is null || row.CommandLine is not string command || row.CreationFileTime is not long cimCreated) { complete = false; continue; }
-                int pid = row.Pid;
-                var held = new NativeProcessIdentity(pid); bool adopted = false;
+                var held = new NativeProcessIdentity(row.Pid); bool adopted = false;
                 try
                 {
-                    if (!held.TryRead(out var before) || before.Sid != sid || before.Session != self.SessionId || !ScriptPaths.Equal(before.Executable, interpreter.Path)) { complete = false; continue; }
-                    if (before.Created - before.Created % 10 != cimCreated) { complete = false; continue; }
-                    string? script = ScriptPaths.ScriptFromCommand(command, before.Executable);
+                    if (!ProcessRelevance.ReadCandidate(row, knownInterpreters, held, out string? nativeImage, readImage)) continue;
+                    if (!held.TryRead(out var before)) { complete = false; continue; }
+                    if (before.Sid != sid || before.Session != self.SessionId) continue;
+                    string executable = before.Executable;
+                    if (nativeImage is not null && !ScriptPaths.Equal(nativeImage, executable)) { complete = false; continue; }
+                    if (row.ExecutablePath is not null && !ScriptPaths.Equal(row.ExecutablePath, executable)) { complete = false; continue; }
+                    if (!versions.TryGetValue(executable, out var interpreter))
+                    {
+                        interpreter = AutoHotkeyDiscovery.Validate(executable); versions[executable] = interpreter;
+                    }
+                    string? script = null;
+                    if (row.CommandLine is string command && row.CreationFileTime is long cimCreated)
+                    {
+                        if (before.Created - before.Created % 10 != cimCreated) { complete = false; continue; }
+                        script = ScriptPaths.ScriptFromCommand(command, executable);
+                    }
+                    var launch = launchProofs?.SingleOrDefault(p => p.Snapshot.Identity.Pid == before.Pid && p.Snapshot.Identity.CreationFileTime == before.Created);
+                    if (script is null && launch is not null && launch.Handle.Matches(launch.Snapshot.Identity) && launch.Snapshot.Identity.InterpreterHash == interpreter.Hash && ScriptPaths.Fingerprint(launch.Snapshot.Identity.ScriptPath) == launch.Snapshot.Identity.ScriptHash)
+                        script = launch.Snapshot.Identity.ScriptPath;
                     if (script is null || !held.TryRead(out var after) || before != after || !held.Live) { complete = false; continue; }
                     string scriptHash = ScriptPaths.Fingerprint(script);
-                    var identity = new ProcessIdentity(pid, before.Created, before.Executable, script, sid, self.SessionId, scriptHash, interpreter.Hash);
+                    var identity = new ProcessIdentity(row.Pid, before.Created, executable, script, sid, self.SessionId, scriptHash, interpreter.Hash);
+                    if (launch is not null && !NativeProcessIdentity.Same(identity, launch.Snapshot.Identity)) { complete = false; continue; }
                     nint window = AhkWindowControl.FindWindow(identity);
                     if (window == 0 || !held.Matches(identity)) { complete = false; continue; }
-                    found.Add(new(held, new(identity, ExecutionOrigin.External, interpreter.Version, DateTimeOffset.FromFileTime(before.Created), WindowVerified: true)));
+                    found.Add(new(held, new(identity, launch is null ? ExecutionOrigin.External : ExecutionOrigin.Manager, interpreter.Version, DateTimeOffset.FromFileTime(before.Created), WindowVerified: true, ControlUnavailableReason: held.ControlUnavailableReason())));
                     adopted = true;
                 }
                 catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is System.ComponentModel.Win32Exception or ManagementException or InvalidOperationException) { complete = false; }

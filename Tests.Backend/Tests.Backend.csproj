@@ -5,6 +5,7 @@
     <AssemblyName>Tests.Backend</AssemblyName><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile><JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
+  <ItemGroup Condition="'$(BaselineCaptionProofSource)' != ''"><Compile Include="$(BaselineCaptionProofSource)" Link="BaselineCaptionProof.cs" /></ItemGroup>
   <ItemGroup><ProjectReference Include="../Backend/AhkManager.Backend.csproj" /></ItemGroup>
   <ItemGroup>
     <Compile Include="../Tests.WinUI/Integration/FixtureProcessObservation.cs" Link="Integration/FixtureProcessObservation.cs" />

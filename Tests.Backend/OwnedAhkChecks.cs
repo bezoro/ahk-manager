@@ -89,7 +89,7 @@ internal static class OwnedAhkChecks
         readonly NoElevation elevation = new(); readonly NoStartup startup = new();
         readonly Stopwatch sequence = Stopwatch.StartNew();
         readonly CancellationTokenSource budget = new(TimeSpan.FromSeconds(180));
-        FixtureProcessObservation? observation;
+        ScopedObservation? observation;
         bool uncertainLaunch;
         public bool CleanupPending { get; private set; }
         string ReceiptPath => Path.Combine(root, "onexit-receipt.txt");
@@ -193,7 +193,7 @@ internal static class OwnedAhkChecks
         public async Task RunAsync()
         {
             Record("fixture", "nonce="+nonce+";pid="+Environment.ProcessId+";argv="+string.Join(" ", Environment.GetCommandLineArgs())+";sequenceBudget=180s;cleanupBudget=30s");
-            ScriptFile(script, "#Requires AutoHotkey v2.0\n#SingleInstance Off\n#NoTrayIcon\nPersistent\nSetTimer(() => 0, 1000)\n");
+            ScriptFile(script, "#Requires AutoHotkey v2.0\n#SingleInstance Off\n#NoTrayIcon\nPersistent\nWinSetTitle(A_ScriptDir \"\\veto harmless.ahk - AutoHotkey v2\", A_ScriptHwnd)\nSetTimer(() => 0, 1000)\n");
             ScriptFile(veto, $$"""
                 #Requires AutoHotkey v2.0
                 #SingleInstance Off
@@ -210,10 +210,26 @@ internal static class OwnedAhkChecks
                 OnExit(OwnedExit)
                 SetTimer(() => 0, 1000)
                 """);
-            ReceiptRegressions(); observation = new FixtureProcessObservation(root, [script, veto]);
+            ReceiptRegressions(); observation = new ScopedObservation(new FixtureProcessObservation(root, [script, veto]), [script, veto], count => Record("scope-approved", "rows=" + count));
             using var owner = new FixtureOwner(root, expectedFiles);
             await using var manager = new ProcessManager(owner, true, elevation, observation);
             var active = await StartAsync(manager, script);
+            Check(ScriptPaths.Equal(active.ScriptPath, script) && !ScriptPaths.Equal(active.ScriptPath, veto), "argv-B-remains-B-when-caption-imitates-A");
+#if BASELINE_CAPTION_PROOF
+            nint captionWindow = AhkWindowControl.FindWindow(active);
+            Check(captionWindow != 0 && !BaselineAhkWindowControl.VerifyWindow(captionWindow, active), "baseline-caption-gate-rejects-independent-B-while-current-gate-accepts-B-readonly-characterization");
+#endif
+            observation.Opaque = active;
+            try
+            {
+                var proved = await manager.ObserveAsync([Interpreter], budget.Token);
+                Check(proved.Complete && proved.Processes.Any(p => NativeProcessIdentity.Same(p.Identity, active)), "complete-launch-receipt-retains-own-opaque-row");
+                await using var independent = new ProcessManager(owner, true, elevation, observation);
+                var ambiguous = await independent.ObserveAsync([Interpreter], budget.Token);
+                Check(!ambiguous.Complete && ambiguous.Processes.All(p => p.Identity.Pid != active.Pid), "opaque-row-without-argv-or-receipt-remains-ambiguous-caption-never-adopts");
+            }
+            finally { observation.Opaque = null; }
+
             Room(); var duplicate = await manager.StartAsync(Interpreter, script, false, budget.Token); Result("duplicate", duplicate.Result);
             Check(duplicate.Result.Outcome == Outcome.Failed && duplicate.Result.Code == ReasonCode.AlreadyRunning && duplicate.Process is null, "duplicate-refused-without-new-instance");
             foreach (var operation in new[] { "suspend", "resume" })
@@ -313,6 +329,74 @@ internal static class OwnedAhkChecks
             finally { budget.Dispose(); }
         }
         void Pending(ProcessIdentity id, string why) { CleanupPending = true; Identity("cleanup-pending-identity", id); Record("cleanup-pending", why); }
+    }
+    // Scope classification deliberately parses argv lexically; it never opens or hashes an
+    // unapproved script. File identity/hash checks remain the separate owned-fixture guards.
+    internal static string RequireScopedScript(string command, string executable, IReadOnlyCollection<string> approved)
+    {
+        string[] argv = ScriptPaths.SplitCommand(command);
+        int index = argv.Length > 1 && argv[1].Equals("/script", StringComparison.OrdinalIgnoreCase) ? 2 : 1;
+        if (argv.Length <= index || !ScriptPaths.Equal(argv[0], executable)) throw new InvalidOperationException("Fixture AHK argv is not independently proved.");
+        string path;
+        try { path = ScriptPaths.Lexical(argv[index]); }
+        catch (ArgumentException) { throw new InvalidOperationException("Fixture AHK script path is not absolute."); }
+        if (!approved.Any(candidate => ScriptPaths.Equal(candidate, path))) throw new InvalidOperationException("Unrelated AHK script encountered; abort before script body access or control.");
+        return path;
+    }
+    internal static void ScopeChecks(string root, Action<bool, string> check)
+    {
+        string first = Path.Combine(root, "first-inert.ahk"), second = Path.Combine(root, "second-inert.ahk"), outside = Path.Combine(root, "never-created-private.ahk");
+        string Command(string path) => ScriptPaths.QuoteArgument(Interpreter) + " " + ScriptPaths.QuoteArgument(path);
+        check(RequireScopedScript(Command(first), Interpreter, [first, second]) == first, "fixture scope accepts exact approved argv without opening script bodies");
+        bool refused = false;
+        try { RequireScopedScript(Command(outside), Interpreter, [first, second]); } catch (InvalidOperationException) { refused = true; }
+        check(refused && !File.Exists(outside), "outside fixture argv aborts even when private script body is absent and cannot be read");
+        using var self = Process.GetCurrentProcess();
+        var ordinary = new ProcessCommandRow(int.MaxValue, "ordinary-host.exe", null, null, null, self.SessionId);
+        int approved = 0;
+        var scope = new ScopedObservation(new ScopeRows(ordinary), [first, second], _ => approved++);
+        check(scope.Read(CancellationToken.None).Rows.Length == 1 && approved == 1, "fixture records approval after ignoring only out-of-domain inaccessible rows");
+        foreach (var row in new[] { ordinary with { Name = "AutoHotkey64.exe" }, ordinary with { Name = "AutoHotkey64.exe", Pid = self.Id } })
+        {
+            refused = false;
+            try { _ = new ScopedObservation(new ScopeRows(row), [first, second], _ => approved++).Read(CancellationToken.None); } catch (InvalidOperationException) { refused = true; }
+            check(refused && approved == 1, "fixture rejects recognized inaccessible or new opaque candidate before approval and script body access");
+        }
+        var outsideArgv = ordinary with { Name = "AutoHotkey64.exe", Pid = self.Id, CommandLine = ScriptPaths.QuoteArgument(Environment.ProcessPath!) + " " + ScriptPaths.QuoteArgument(outside) };
+        refused = false; try { _ = new ScopedObservation(new ScopeRows(outsideArgv), [first, second]).Read(CancellationToken.None); } catch (InvalidOperationException) { refused = true; }
+        check(refused && !File.Exists(outside), "shared relevance guard rejects outside argv without opening unapproved script");
+    }
+    sealed class ScopeRows(ProcessCommandRow row) : IProcessObservationSource
+    {
+        public ObservedProcessCommands Read(CancellationToken ct) => new([row], true, []);
+    }
+    sealed class ScopedObservation(IProcessObservationSource source, IReadOnlyCollection<string> approved, Action<int>? validated = null) : IProcessObservationSource
+    {
+        public ProcessIdentity? Opaque { get; set; }
+        public ObservedProcessCommands Read(CancellationToken ct)
+        {
+            var rows = source.Read(ct);
+            if (!rows.Complete) throw new InvalidOperationException("Fixture inventory enumeration is incomplete; no scope approval is available.");
+            using var self = Process.GetCurrentProcess(); using var user = WindowsIdentity.GetCurrent();
+            foreach (var row in rows.Rows)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (row.SessionId is int session && session != self.SessionId) continue;
+                using var native = new NativeProcessIdentity(row.Pid);
+                if (!ProcessRelevance.ReadCandidate(row, [Interpreter], native, out string? image)) continue;
+                if (!native.TryRead(out var stamp)) throw new InvalidOperationException("Fixture inventory has an unclassified new or inaccessible process; abort before script body access.");
+                if (stamp.Sid != user.User!.Value || stamp.Session != self.SessionId) continue;
+                if (image is not null && !ScriptPaths.Equal(image, stamp.Executable) || row.ExecutablePath is not null && !ScriptPaths.Equal(row.ExecutablePath, stamp.Executable)) throw new InvalidOperationException("Fixture candidate image changed before scope proof.");
+                if (row.CommandLine is string command) _ = RequireScopedScript(command, stamp.Executable, approved);
+                else if (Opaque is not { } receipt || receipt.Pid != stamp.Pid || receipt.CreationFileTime != stamp.Created || !native.Matches(receipt) || !approved.Any(path => ScriptPaths.Equal(path, receipt.ScriptPath)))
+                    throw new InvalidOperationException("New opaque AHK lacks the exact owned launch receipt; abort before body access or control.");
+            }
+            // Mask only after the unmodified independent source has passed the exact scope gate.
+            // The deliberately opaque owned row remains present for the actual production assertion.
+            validated?.Invoke(rows.Rows.Length);
+            return rows with { Rows = rows.Rows.Select(row => Opaque is { } expected && row.Pid == expected.Pid && row.CreationFileTime == expected.CreationFileTime - expected.CreationFileTime % 10
+                ? row with { ExecutablePath = null, CommandLine = null } : row).ToImmutableArray() };
+        }
     }
     sealed class FixtureOwner : IEffectOwner
     {

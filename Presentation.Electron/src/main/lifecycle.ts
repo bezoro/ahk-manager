@@ -25,6 +25,12 @@ export class StopExitIntent {
 }
 
 export const SHUTDOWN_DEADLINE_MS=15000;
+/** The administrative route is a foreground intent and can never become a login request. */
+export function administrationCli(argv:readonly string[]):'none'|'request'|'invalid' {
+  const count=argv.filter(value=>value==='--request-administrator').length;
+  if(!count)return 'none';
+  return count===1&&!argv.some(value=>value==='--login'||value==='--background')?'request':'invalid';
+}
 export async function withinDeadline<T>(request:()=>Promise<T>,milliseconds:number,schedule:(fn:()=>void,ms:number)=>()=>void=(fn,ms)=>{const timer=setTimeout(fn,ms);return ()=>clearTimeout(timer);}):Promise<T> {
   let cancel=()=>{};
   try{return await Promise.race([request(),new Promise<never>((_resolve,reject)=>{cancel=schedule(()=>reject(new Error('DeadlineExceeded')),milliseconds);})]);}

@@ -26,9 +26,9 @@ internal sealed class ParentGuard : IParentGuard
         parent = new(actual); self = new(Environment.ProcessId);
         try
         {
-            if (!parent.TryRead(out parentStamp) || !self.TryRead(out childStamp) || parentStamp.Created > childStamp.Created || !ScriptPaths.Equal(parentStamp.Executable, expected) || parentStamp.Sid != childStamp.Sid || parentStamp.Session != childStamp.Session || !NormalToken(actual) || !NormalToken(Environment.ProcessId)) throw new ProtocolException("ParentMismatch");
+            if (!parent.TryRead(out parentStamp) || !self.TryRead(out childStamp) || !Compatible(parentStamp, childStamp, Mode(parent), Mode(self), expected, out var mode)) throw new ProtocolException("ParentMismatch");
             executableLease = new(expected, FileMode.Open, FileAccess.Read, FileShare.Read);
-            Proof = new(actual, parentStamp.Created, expected, Environment.ProcessId, childStamp.Created, parentStamp.Sid, parentStamp.Session);
+            Proof = new(actual, parentStamp.Created, expected, Environment.ProcessId, childStamp.Created, parentStamp.Sid, parentStamp.Session, mode);
             if (!Validate()) throw new ProtocolException("ParentMismatch");
         }
         catch { executableLease?.Dispose(); parent.Dispose(); self.Dispose(); throw; }
@@ -41,30 +41,20 @@ internal sealed class ParentGuard : IParentGuard
         foreach (ManagementObject row in rows) using (row) return checked((int)(uint)row["ParentProcessId"]);
         throw new ProtocolException("ParentMismatch");
     }
-    static bool NormalToken(int pid)
+    internal static AuthorityMode? TokenMode(ProcessSecurity security) => security switch
     {
-        using var process = ProcessNative.OpenProcess(ProcessNative.QuerySynchronize, false, pid);
-        if (process.IsInvalid || !ProcessNative.OpenProcessToken(process, 8, out var token)) return false;
-        using (token)
-        {
-            if (!ProcessNative.GetTokenInformation(token, 20, out int elevated, sizeof(int), out _) || elevated != 0) return false;
-            _ = ParentNative.GetTokenInformation(token.DangerousGetHandle(), 25, 0, 0, out int length);
-            if (length is < 8 or > 4096) return false;
-            nint buffer = Marshal.AllocHGlobal(length);
-            try
-            {
-                if (!ParentNative.GetTokenInformation(token.DangerousGetHandle(), 25, buffer, length, out _)) return false;
-                nint sid = Marshal.ReadIntPtr(buffer);
-                nint count = ParentNative.GetSidSubAuthorityCount(sid);
-                if (count == 0 || Marshal.ReadByte(count) == 0) return false;
-                int level = Marshal.ReadInt32(ParentNative.GetSidSubAuthority(sid, (uint)(Marshal.ReadByte(count) - 1)));
-                return level is >= 0x2000 and < 0x3000;
-            }
-            finally { Marshal.FreeHGlobal(buffer); }
-        }
+        { Elevated: false, IntegrityRid: >= 0x2000 and < 0x3000 } => AuthorityMode.Normal,
+        { Elevated: true, IntegrityRid: >= 0x3000 and < 0x4000 } => AuthorityMode.Administrator,
+        _ => null
+    };
+    static AuthorityMode? Mode(NativeProcessIdentity process) => process.TryReadSecurity(out var security) ? TokenMode(security) : null;
+    internal static bool Compatible(ProcessStamp parent, ProcessStamp child, AuthorityMode? parentMode, AuthorityMode? childMode, string executable, out AuthorityMode mode)
+    {
+        mode = parentMode ?? AuthorityMode.Normal;
+        return parent.Pid > 0 && child.Pid > 0 && parent.Pid != child.Pid && parent.Created > 0 && parent.Created <= child.Created && parent.Sid.Length > 0 && parent.Sid != "S-1-5-18" && parent.Sid == child.Sid && parent.Session == child.Session && ScriptPaths.Equal(parent.Executable, executable) && parentMode.HasValue && parentMode == childMode;
     }
     static bool Same(ProcessStamp a, ProcessStamp b) => a.Pid == b.Pid && a.Created == b.Created && ScriptPaths.Equal(a.Executable, b.Executable) && a.Sid == b.Sid && a.Session == b.Session;
-    public bool Validate() => parent.TryRead(out var now) && self.TryRead(out var child) && Same(now, parentStamp) && Same(child, childStamp) && NormalToken(parentStamp.Pid) && NormalToken(childStamp.Pid);
+    public bool Validate() => parent.TryRead(out var now) && self.TryRead(out var child) && Same(now, parentStamp) && Same(child, childStamp) && Mode(parent) == Proof.AuthorityMode && Mode(self) == Proof.AuthorityMode;
     public void Dispose() { executableLease?.Dispose(); parent.Dispose(); self.Dispose(); }
 }
 

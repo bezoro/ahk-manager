@@ -8,6 +8,30 @@ namespace Bezoro.AhkManager.WinUI.Tests.Core;
 public static partial class CoreSuite
 {
     static string InterpreterFixture = "";
+    public static async Task RunAdministratorRestartChecksAsync(string root, Action<bool, string> check)
+    {
+        string interpreter = (await new AutoHotkeyDiscovery().DiscoverAsync())[0].Path;
+        string script = Path.Combine(root, "admin-restart.ahk");
+        await File.WriteAllTextAsync(script, "#Requires AutoHotkey v2.0\n");
+        var owner = new FakeOwner(root); var processes = new FakeProcesses(owner);
+        await using var manager = new ManagerService(Path.Combine(root, "data"), owner, processes, new UserStartupService(new FakeStartup(), Path.Combine(root, "Manager.exe")));
+        await manager.LoadAsync(); var added = await manager.AddFilesAsync([script]); Guid id = added.Added.Single();
+        await manager.SaveMetadataAsync(id, new("Admin restart", "", null, false, true, false, []));
+        processes.SetRunning(script, interpreter); await manager.RefreshAsync();
+        check(!(await manager.PrepareAsync(Select(manager, id), ScriptOperation.Restart)).Allowed, "F5 normal authority refuses admin restart");
+        processes.Administrator = true;
+        var restart = await manager.PrepareAsync(Select(manager, id), ScriptOperation.Restart);
+        check(restart.Allowed, "F5 authenticated high authority permits admin restart plan");
+        if (restart.Allowed)
+        {
+            processes.NextControl = new(Outcome.Unknown, ReasonCode.ExitNotObserved);
+            check((await manager.PerformAsync(restart, restart.Selection, true)).Outcome == Outcome.Unknown && processes.Starts == 0, "F5 uncertain stop never creates admin replacement");
+            processes.Current = new([], true, []); await manager.RecoverPendingAsync();
+            processes.SetRunning(script, interpreter); processes.NextControl = new(Outcome.Confirmed); await manager.RefreshAsync();
+            restart = await manager.PrepareAsync(Select(manager, id), ScriptOperation.Restart);
+            check((await manager.PerformAsync(restart, restart.Selection, true)).Succeeded && processes.Starts == 1 && processes.LastElevated, "F5 confirmed stop launches one explicit admin replacement");
+        }
+    }
     static async Task RunManagerAsync()
     {
         var interpreters = await new AutoHotkeyDiscovery().DiscoverAsync();
@@ -15,6 +39,7 @@ public static partial class CoreSuite
         string interpreter = interpreters[0].Path;
         InterpreterFixture = interpreter;
         await HeaderDescriptionsAsync(interpreter);
+        await PreserveInactiveStartupAsync(interpreter);
         var root = Path.Combine(FixtureRoot, "manager-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string script = Path.Combine(root, "ação com espaço.ahk");
@@ -96,6 +121,17 @@ public static partial class CoreSuite
         Check(wrong.Version.StartsWith('2'), "interpreter product metadata establishes actual v2");
         Console.WriteLine("FIXTURE " + root);
     }
+    static async Task PreserveInactiveStartupAsync(string interpreter)
+    {
+        string root = Path.Combine(FixtureRoot, "inactive-startup"), path = Path.Combine(root, "fixture.ahk"), data = Path.Combine(root, "data");
+        Directory.CreateDirectory(root); Directory.CreateDirectory(data); await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2\n");
+        Guid id = Guid.NewGuid(); var store = new SettingsStore(Path.Combine(data, "settings.json")); var original = await store.LoadAsync();
+        Check((await store.SaveAsync(original.Document with { Scripts = [new() { Id = id, Path = path, FriendlyName = "Fixture", RunAtLogin = true }], Settings = new() { InterpreterPath = interpreter, LaunchManagerAtLogin = false } })).Succeeded, "seed existing true row startup while global startup inactive");
+        var owner = new FakeOwner(root); var processes = new FakeProcesses(owner); var registration = new FakeStartup();
+        await using var manager = new ManagerService(data, owner, processes, new UserStartupService(registration, Path.Combine(root, "Manager.exe")), Path.Combine(root, "legacy-absent")); await manager.LoadAsync();
+        Check((await manager.SaveMetadataAsync(id, new("Fixture", "", null, true, true, false, []))).Succeeded, "changing administrator preference preserves existing inactive startup intent");
+        Check(manager.Snapshot.Scripts.Single().RunAsAdministrator && manager.Snapshot.Scripts.Single().RunAtLogin == true && !manager.Snapshot.Settings.LaunchManagerAtLogin && registration.Writes == 0 && processes.Starts == 0, "administrator checkbox neither registers startup nor launches or elevates");
+    }
     static async Task HeaderDescriptionsAsync(string interpreter)
     {
         string root = Path.Combine(FixtureRoot, "header-manager"), script = Path.Combine(root, "header.ahk"); Directory.CreateDirectory(root);
@@ -144,7 +180,8 @@ public static partial class CoreSuite
     }
     sealed class FakeProcesses(FakeOwner owner) : IProcessManager
     {
-        public int Starts, Controls; public bool UnknownStart, UnknownWithIdentity;
+        public int Starts, Controls; public bool UnknownStart, UnknownWithIdentity, Administrator, LastElevated;
+        public bool IsAdministrator => Administrator;
         public OperationResult NextControl = new(Outcome.Confirmed);
         public ObservedProcesses Current = new([], true, []);
         public event EventHandler? Invalidated { add { } remove { } }
@@ -157,7 +194,7 @@ public static partial class CoreSuite
         }
         public Task<LaunchResult> StartAsync(string interpreter, string script, bool elevated, CancellationToken ct = default)
         {
-            Starts++; SetRunning(script, interpreter);
+            Starts++; LastElevated = elevated; SetRunning(script, interpreter);
             return Task.FromResult(new LaunchResult(new(UnknownStart ? Outcome.Unknown : Outcome.Confirmed, UnknownStart ? ReasonCode.LaunchUncertain : ReasonCode.None), UnknownStart && !UnknownWithIdentity ? null : Current.Processes.Single()));
         }
         public Task<OperationResult> ControlAsync(ProcessIdentity expected, ScriptOperation operation, CancellationToken ct = default)

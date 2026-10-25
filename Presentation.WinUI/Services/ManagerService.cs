@@ -122,7 +122,7 @@ public sealed class ManagerService : IManagerService
             var analysis = analyses[entry.Id]; issues.AddRange(analysis.Issues.Select(i => i with { ScriptId = entry.Id }));
             var matching = observed.Processes.Where(p => ScriptPaths.Equal(p.Identity.ScriptPath, entry.Path)).ToArray();
             bool pending = journal.Records.Any(r => r.ScriptId == entry.Id && OperationJournal.IsPending(r) && r.Operation is ScriptOperation.Start or ScriptOperation.Restart or ScriptOperation.Stop);
-            ScriptStatus status = matching.Length > 1 ? ScriptStatus.Multiple : pending || !observed.Complete && matching.Length == 0 ? ScriptStatus.Unknown : matching.Length == 1 ? ScriptStatus.Running : !exists ? ScriptStatus.Missing : entry.LegacyGuard || entry.LaunchBlocked ? ScriptStatus.Blocked : ScriptStatus.Stopped;
+            ScriptStatus status = matching.Length > 1 ? ScriptStatus.Multiple : pending ? ScriptStatus.Unknown : matching.Length == 1 ? ScriptStatus.Running : !exists ? ScriptStatus.Missing : !observed.Complete ? ScriptStatus.Unknown : entry.LegacyGuard || entry.LaunchBlocked ? ScriptStatus.Blocked : ScriptStatus.Stopped;
             if (matching.Length > 1) issues.Add(new(ReasonCode.MultipleInstances, null, entry.Id));
             if (!observed.Complete && matching.Length == 0) issues.Add(new(ReasonCode.ObservationIncomplete, null, entry.Id));
             if (pending) issues.Add(new(ReasonCode.PendingOperation, null, entry.Id));
@@ -140,7 +140,7 @@ public sealed class ManagerService : IManagerService
         ImmutableArray<ActivitySnapshot> recent;
         try { recent = await activity.ReadAsync(new(), ct).ConfigureAwait(false); }
         catch (Exception ex) when (SafeJsonFiles.Known(ex)) { recent = []; global = global.Add(new(ReasonCode.ActivityUnavailable, ex.Message)); }
-        var next = new ManagerSnapshot(snapshot.Revision + 1, HotkeyAnalyzer.MarkConflicts(scripts.ToImmutable()), document.Collections.ToImmutableArray(), document.Settings, recent, global.Distinct().ToImmutableArray(), store.ReadOnly, owner.Held && owner.Trusted && journal.Ready && !store.ReadOnly, observedAt);
+        var next = new ManagerSnapshot(snapshot.Revision + 1, HotkeyAnalyzer.MarkConflicts(scripts.ToImmutable()), document.Collections.ToImmutableArray(), document.Settings, recent, global.Distinct().ToImmutableArray(), store.ReadOnly, owner.Held && owner.Trusted && journal.Ready && !store.ReadOnly, observedAt, processes.GetNormalLaunchUnavailableReason());
         Volatile.Write(ref snapshot, next); Changed?.Invoke(this, next);
     }
     async Task<OperationResult> Commit(SettingsDocument next, Guid? scriptId, CancellationToken ct)
@@ -282,15 +282,17 @@ public sealed class ManagerService : IManagerService
         var matches = observed.Processes.Where(p => ScriptPaths.Equal(p.Identity.ScriptPath, script.Path)).ToArray();
         if (operation is ScriptOperation.Start or ScriptOperation.Restart)
         {
+            if (!script.RunAsAdministrator && processes.GetNormalLaunchUnavailableReason() is ReasonCode launchDenied) return launchDenied;
             if (script.LaunchBlocked) return ReasonCode.LegacyGuard;
             if (!File.Exists(script.Path)) return ReasonCode.MissingFile;
             if (!observed.Complete) return ReasonCode.ObservationIncomplete;
             if (string.IsNullOrWhiteSpace(script.InterpreterPath ?? document.Settings.InterpreterPath)) return ReasonCode.UnsupportedInterpreter;
-            if (script.RunAsAdministrator && operation == ScriptOperation.Restart) return ReasonCode.ManualElevationRequired;
+            if (script.RunAsAdministrator && operation == ScriptOperation.Restart && !processes.IsAdministrator) return ReasonCode.ManualElevationRequired;
             if (observed.Processes.Any(p => IsSupervisorRelated(p.Identity.ScriptPath, script.Path))) return ReasonCode.LegacyGuard;
         }
         if (operation == ScriptOperation.Start) return matches.Length > 0 ? ReasonCode.AlreadyRunning : ReasonCode.None;
         if (matches.Length != 1) return matches.Length > 1 ? ReasonCode.MultipleInstances : ReasonCode.IdentityChanged;
+        if (matches[0].ControlUnavailableReason is ReasonCode access) return access;
         if (operation == ScriptOperation.ToggleSuspend && !matches[0].Suspended.HasValue) return ReasonCode.StateNotObservable;
         if (expected is null || !NativeProcessIdentity.Same(expected, matches[0].Identity)) return ReasonCode.IdentityChanged;
         return ReasonCode.None;

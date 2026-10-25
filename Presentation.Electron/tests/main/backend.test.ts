@@ -5,7 +5,7 @@ import { PassThrough, Writable } from 'node:stream';
 import fs from 'node:fs';
 import { snapshot as validateSnapshot } from '../../src/shared/validation.js';
 import { BackendClient, MAX_FRAME, UnknownAfterDispatchError } from '../../src/main/backend.js';
-import { snapshot, withHeaderDescription } from './fixtures.js';
+import { snapshot, withHeaderDescription, planId } from './fixtures.js';
 const nonce='a'.repeat(64),host='C:\\App\\Bezoro.AhkManager.exe';
 
 test('strict additive header field accepts absent/null/4000 and rejects forged type/NUL/length/unknown properties', () => {
@@ -31,16 +31,16 @@ test('actual source-generated NUL-file snapshot stays valid through broker subsc
   child.stdout.write(JSON.stringify(envelope('snapshot', null, state, 'snapshot')) + '\n');
   assert.deepEqual(observed, state); assert.equal(client.ready, true); await client.shutdown();
 });
-function setup(options:{proof?:Record<string,unknown>;ignore?:string;invalid?:string;exitOnEnd?:boolean;noShutdownExit?:boolean;failedSpawn?:boolean}={}){
+function setup(options:{proof?:Record<string,unknown>;ignore?:string;invalid?:string;exitOnEnd?:boolean;noShutdownExit?:boolean;failedSpawn?:boolean;reply?:(action:string,payload:unknown)=>unknown}={}){
   const calls:any[]=[];const child=new EventEmitter() as any;child.pid=options.failedSpawn?undefined:9001;child.stdout=new PassThrough();child.stderr=new PassThrough();
   const envelope=(action:string,id:string|null,payload:unknown,kind='response')=>({version:1,kind,id,session:nonce,action,code:'Ok',payload,error:null});
   child.stdin=new Writable({write(chunk,_encoding,callback){
     const request=JSON.parse(chunk.toString());calls.push(request);callback();
     if(options.ignore===request.action)return;
-    const payload=request.action==='hello'?{protocolVersion:1,profileRoot:'C:\\FixtureProfile',hostExecutable:host}:request.action==='shutdown'?{outcome:'Confirmed',code:'None',detail:null,correlationId:null,succeeded:true}:snapshot();
+    const payload=options.reply?.(request.action,request.payload)??(request.action==='hello'?{protocolVersion:1,profileRoot:'C:\\FixtureProfile',hostExecutable:host}:request.action==='shutdown'?{outcome:'Confirmed',code:'None',detail:null,correlationId:null,succeeded:true}:snapshot());
     setImmediate(()=>{child.stdout.write(options.invalid??JSON.stringify(envelope(request.action,request.id,payload))+'\n');if(request.action==='shutdown'&&!options.noShutdownExit){child.emit('exit',0,null);child.stdout.end();}});
   },final(callback){callback();if(options.exitOnEnd)setImmediate(()=>child.emit('exit',0,null));}});
-  const spawn=((executable:any,args:any,config:any)=>{assert.equal(executable,'C:\\App\\backend\\AhkManager.Backend.exe');assert.equal(config.shell,false);assert.equal(config.windowsHide,true);assert.equal(config.detached,false);assert.deepEqual(args,['--parent-pid',String(process.pid),'--session',nonce]);setImmediate(()=>{if(options.failedSpawn){child.emit('error',new Error('spawn ENOENT'));return;}child.emit('spawn');child.stdout.write(JSON.stringify(envelope('hello',null,{parentPid:process.pid,parentCreated:'134000000000000001',parentExecutable:host,childPid:9001,childCreated:'134000000000000002',userSid:'S-1-5-21-test',sessionId:1,...options.proof},'parentProof'))+'\n');});return child;}) as any;
+  const spawn=((executable:any,args:any,config:any)=>{assert.equal(executable,'C:\\App\\backend\\AhkManager.Backend.exe');assert.equal(config.shell,false);assert.equal(config.windowsHide,true);assert.equal(config.detached,false);assert.deepEqual(args,['--parent-pid',String(process.pid),'--session',nonce]);setImmediate(()=>{if(options.failedSpawn){child.emit('error',new Error('spawn ENOENT'));return;}child.emit('spawn');child.stdout.write(JSON.stringify(envelope('hello',null,{parentPid:process.pid,parentCreated:'134000000000000001',parentExecutable:host,childPid:9001,childCreated:'134000000000000002',userSid:'S-1-5-21-test',sessionId:1,authorityMode:'Normal',...options.proof},'parentProof'))+'\n');});return child;}) as any;
   const client=new BackendClient({executable:'C:\\App\\backend\\AhkManager.Backend.exe',hostExecutable:host,session:nonce,createChild:spawn,timeoutMs:1000});
   return {client,child,calls,envelope};
 }
@@ -55,6 +55,24 @@ test('timeout after dispatch is unknown, closes intake and never replays',async(
   const {client,calls}=setup({ignore:'refresh',exitOnEnd:true});await client.start();
   await assert.rejects(client.request('refresh',{},20),UnknownAfterDispatchError);
   await assert.rejects(client.request('refresh',{}));assert.equal(calls.filter(r=>r.action==='refresh').length,1);
+});
+
+test('ticket timeout preserves authenticated session and validates late responses without replay',async()=>{
+  const id='33333333-3333-3333-3333-333333333333';
+  for(const action of ['beginAdministration','administrationStatus','commitAdministration','cancelAdministration']){
+    const f=setup({ignore:action});await f.client.start();
+    await assert.rejects(f.client.request(action,{operationId:id},1),UnknownAfterDispatchError);assert.equal(f.client.ready,true);
+    const call=f.calls.find(call=>call.action===action);assert.ok(call);
+    f.child.stdout.write(JSON.stringify(f.envelope(action,call.id,{operationId:id,revision:'1',state:'Unknown',reason:null,receiptId:null,canResumeNormal:false}))+'\n');
+    assert.equal(f.client.ready,true);await f.client.request('refresh',{});assert.equal(f.calls.filter(call=>call.action===action).length,1);await f.client.shutdown();
+  }
+});
+test('late expired-ticket wrong action, nonce or malformed status remains a session failure',async()=>{
+  for(const wrong of ['action','nonce','payload']){
+    const f=setup({ignore:'beginAdministration'});await f.client.start();await assert.rejects(f.client.request('beginAdministration',{operationId:planId},1));
+    const call=f.calls.find(call=>call.action==='beginAdministration');const response=f.envelope(wrong==='action'?'cancelAdministration':'beginAdministration',call.id,wrong==='payload'?{state:'forged'}:{operationId:planId,revision:'1',state:'Unknown',reason:null,receiptId:null,canResumeNormal:false});if(wrong==='nonce')response.session='b'.repeat(64);
+    f.child.stdout.write(JSON.stringify(response)+'\n');assert.equal(f.client.ready,false);await assert.rejects(f.client.request('refresh',{}));f.child.emit('exit',1,null);
+  }
 });
 test('malformed UTF8, duplicate properties, unsolicited response and oversized frames fail closed',async()=>{
   for(const kind of ['utf8','duplicate','unsolicited','oversize']){

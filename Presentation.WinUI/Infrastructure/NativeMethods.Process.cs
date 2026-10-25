@@ -15,6 +15,9 @@ internal static class ProcessNative
     [DllImport("advapi32.dll", SetLastError = true)] public static extern bool OpenProcessToken(SafeProcessHandle process, uint access, out SafeAccessTokenHandle token);
     [DllImport("advapi32.dll", SetLastError = true)] public static extern bool GetTokenInformation(SafeAccessTokenHandle token, int kind, out int value, int length, out int returned);
     [DllImport("advapi32.dll", SetLastError = true)] public static extern bool GetTokenInformation(SafeAccessTokenHandle token, int kind, out TokenStatistics statistics, int length, out int returned);
+    [DllImport("advapi32.dll", SetLastError = true)] public static extern bool GetTokenInformation(SafeAccessTokenHandle token, int kind, nint buffer, int length, out int returned);
+    [DllImport("advapi32.dll")] public static extern nint GetSidSubAuthorityCount(nint sid);
+    [DllImport("advapi32.dll")] public static extern nint GetSidSubAuthority(nint sid, uint index);
     [StructLayout(LayoutKind.Sequential)] public struct Luid { public uint Low; public int High; }
     [StructLayout(LayoutKind.Sequential)] public struct TokenStatistics
     {

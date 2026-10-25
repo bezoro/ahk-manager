@@ -22,7 +22,7 @@ public static partial class CoreSuite
         Check(ScriptViews.Project(state, new(Status: StatusFilter.Running), other).VisibleIds.SequenceEqual(new[] { selected }), "status query only includes observed running");
         Check(ScriptViews.Project(state, new(CollectionId: collection), selected).EffectiveSelectedId is null, "collection change hides selected identity");
         var unknown = state with { Scripts = [Row(selected, "Zulu", ScriptStatus.Unknown)] };
-        Check(ScriptViews.Project(unknown, new(), selected).EffectiveSelectedId is null, "unknown transition invalidates selected action identity");
+        Check(ScriptViews.Project(unknown, new(), selected).EffectiveSelectedId == selected, "unknown row remains selectable for metadata without authorizing process actions");
         Check(HotkeyAnalyzer.Normalize("^!a") == HotkeyAnalyzer.Normalize("!^A"), "common modifiers normalize equivalent chords");
         Check(HotkeyAnalyzer.Normalize("<^a") != HotkeyAnalyzer.Normalize(">^a"), "left and right modifiers retain distinction");
         var root = System.IO.Path.Combine(FixtureRoot, "hotkeys-" + Guid.NewGuid().ToString("N"));

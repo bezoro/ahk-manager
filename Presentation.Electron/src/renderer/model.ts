@@ -15,6 +15,12 @@ export function visibleScripts(snapshot: ManagerSnapshot, query: ScriptQuery): S
 export const fileName = (path: string): string => path.split(/[\\/]/).pop() ?? path;
 export const metadataOf = (script: ScriptSnapshot): ScriptMetadata => ({ friendlyName: script.friendlyName, description: script.description, collectionId: script.collectionId, runAtLogin: script.runAtLogin, runAsAdministrator: script.runAsAdministrator, launchBlocked: script.launchBlocked, manualHotkeys: script.hotkeys.filter(key => key.origin === 'Manual').map(key => key.chord) });
 export interface Draft { value: ScriptMetadata; base: string; dirty: boolean; manualText: string }
+export type RowPreference = 'runAtLogin' | 'runAsAdministrator';
+export function rebaseRowPreference(draft: Draft, field: RowPreference, authoritative: ScriptSnapshot): Draft {
+  const base = { ...JSON.parse(draft.base) as ScriptMetadata, [field]: authoritative[field] };
+  const value = { ...draft.value, [field]: authoritative[field] };
+  return { ...draft, value, base: JSON.stringify(base), dirty: JSON.stringify(value) !== JSON.stringify(base) };
+}
 export const newDraft = (script: ScriptSnapshot): Draft => { const value = metadataOf(script); return { value, base: JSON.stringify(value), dirty: false, manualText: value.manualHotkeys.join('\n') }; };
 export const changeDraft = (draft: Draft, patch: Partial<ScriptMetadata>): Draft => { const value = { ...draft.value, ...patch }; return { ...draft, value, manualText: patch.manualHotkeys ? patch.manualHotkeys.join('\n') : draft.manualText, dirty: JSON.stringify(value) !== draft.base }; };
 export const changeManualDraft = (draft: Draft, manualText: string): Draft => ({ ...changeDraft(draft, { manualHotkeys: manualText.split(/\r?\n/).map(value => value.trim()).filter(Boolean) }), manualText });
@@ -26,14 +32,17 @@ export function reconcileDraft(draft: Draft | undefined, script: ScriptSnapshot,
 }
 export function actionReason(host: HostState, script: ScriptSnapshot | null, action: ScriptOperation): string | null {
   if (host.connection !== 'ready' || !host.snapshot) return 'ObservationIncomplete';
+  if (host.administrationPending) return 'PendingOperation';
   if (!script) return 'StaleSelection';
   if (action === 'Edit' || action === 'OpenFolder' || action === 'Recover') return null;
   if (host.snapshot.readOnly) return 'ReadOnlySettings';
   if (!host.snapshot.effectsAvailable) return 'EffectOwnerUnavailable';
-  if (action === 'Start') return script.status !== 'Stopped' ? script.status === 'Running' ? 'AlreadyRunning' : 'ObservationIncomplete' : script.launchBlocked ? 'LegacyGuard' : null;
+  const launchBarrier = !script.runAsAdministrator ? host.snapshot.normalLaunchUnavailableReason ?? null : null;
+  if (action === 'Start') return script.status !== 'Stopped' ? script.status === 'Running' ? 'AlreadyRunning' : 'ObservationIncomplete' : script.launchBlocked ? 'LegacyGuard' : launchBarrier;
   if (script.status !== 'Running' || !script.process) return script.status === 'Multiple' ? 'MultipleInstances' : 'ObservationIncomplete';
   if (!script.process.windowVerified) return 'WindowUnverified';
-  if (action === 'Restart' && script.runAsAdministrator) return 'ManualElevationRequired';
+  if (script.process.controlUnavailableReason) return script.process.controlUnavailableReason;
+  if (action === 'Restart' && launchBarrier) return launchBarrier;
   if (action === 'ToggleSuspend' && script.process.suspended === null) return 'StateNotObservable';
   return null;
 }

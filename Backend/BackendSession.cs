@@ -17,16 +17,19 @@ internal sealed class BackendSession : IBackendSession
 {
     readonly IManagerService manager;
     readonly ProfileMigrationService migration;
+    ManagerElevation? administration;
     readonly StartupTransferService startupTransfer;
     readonly Dictionary<Guid, (OperationPlan Plan, DateTimeOffset Time)> plans = [];
     readonly Dictionary<Guid, (ImportPreview Preview, DateTimeOffset Time)> imports = [];
     bool loaded, disposed;
     Task? disposal;
     public event EventHandler<ManagerSnapshot>? Changed { add => manager.Changed += value; remove => manager.Changed -= value; }
-    public static BackendSession CreateProduction(string profileRoot, string hostExecutable)
+    public static BackendSession CreateProduction(string profileRoot, string hostExecutable, ParentProof parent)
     {
         var manager = ManagerService.CreateForTrustedStartupHost(profileRoot, hostExecutable, out var owner);
-        return new(manager, profileRoot, hostExecutable, () => owner.Held && owner.Trusted, new RegistryStartupAdapter());
+        var session = new BackendSession(manager, profileRoot, hostExecutable, () => owner.Held && owner.Trusted, new RegistryStartupAdapter());
+        session.administration = new(parent, () => session.loaded && manager.Snapshot.EffectsAvailable && !manager.Snapshot.Scripts.Any(s => s.Issues.Any(i => i.Code == ReasonCode.PendingOperation)));
+        return session;
     }
     internal BackendSession(IManagerService manager, string profileRoot, string hostExecutable, Func<bool> effectsAllowed, IUserStartupAdapter startup)
     {
@@ -41,6 +44,20 @@ internal sealed class BackendSession : IBackendSession
     {
         if (disposed) throw new ProtocolException("ShuttingDown");
         Prune();
+        if (action is "beginAdministration" or "administrationStatus" or "commitAdministration" or "cancelAdministration")
+        {
+            if (!loaded || administration is null) throw new ProtocolException("InvalidRequest");
+            if (action == "administrationStatus") { var request = Read(payload, Protocol.Json.ElevationStatusPayload); return Pack(await administration.Status(request.OperationId, request.AfterRevision, ct).ConfigureAwait(false), Protocol.Json.ElevationStatus); }
+            var ticket = Read(payload, Protocol.Json.ElevationOperationPayload);
+            var status = action switch
+            {
+                "beginAdministration" => administration.Begin(ticket.OperationId),
+                "commitAdministration" => await administration.Commit(ticket.OperationId, ct).ConfigureAwait(false),
+                _ => administration.Cancel(ticket.OperationId)
+            };
+            return Pack(status, Protocol.Json.ElevationStatus);
+        }
+        if (administration?.Frozen == true && action is not ("snapshot" or "activity") && !(action == "shutdown" && administration.ShutdownAllowed)) throw new ProtocolException("PendingOperation");
         if (action == "previewMigration")
         {
             var request = Read(payload, Protocol.Json.MigrationPathPayload);
@@ -115,5 +132,5 @@ internal sealed class BackendSession : IBackendSession
         foreach (var id in plans.Where(p => DateTimeOffset.UtcNow - p.Value.Time > Protocol.TokenLifetime).Select(p => p.Key).ToArray()) plans.Remove(id);
         foreach (var id in imports.Where(p => DateTimeOffset.UtcNow - p.Value.Time > Protocol.TokenLifetime).Select(p => p.Key).ToArray()) imports.Remove(id);
     }
-    public ValueTask DisposeAsync() { disposed = true; return new(disposal ??= manager.DisposeAsync().AsTask()); }
+    public ValueTask DisposeAsync() { disposed = true; administration?.Dispose(); return new(disposal ??= manager.DisposeAsync().AsTask()); }
 }

@@ -4,6 +4,9 @@ const stopExitReason=(value:string)=>stopExitReasons[value]??value;
 /** Native host copy. Keep consent wording and dynamic target details together. */
 export const hostText={
   title:'AHK Manager',cancel:'Cancelar',confirm:'Confirmar',unknownError:'Falha desconhecida.',
+  administrationTitle:'Reabrir como administrador?',administrationDetail:'O Windows solicitará sua confirmação. O gerenciador será reaberto com acesso de administrador somente após a transferência autenticada. Os scripts em execução serão preservados. A inicialização com o Windows continuará padrão.',
+  administrationPending:'A transferência de autoridade está pendente. Nenhuma operação será reenviada. Aguarde a confirmação ou verifique a transferência.',
+  administrationCliInvalid:'Use --request-administrator uma única vez, sem --login ou --background.',
   windowsPackagedRequired:'Execute a distribuição empacotada para Windows. Os testes usam dependências isoladas.',
   invalidPath:'Caminho inválido.',wrongFileType:'A seleção não corresponde ao tipo esperado.',fileLimit:'Seleção excede o limite de arquivos.',
   pickerTitles:{scripts:'Adicionar scripts AutoHotkey',folder:'Adicionar scripts de uma pasta',interpreter:'Selecionar AutoHotkey v2',editor:'Selecionar editor',import:'Selecionar catálogo legado',migration:'Selecionar perfil WinUI'},

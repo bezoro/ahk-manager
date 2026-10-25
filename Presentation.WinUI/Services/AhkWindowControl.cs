@@ -22,14 +22,15 @@ public static class AhkWindowControl
     public static bool VerifyWindow(nint window, ProcessIdentity identity)
     {
         if (window == 0 || ProcessNative.GetWindowThreadProcessId(window, out uint pid) == 0 || pid != identity.Pid) return false;
-        StringBuilder kind = new(256); StringBuilder title = new(32768);
-        if (ProcessNative.GetClassName(window, kind, kind.Capacity) == 0 || kind.ToString() != "AutoHotkey" || ProcessNative.GetWindowText(window, title, title.Capacity) == 0) return false;
-        var text = title.ToString();
-        return text.StartsWith(identity.ScriptPath + " - AutoHotkey", StringComparison.OrdinalIgnoreCase);
+        StringBuilder kind = new(256);
+        // Script identity was already proved independently by argv or a complete launch receipt.
+        // The title is mutable and must neither invalidate B nor assign its window to A.
+        return ProcessNative.GetClassName(window, kind, kind.Capacity) != 0 && kind.ToString() == "AutoHotkey";
     }
     public static OperationResult Request(NativeProcessIdentity held, ProcessIdentity expected, ScriptOperation operation)
     {
         if (!held.Matches(expected)) return new(Outcome.Failed, ReasonCode.IdentityChanged);
+        if (held.ControlUnavailableReason() is ReasonCode denied) return new(Outcome.Failed, denied);
         nint window = FindWindow(expected);
         if (window == 0 || !VerifyWindow(window, expected) || !held.Matches(expected)) return new(Outcome.Failed, ReasonCode.WindowUnverified);
         uint message; nuint argument;

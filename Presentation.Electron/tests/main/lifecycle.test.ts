@@ -1,8 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, withinDeadline, type ShutdownBoundary } from '../../src/main/lifecycle.js';
+import { administrationCli, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, withinDeadline, type ShutdownBoundary } from '../../src/main/lifecycle.js';
 import { ManagerController } from '../../src/main/controller.js';
 import { snapshot } from './fixtures.js';
+
+test('administrative CLI accepts foreground once and rejects login/background or duplicate requests',()=>{
+  assert.equal(administrationCli(['manager.exe']),'none');assert.equal(administrationCli(['manager.exe','--request-administrator']),'request');
+  for(const args of [['--request-administrator','--login'],['--background','--request-administrator'],['--request-administrator','--request-administrator']])assert.equal(administrationCli(args),'invalid');
+});
 
 test('keep-scripts orderly exit never prepares or performs a Stop',async()=>{
   const actions:string[]=[];const controller=new ManagerController({request:async<T>(action:string)=>{actions.push(action);return {} as T;}},{files:async()=>[],confirm:async()=>{throw new Error('No consent in keep-scripts exit');},alive:()=>true,placement:()=>snapshot().settings.window},()=>{});controller.setSnapshot(snapshot());controller.setConnection('ready');

@@ -1,7 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ActivitySnapshot, HostState, ManagerSnapshot, ScriptSnapshot } from '../../src/shared/contracts.js';
-import { actionReason, activityAssociation, brandPalette, changeDraft, changeManualDraft, defaultQuery, effectiveDescription, filterActivity, metadataOf, newDraft, nextQuery, reconcileDraft, rowWindow, visibleScripts } from '../../src/renderer/model.js';
+import { actionReason, activityAssociation, brandPalette, changeDraft, changeManualDraft, defaultQuery, effectiveDescription, filterActivity, metadataOf, newDraft, nextQuery, rebaseRowPreference, reconcileDraft, rowWindow, visibleScripts } from '../../src/renderer/model.js';
+
+test('confirmed row preference rebases only its value/base, preserving dirty manual fields and raw hotkeys', () => {
+  const original = script('row', { friendlyName: 'Original', description: 'Manual', runAtLogin: null, runAsAdministrator: false });
+  const dirty = changeManualDraft(changeDraft(newDraft(original), { friendlyName: 'Edited', description: 'Unsaved manual' }), '  ^!a  \n\n');
+  const server = { ...original, runAsAdministrator: true };
+  const rebased = rebaseRowPreference(dirty, 'runAsAdministrator', server);
+  assert.equal(rebased.value.runAsAdministrator, true); assert.equal(JSON.parse(rebased.base).runAsAdministrator, true);
+  assert.equal(rebased.value.runAtLogin, null); assert.equal(JSON.parse(rebased.base).runAtLogin, null);
+  assert.equal(rebased.value.friendlyName, 'Edited'); assert.equal(JSON.parse(rebased.base).friendlyName, 'Original');
+  assert.equal(rebased.value.description, 'Unsaved manual'); assert.equal(rebased.manualText, dirty.manualText); assert.equal(rebased.dirty, true);
+  assert.equal(reconcileDraft(rebased, server, new Set()), rebased);
+  assert.equal(rebased.value.runAsAdministrator, true, 'later full metadata save retains row choice');
+});
+test('clean row preferences stay clean and legacy null is changed only by an explicit chosen field', () => {
+  const original = script('row', { runAtLogin: null, runAsAdministrator: false });
+  const admin = rebaseRowPreference(newDraft(original), 'runAsAdministrator', { ...original, runAsAdministrator: true });
+  assert.equal(admin.dirty, false); assert.equal(admin.value.runAtLogin, null);
+  const startup = rebaseRowPreference(admin, 'runAtLogin', { ...original, runAtLogin: false, runAsAdministrator: true });
+  assert.equal(startup.dirty, false); assert.equal(startup.value.runAtLogin, false); assert.equal(startup.value.runAsAdministrator, true);
+});
 
 test('header precedence and effective description search preserve only manual metadata and dirty drafts', () => {
   const row = script('header', { description: 'manual fallback', headerDescription: 'Cabeçalho\n<script>literal</script>' });
@@ -22,8 +42,16 @@ test('header precedence and effective description search preserve only manual me
 // Isolated model fixtures only. Production renders exclusively host snapshots.
 function script(id: string, patch: Partial<ScriptSnapshot> = {}): ScriptSnapshot { return { id, friendlyName: id, path: `C:\\fixture\\${id}.ahk`, description: '', collectionId: null, runAtLogin: null, runAsAdministrator: false, launchBlocked: false, status: 'Stopped', process: null, hotkeys: [], coverage: 'Partial', issues: [], ...patch }; }
 function snapshot(scripts: ScriptSnapshot[]): ManagerSnapshot { return { revision: '9007199254740999', scripts, collections: [{ id: 'work', name: 'Trabalho' }], settings: { interpreterPath: null, editorPath: null, editorArguments: [], launchManagerAtLogin: false, showWindowAtLogin: false, theme: 'System', closeBehavior: 'HideToTray', window: { x: 0, y: 0, width: 1240, height: 820, maximized: false, dpi: 96 } }, activity: [], issues: [], readOnly: false, effectsAvailable: true, observedAt: null }; }
-function host(scripts: ScriptSnapshot[]): HostState { return { snapshot: snapshot(scripts), busy: false, error: null, connection: 'ready' }; }
+function host(scripts: ScriptSnapshot[]): HostState { return { snapshot: snapshot(scripts), busy: false, error: null, connection: 'ready', authorityMode: 'Normal', administrationPending: false }; }
 const process: NonNullable<ScriptSnapshot['process']> = { identity: { pid: 42, creationFileTime: '133700000000000001', executablePath: 'C:\\fixture\\AutoHotkey64.exe', scriptPath: 'C:\\fixture\\one.ahk', userSid: 'fixture', sessionId: 1, scriptHash: 'hash', interpreterHash: 'hash' }, origin: 'Manager', interpreterVersion: '2.0.30', startedAt: '2026-01-01T00:00:00Z', paused: null, suspended: null, windowVerified: true };
+
+test('actual host/process capability barriers are independent of requested administrator preference',()=>{
+  const row=script('one',{status:'Running',process:{...process,controlUnavailableReason:'AccessDenied'},runAsAdministrator:false});const state=host([row]);
+  assert.equal(actionReason(state,row,'Stop'),'AccessDenied');row.process!.controlUnavailableReason='ManualElevationRequired';assert.equal(actionReason(state,row,'Restart'),'ManualElevationRequired');
+  row.process!.controlUnavailableReason=null;row.runAsAdministrator=true;assert.equal(actionReason(state,row,'Restart'),null);
+  row.status='Stopped';row.process=null;row.runAsAdministrator=false;state.snapshot!.normalLaunchUnavailableReason='CapabilityUnverified';assert.equal(actionReason(state,row,'Start'),'CapabilityUnverified');
+  state.administrationPending=true;assert.equal(actionReason(state,row,'Edit'),'PendingOperation');
+});
 
 test('query revisions retain decimal precision and invalidate on reversible filter changes', () => {
   const initial = { ...defaultQuery(), version: '9007199254740999' }; const search = nextQuery(initial, { search: 'ação' });
@@ -62,7 +90,7 @@ test('unknown and owner-unavailable rows permit inspection/edit/folder/recovery 
 });
 test('toolbar and contextual action eligibility use identical policy including admin restart and unknown suspend', () => {
   const running = script('one', { status: 'Running', process, runAsAdministrator: true }); const state = host([running]);
-  assert.equal(actionReason(state, running, 'Start'), 'AlreadyRunning'); assert.equal(actionReason(state, running, 'Restart'), 'ManualElevationRequired'); assert.equal(actionReason(state, running, 'ToggleSuspend'), 'StateNotObservable');
+  assert.equal(actionReason(state, running, 'Start'), 'AlreadyRunning'); assert.equal(actionReason(state, running, 'Restart'), null); assert.equal(actionReason(state, running, 'ToggleSuspend'), 'StateNotObservable');
   assert.equal(actionReason(state, running, 'TogglePause'), null); assert.equal(actionReason(state, running, 'Stop'), null);
   assert.equal(actionReason(state, { ...running, process: { ...process, windowVerified: false } }, 'Stop'), 'WindowUnverified');
   assert.equal(actionReason(state, script('blocked', { launchBlocked: true }), 'Start'), 'LegacyGuard');

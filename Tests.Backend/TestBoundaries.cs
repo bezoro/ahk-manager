@@ -33,7 +33,7 @@ internal sealed class BytePipe : Stream
 
 internal sealed class FakeParent : IParentGuard
 {
-    public ParentProof Proof { get; } = new(100, 133700000000000001, @"C:\fixture\Bezoro.AhkManager.exe", 200, 133700000000000002, "S-1-5-21-fixture", 1);
+    public ParentProof Proof { get; } = new(100, 133700000000000001, @"C:\fixture\Bezoro.AhkManager.exe", 200, 133700000000000002, "S-1-5-21-fixture", 1, AuthorityMode.Normal);
     public bool Live = true;
     public bool Validate() => Live;
     public void Dispose() { }

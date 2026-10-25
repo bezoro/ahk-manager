@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ManagerController, selectionVisible, type NativeBoundary } from '../../src/main/controller.js';
 import { snapshot, selection, scriptId, planId, runningSnapshot } from './fixtures.js';
 import type { ManagerSnapshot, OperationPlan, OperationResult, ProcessIdentity } from '../../src/shared/contracts.js';
+import { metadataOf } from '../../src/renderer/model.js';
 const confirmed:OperationResult={outcome:'Confirmed',code:'None',detail:null,correlationId:null};
 function setup(confirm:NativeBoundary['confirm']=async()=>true){
   const requests:{action:string;payload:any}[]=[];
@@ -16,6 +17,18 @@ function setup(confirm:NativeBoundary['confirm']=async()=>true){
   const controller=new ManagerController(authority,native,()=>{});controller.setSnapshot(snapshot());controller.setConnection('ready');controller.updateSelection(selection());
   return {controller,requests,native,authority};
 }
+test('cross-row metadata uses explicit snapshot ID/revision without changing selected context or process effects', async () => {
+  let consent=0;const {controller,requests}=setup(async()=>{consent++;return true;});const state=snapshot();
+  const other={...state.scripts[0]!,id:'22222222-2222-2222-2222-222222222222',friendlyName:'Other row',description:'server manual',runAtLogin:null};state.scripts.push(other);controller.setSnapshot(state);
+  const metadata={...metadataOf(other),runAsAdministrator:true};
+  assert.equal((await controller.saveMetadata(other.id,metadata,state.revision)).outcome,'Confirmed');
+  assert.deepEqual(requests.map(x=>x.action),['saveMetadata']);assert.equal(requests[0]!.payload.scriptId,other.id);assert.deepEqual(requests[0]!.payload.metadata,metadata);assert.equal(requests[0]!.payload.startupConsent,false);assert.equal(consent,0);
+});
+test('admin-only preference with existing login flag does not invent startup consent or enable global registration', async () => {
+  let consent=0;const {controller,requests}=setup(async()=>{consent++;return true;});const state=snapshot();state.settings.launchManagerAtLogin=false;state.scripts[0]!.runAtLogin=true;controller.setSnapshot(state);
+  await controller.saveMetadata(state.scripts[0]!.id,{...metadataOf(state.scripts[0]!),runAsAdministrator:true},state.revision);
+  assert.equal(consent,0);assert.deepEqual(requests.map(x=>x.action),['saveMetadata']);assert.equal(requests[0]!.payload.startupConsent,false);assert.equal(controller.state.snapshot!.settings.launchManagerAtLogin,false);
+});
 test('native cancel never dispatches a prepared operation',async()=>{
   const {controller,requests}=setup(async()=>false);const result=await controller.operate('Stop',selection());
   assert.equal(result.outcome,'CancelledBeforeDispatch');assert.deepEqual(requests.map(r=>r.action),['prepare']);
@@ -65,6 +78,18 @@ test('filter visibility excludes hidden collections and truthful unknown status'
   const state=snapshot();assert.equal(selectionVisible(state,selection()),true);
   assert.equal(selectionVisible(state,{...selection(),query:{...selection().query,status:'Running'}}),false);
   assert.equal(selectionVisible(state,{...selection(),query:{...selection().query,collectionId:planId}}),false);
+});
+
+test('selection search uses header description with the same manual fallback as the visible row',()=>{
+  const state=snapshot();const row=state.scripts[0]!;
+  row.description='manual-only-term';row.headerDescription='Header-only-term';
+  const matching=(search:string)=>selectionVisible(state,{...selection(),query:{...selection().query,search}});
+  assert.equal(matching('header-only-term'),true,'Header-only visible row was rejected by selection authority');
+  assert.equal(matching('manual-only-term'),false,'Hidden manual fallback matched despite a present header');
+  row.headerDescription='   ';
+  assert.equal(matching('manual-only-term'),true,'Blank header did not use manual fallback');
+  row.headerDescription=null;
+  assert.equal(matching('manual-only-term'),true,'Absent header did not use manual fallback');
 });
 
 function batchSetup(count=2){
@@ -127,7 +152,7 @@ for(const status of ['Unknown','Multiple','Blocked','Missing'] as const)test(`mi
 });
 for(const condition of ['elevated','window','pending','wrong-path'] as const)test(`unverified ${condition} target never receives prepare/Stop`,async()=>{
   const {env,run}=batchSetup(1);const row=env.state.scripts[0]!;
-  if(condition==='elevated')row.runAsAdministrator=true;if(condition==='window')row.process!.windowVerified=false;if(condition==='pending')row.issues=[{code:'PendingOperation',detail:null,scriptId:row.id}];if(condition==='wrong-path')row.process!.identity.scriptPath='C:\\foreign.ahk';
+  if(condition==='elevated'){row.runAsAdministrator=true;row.process!.controlUnavailableReason='ManualElevationRequired';}if(condition==='window')row.process!.windowVerified=false;if(condition==='pending')row.issues=[{code:'PendingOperation',detail:null,scriptId:row.id}];if(condition==='wrong-path')row.process!.identity.scriptPath='C:\\foreign.ahk';
   const result=await run();assert.equal(result.canExit,false);assert.equal(env.requests.some(r=>r.action==='prepare'),false);assert.equal(effectRequests(env).length,0);
 });
 const identityChanges:Record<keyof ProcessIdentity,string|number>={pid:999,creationFileTime:'9007199254740999',executablePath:'C:\\foreign.exe',scriptPath:'C:\\foreign.ahk',userSid:'S-1-5-21-other',sessionId:88,scriptHash:'c'.repeat(64),interpreterHash:'d'.repeat(64)};

@@ -5,13 +5,14 @@ import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
-import { LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown } from './lifecycle.js';
+import { administrationCli, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown } from './lifecycle.js';
+import { AdministrationPreflight, ElevationCoordinator } from './elevation.js';
 import { createDiagnostics, type PageDiagnostics } from './diagnostics.js';
 import {hostText as t} from '../shared/host-pt-BR.js';
 import { APP_URL, assetFromUrl, CSP, DocumentGuard, packagedBackend, type DocumentLease } from './security.js';
 import { capturePlacement, restorePlacement } from './placement.js';
-import type { ManagerSnapshot, ThemeState, WindowPlacement } from '../shared/contracts.js';
-import { activityQuery, array, assertActivityQuery, assertMetadata, assertOperation, assertSelection, assertSettings, decimal, guid, metadata, nullable, operation, requireValid, selection, shape, text } from '../shared/validation.js';
+import type { AdministrationUiGuard, ElevationStatus, ManagerSnapshot, ThemeState, WindowPlacement } from '../shared/contracts.js';
+import { activityQuery, array, assertActivityQuery, assertMetadata, assertOperation, assertSelection, assertSettings, bool, decimal, guid, metadata, nullable, oneOf, operation, requireValid, selection, shape, text } from '../shared/validation.js';
 
 protocol.registerSchemesAsPrivileged([{scheme:'ahk-manager',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.setName(t.title);
@@ -29,7 +30,13 @@ let diagnostics:PageDiagnostics|null=null;
 let diagnosticSelection:string|null=null;
 let ready=false;
 let rendererReady=false;
-const lifecycle=new LifecycleIntent(process.argv.includes('--login'));
+let documentLease:DocumentLease|null=null;
+const initialAdministration=administrationCli(process.argv);
+let administrativeCliPending=initialAdministration==='request';
+const lifecycle=new LifecycleIntent(initialAdministration==='none'&&process.argv.includes('--login'));
+const preflight=new AdministrationPreflight();
+let administration:ElevationCoordinator|null=null;
+let administrationLease:DocumentLease|null=null;
 const stopExit=new StopExitIntent();
 let stopExitProgress={done:0,total:0};
 let quitting=false;
@@ -40,6 +47,8 @@ const single=app.requestSingleInstanceLock();
 if(!single)app.quit();
 else {
   app.on('second-instance',(_event,argv)=>{
+    const administrative=administrationCli(argv);
+    if(administrative!=='none'){lifecycle.requestExplicitActivation();show();if(administrative==='invalid')dialog.showErrorBox(t.title,t.administrationCliInvalid);else if(ready)void requestAdministration(true);else administrativeCliPending=true;return;}
     if(argv.includes('--login')){lifecycle.requestLogin();if(ready)void runLogin();}
     else {lifecycle.requestExplicitActivation();show();}
   });
@@ -70,7 +79,7 @@ function show():void {
   deliverPreferences();
 }
 function deliverPreferences():void {if(lifecycle.takePreferences(ready&&rendererReady&&!!guard?.connected))guard?.send('manager:preferences',null);}
-function showPreferences():void {lifecycle.requestPreferences();show();deliverPreferences();}
+function showPreferences():void {if(administration?.active)return;lifecycle.requestPreferences();show();deliverPreferences();}
 function placement():WindowPlacement {
   if(!window||window.isDestroyed())return controller?.state.snapshot?.settings.window??{x:100,y:100,width:1200,height:780,maximized:false,dpi:96};
   const bounds=window.isMaximized()?window.getNormalBounds():window.getBounds();
@@ -138,14 +147,23 @@ async function start():Promise<void> {
   window.webContents.on('will-navigate',event=>event.preventDefault());
   window.webContents.on('will-frame-navigate',event=>event.preventDefault());
   window.webContents.on('will-attach-webview',event=>event.preventDefault());
-  window.webContents.on('did-start-navigation',(_event,_url,isInPlace,isMainFrame)=>{if(isMainFrame&&!isInPlace){rendererReady=false;guard?.invalidate();controller?.updateSelection(null);}});
-  window.webContents.on('render-process-gone',()=>{rendererReady=false;guard?.invalidate();controller?.updateSelection(null);});
+  window.webContents.on('did-start-navigation',(_event,_url,isInPlace,isMainFrame)=>{if(isMainFrame&&!isInPlace){rendererReady=false;documentLease=null;preflight.invalidate();guard?.invalidate();controller?.updateSelection(null);}});
+  window.webContents.on('render-process-gone',()=>{rendererReady=false;documentLease=null;preflight.invalidate();guard?.invalidate();controller?.updateSelection(null);});
   window.webContents.on('did-finish-load',deliverPreferences);
   window.on('close',event=>{if(quitComplete)return;event.preventDefault();void closeWindow();});
   nativeTheme.on('updated',updateTheme);
   systemPreferences.on('accent-color-changed',updateTheme);
   const native={files:pick,confirm,placement,alive};
   controller=new ManagerController({request:()=>Promise.reject(new Error('Backend starting'))},native,state=>{guard?.send('manager:state',state);updateTheme();updateTray();});
+  administration=new ElevationCoordinator({
+    eligible:()=>!quitting&&!stopExit.active&&controller?.state.connection==='ready'&&controller.state.authorityMode==='Normal'&&!controller.state.busy&&!!backend?.ready,
+    confirm:()=>confirm(t.administrationTitle,t.administrationDetail),
+    preflight:(operationId,phase)=>{const lease=administrationLease;return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>!!lease&&!!guard?.current(lease)&&!!window?.isFocused()&&!window.isDestroyed());},
+    quiesce:value=>controller?.setAdministrationPending(value),
+    drain:async()=>{await controller?.drain();},persistPlacement:async()=>{await controller?.savePlacement(true);},
+    request:(action,payload,timeoutMs)=>{if(!backend)throw new Error(t.backendUnavailable);return backend.request<ElevationStatus>(action,payload,timeoutMs);},
+    quitAfterAcknowledgement:()=>quit(true),
+  });
   registerIpc();
   await window.loadURL(APP_URL);
   createTray();updateTheme();
@@ -153,11 +171,14 @@ async function start():Promise<void> {
   const saved=controller.state.snapshot?.settings.window;
   if(saved){const dip=screen.screenToDipRect(window,{x:saved.x,y:saved.y,width:saved.width,height:saved.height});window.setBounds(restorePlacement({...saved,...dip,dpi:96},screen.getAllDisplays()));if(saved.maximized)window.maximize();}
   ready=true;
+  if(initialAdministration==='invalid')dialog.showErrorBox(t.title,t.administrationCliInvalid);
+  if(administrativeCliPending){administrativeCliPending=false;show();void requestAdministration(true);}
   await runLogin();
   if(lifecycle.shouldShowAtStartup(controller.state.snapshot?.settings.showWindowAtLogin??false,trayRegistered))show();
   if(window.isVisible())diagnostics?.initialReady();
 }
 async function startBackend():Promise<void> {
+  if(administration?.active)throw new Error(t.administrationPending);
   if(stopExit.active)throw new Error(t.stopExitBusy);
   if(quitting)throw new Error(t.closing);
   if(!controller)throw new Error('Controller unavailable');
@@ -168,6 +189,7 @@ async function startBackend():Promise<void> {
   backend.on('unavailable',(error:Error)=>{if(!quitting)controller?.setConnection('failed',error.message);});
   try{
     await backend.start();
+    controller.setHostAuthority(backend.authorityMode);
     if(backend.profileRoot&&!lifecycle.loginRequested){
       const exists=await fs.access(path.join(backend.profileRoot,'settings.json')).then(()=>true,()=>false);
       if(!exists&&window){
@@ -179,7 +201,14 @@ async function startBackend():Promise<void> {
     controller.setConnection('ready');
   }catch(error){controller.setConnection('failed',safeError(error));show();}
 }
-async function runLogin():Promise<void> {if(stopExit.active||quitting||!backend?.ready||!controller||!lifecycle.takeLogin())return;await controller.runLogin().catch(error=>controller?.setConnection('failed',safeError(error)));}
+async function runLogin():Promise<void> {if(administration?.active||stopExit.active||quitting||!backend?.ready||!controller||!lifecycle.takeLogin())return;await controller.runLogin().catch(error=>controller?.setConnection('failed',safeError(error)));}
+async function requestAdministration(explicitCli=false){
+  if(administration?.processing)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
+  if(controller?.state.authorityMode==='Administrator'){show();return {outcome:'Confirmed' as const,code:'None',detail:null,correlationId:null};}
+  if(explicitCli){const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));}
+  administrationLease=documentLease;
+  return administration?.request(explicitCli)??{outcome:'CancelledBeforeDispatch' as const,code:'CapabilityUnverified',detail:null,correlationId:null};
+}
 function createTray():void {
   try{
     const image=nativeImage.createFromPath(path.join(process.resourcesPath,'tray.png'));
@@ -190,10 +219,10 @@ function createTray():void {
 function updateTray():void {
   if(!tray||tray.isDestroyed())return;
   const running=controller?.state.snapshot?.scripts.filter(s=>s.status==='Running')??[];
-  tray.setContextMenu(Menu.buildFromTemplate([{label:t.tray.open,click:()=>{lifecycle.requestExplicitActivation();show();}},{label:window?.isVisible()?t.tray.hide:t.tray.show,click:()=>{lifecycle.requestExplicitActivation();if(window?.isVisible())window.hide();else show();updateTray();}},{type:'separator'},{label:t.tray.running(running.length),submenu:running.length?running.map(s=>({label:s.friendlyName,enabled:false})):[{label:t.tray.noneRunning,enabled:false}]},{label:t.tray.preferences,enabled:!stopExit.active,click:showPreferences},{type:'separator'},{label:t.tray.exit,enabled:!stopExit.active&&!quitting,click:()=>void quit()},{label:t.tray.stopExit,enabled:!stopExit.active&&!quitting&&controller?.state.connection==='ready',click:()=>void stopScriptsAndQuit()},{label:t.tray.stopping(stopExitProgress.done,stopExitProgress.total),visible:stopExit.active,enabled:false},{label:t.tray.cancelStopExit,visible:stopExit.active,click:()=>{stopExit.cancel();updateTray();}}]));
+  tray.setContextMenu(Menu.buildFromTemplate([{label:t.tray.open,click:()=>{lifecycle.requestExplicitActivation();show();}},{label:window?.isVisible()?t.tray.hide:t.tray.show,click:()=>{lifecycle.requestExplicitActivation();if(window?.isVisible())window.hide();else show();updateTray();}},{type:'separator'},{label:t.tray.running(running.length),submenu:running.length?running.map(s=>({label:s.friendlyName,enabled:false})):[{label:t.tray.noneRunning,enabled:false}]},{label:t.tray.preferences,enabled:!stopExit.active&&!administration?.active,click:showPreferences},{type:'separator'},{label:t.tray.exit,enabled:!stopExit.active&&!quitting,click:()=>void quit()},{label:t.tray.stopExit,enabled:!stopExit.active&&!quitting&&controller?.state.connection==='ready',click:()=>void stopScriptsAndQuit()},{label:t.tray.stopping(stopExitProgress.done,stopExitProgress.total),visible:stopExit.active,enabled:false},{label:t.tray.cancelStopExit,visible:stopExit.active,click:()=>{stopExit.cancel();updateTray();}}]));
 }
 async function stopScriptsAndQuit():Promise<void> {
-  if(quitting||!controller||!stopExit.begin())return;
+  if(administration?.active||quitting||!controller||!stopExit.begin())return;
   stopExitProgress={done:0,total:0};updateTray();
   try{
     const receipt=await controller.stopScriptsForExit({cancelled:()=>stopExit.cancelled,progress:(done,total)=>{stopExitProgress={done,total};updateTray();}});
@@ -202,20 +231,22 @@ async function stopScriptsAndQuit():Promise<void> {
   }catch(error){stopExit.complete(false);updateTray();show();dialog.showErrorBox(t.stopExitPartialTitle,safeError(error));}
 }
 async function closeWindow():Promise<void> {
+  if(administration?.active){show();return;}
   if(stopExit.active){stopExit.cancel();updateTray();return;}
   if(quitting)return;
   try{await controller?.savePlacement();}catch(error){controller?.setConnection('failed',safeError(error));}
   if(lifecycle.closeAction(controller?.state.snapshot?.settings.closeBehavior??'Exit',trayRegistered)==='hide'){window?.hide();updateTray();}
   else await quit();
 }
-async function quit():Promise<void> {
+async function quit(administrativeAcknowledgement=false):Promise<void> {
+  if(administration?.active&&!administrativeAcknowledgement){show();return;}
   if(stopExit.active){stopExit.cancel();updateTray();return;}
   if(quitting||quitComplete)return;quitting=true;
   controller?.setConnection('closing');
   let timer:ReturnType<typeof setTimeout>|undefined;
   const orderly=()=>orderlyShutdown({
     drain:async()=>{await controller?.drain();},backendPresent:()=>backend!==null,backendExited:()=>backend?.exited??true,
-    persistPlacement:async()=>{await controller?.savePlacement();},shutdownBackend:async()=>{if(backend)await backend.shutdown();},
+    persistPlacement:async()=>{if(!administrativeAcknowledgement)await controller?.savePlacement();},shutdownBackend:async()=>{if(backend)await backend.shutdown();},
     reportPlacementFailure:error=>controller?.setConnection('closing',safeError(error)),
   });
   try{
@@ -232,12 +263,14 @@ function registerIpc():void {
     ipcMain.handle(`manager:${name}`,async(event,envelope:unknown)=>{
       const {lease,body}=guard!.validate(event,envelope);requireValid(body,validate,`${name} request`);
       if(quitting&&name!=='getState'&&name!=='getTheme')throw new Error(t.closing);
+      if(controller!.state.administrationPending&&!['getState','getTheme','getActivity','requestAdministration'].includes(name))throw new Error(t.administrationPending);
       const value=await documentScope.run(()=>guard!.current(lease),()=>handler(body));
       if(!guard!.current(lease))throw new Error(t.documentChanged);
       return value;
     });
   };
   bind('getState',none,()=>controller!.state);bind('getTheme',none,theme);
+  bind('requestAdministration',none,()=>requestAdministration());
   bind('refresh',none,()=>controller!.refresh());bind('addFiles',none,()=>controller!.add('scripts'));bind('addFolder',none,()=>controller!.add('folder'));
   bind('removeScript',shape({scriptId:guid,revision:decimal}),v=>controller!.remove(v.scriptId,v.revision));
   bind('saveMetadata',shape({scriptId:guid,metadata,revision:decimal}),v=>controller!.saveMetadata(v.scriptId,assertMetadata(v.metadata),v.revision));
@@ -253,5 +286,7 @@ function registerIpc():void {
   bind('retryBackend',none,async()=>{await startBackend();if(backend?.ready)await runLogin();});
   bind('copyText',shape({text:text(65536)}),v=>clipboard.writeText(v.text));
   ipcMain.on('manager:updateSelection',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);const selected=body===null?null:assertSelection(body);controller!.updateSelection(selected);diagnosticSelection=selected?.scriptId??null;diagnostics?.selectionCommitted(diagnosticSelection);}catch{/* Untrusted fire-and-forget messages cannot alter host authority. */}});
-  ipcMain.on('manager:documentReady',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);requireValid(body,none,'document ready');rendererReady=true;deliverPreferences();}catch{/* No authority for invalid readiness signals. */}});
+  ipcMain.on('manager:documentReady',(event,envelope:unknown)=>{try{const {lease,body}=guard!.validate(event,envelope);requireValid(body,none,'document ready');documentLease=lease;rendererReady=true;deliverPreferences();}catch{/* No authority for invalid readiness signals. */}});
+  ipcMain.on('manager:administrationProvider',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);const value=requireValid<{registered:boolean}>(body,shape({registered:bool}),'administration provider');preflight.register(value.registered);}catch{/* Unauthenticated registration cannot enable preflight. */}});
+  ipcMain.on('manager:administrationPreflightReply',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);const value=requireValid<{request:{operationId:string;phase:'begin'|'commit';nonce:string};value:AdministrationUiGuard|null}>(body,shape({request:shape({operationId:guid,phase:oneOf('begin','commit'),nonce:guid}),value:nullable(shape({dirtyDrafts:bool,dialogOpen:bool,pendingWork:bool}))}),'administration preflight');preflight.reply(value.request,value.value);}catch{/* Malformed or obsolete replies cannot authorize Begin or Commit. */}});
 }

@@ -11,7 +11,12 @@ public sealed record ResponseFrame(int Version, string Kind, string? Id, string 
 public sealed record EmptyPayload;
 public sealed record HelloPayload(int ParentPid, long ParentCreated);
 public sealed record HelloResult(int ProtocolVersion, string ProfileRoot, string HostExecutable);
-public sealed record ParentProof(int ParentPid, long ParentCreated, string ParentExecutable, int ChildPid, long ChildCreated, string UserSid, int SessionId);
+public enum AuthorityMode { Normal, Administrator }
+public enum ElevationState { PendingApproval, Ready, CommitPending, CommitAcked, Cancelled, Denied, Failed, Expired, Completed, Unknown }
+public sealed record ParentProof(int ParentPid, long ParentCreated, string ParentExecutable, int ChildPid, long ChildCreated, string UserSid, int SessionId, AuthorityMode AuthorityMode);
+public sealed record ElevationOperationPayload(Guid OperationId);
+public sealed record ElevationStatusPayload(Guid OperationId, long AfterRevision);
+public sealed record ElevationStatus(Guid OperationId, long Revision, ElevationState State, ReasonCode? Reason, Guid? ReceiptId, bool CanResumeNormal);
 public sealed record PathsPayload(string[] Paths);
 public sealed record PathPayload(string Path);
 public sealed record ScriptPayload(Guid ScriptId);
@@ -66,6 +71,8 @@ public static class Protocol
             MaxDepth = 64
         };
         options.Converters.Add(new DecimalInt64Converter());
+        options.Converters.Add(new JsonStringEnumConverter<AuthorityMode>(allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<ElevationState>(allowIntegerValues: false));
         options.Converters.Add(new JsonStringEnumConverter<ScriptStatus>(allowIntegerValues: false));
         options.Converters.Add(new JsonStringEnumConverter<ExecutionOrigin>(allowIntegerValues: false));
         options.Converters.Add(new JsonStringEnumConverter<Outcome>(allowIntegerValues: false));

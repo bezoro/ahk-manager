@@ -26,7 +26,7 @@ public static class ScriptViews
             _ => scripts.OrderBy(s => s.FriendlyName, StringComparer.CurrentCultureIgnoreCase)
         };
         var visible = scripts.ToImmutableArray();
-        Guid? selected = selectedId.HasValue && visible.Any(s => s.Id == selectedId && s.Status != ScriptStatus.Unknown) ? selectedId : null;
+        Guid? selected = selectedId.HasValue && visible.Any(s => s.Id == selectedId) ? selectedId : null;
         return new(visible.Select(s => s.Id).ToImmutableArray(), selected, state.Revision, query.Version);
     }
 }

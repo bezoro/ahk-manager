@@ -32,6 +32,7 @@
     <Compile Include="../Presentation.WinUI/Infrastructure/EffectOwner.cs" Link="Core/Infrastructure/EffectOwner.cs" />
     <Compile Include="../Presentation.WinUI/Infrastructure/ProcessObservation.cs" Link="Core/Infrastructure/ProcessObservation.cs" />
     <Compile Include="../Presentation.WinUI/Infrastructure/NativeMethods.Process.cs" Link="Core/Infrastructure/NativeMethods.Process.cs" />
+    <Compile Include="../Presentation.WinUI/Infrastructure/UnelevatedProcessLauncher.cs" Link="Core/Infrastructure/UnelevatedProcessLauncher.cs" />
     <Compile Include="../Presentation.WinUI/Infrastructure/ManualElevation.cs" Link="Core/Infrastructure/ManualElevation.cs" />
   </ItemGroup>
   <ItemGroup><InternalsVisibleTo Include="Tests.Backend" /></ItemGroup>

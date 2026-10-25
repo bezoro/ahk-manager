@@ -1,8 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AhkManagerApi, HostState, ThemeState } from '../shared/contracts.js';
-import { activity, array, bool, catalogResult, guid, importPreview, nullable, object, oneOf, operationResult, shape, snapshot, text, requireValid, type Validator } from '../shared/validation.js';
+import type { AdministrationUiGuard, AhkManagerApi, HostState, ThemeState } from '../shared/contracts.js';
+import { activity, array, authorityMode, bool, catalogResult, guid, importPreview, nullable, object, oneOf, operationResult, shape, snapshot, text, requireValid, type Validator } from '../shared/validation.js';
 
-const hostState=shape({snapshot:nullable(snapshot),connection:oneOf('starting','ready','failed','closing'),error:nullable(text()),busy:bool});
+const hostState=shape({snapshot:nullable(snapshot),connection:oneOf('starting','ready','failed','closing'),error:nullable(text()),busy:bool,authorityMode:nullable(authorityMode),administrationPending:bool});
+const uiGuard=shape({dirtyDrafts:bool,dialogOpen:bool,pendingWork:bool});
+const preflightRequest=shape({operationId:guid,phase:oneOf('begin','commit'),nonce:guid});
+let preflightProvider:(()=>AdministrationUiGuard)|null=null;
+ipcRenderer.on('manager:administrationPreflight',(_event,envelope:unknown)=>{
+  if(!object(envelope)||envelope.token!==token||!preflightRequest(envelope.body)||!preflightProvider)return;
+  let value:AdministrationUiGuard|null=null;
+  try{value=requireValid<AdministrationUiGuard>(preflightProvider(),uiGuard,'administration UI guard');}catch{/* An unavailable provider refuses authority. */}
+  ipcRenderer.send('manager:administrationPreflightReply',{token,body:{request:envelope.body,value}});
+});
 const themeState=shape({dark:bool,highContrast:bool,reducedMotion:bool,accent:text(16),material:oneOf('mica','solid')});
 let tokenPromise:Promise<string>|null=null;
 let token:string|null=null;
@@ -26,6 +35,12 @@ function subscribe<T>(channel:string,listener:(value:T)=>void,validate:(value:un
   return ()=>ipcRenderer.removeListener(channel,handler);
 }
 const api:AhkManagerApi={
+  requestAdministration:()=>checked('requestAdministration',{},operationResult),
+  onAdministrationPreflight:provider=>{
+    preflightProvider=provider;
+    void connect().then(value=>{if(preflightProvider===provider)ipcRenderer.send('manager:administrationProvider',{token:value,body:{registered:true}});});
+    return ()=>{if(preflightProvider!==provider)return;preflightProvider=null;void connect().then(value=>{if(!preflightProvider)ipcRenderer.send('manager:administrationProvider',{token:value,body:{registered:false}});});};
+  },
   getState:async()=>requireValid<HostState>(await invoke('getState'),hostState,'host state'),
   onState:listener=>subscribe('manager:state',listener,hostState),
   refresh:()=>checked('refresh',{},empty),addFiles:()=>checked('addFiles',{},nullable(catalogResult)),addFolder:()=>checked('addFolder',{},nullable(catalogResult)),

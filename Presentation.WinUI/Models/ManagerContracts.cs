@@ -30,7 +30,20 @@ public sealed record ProcessIdentity(int Pid, long CreationFileTime, string Exec
     string ScriptPath, string UserSid, int SessionId, string ScriptHash = "", string InterpreterHash = "");
 public sealed record ProcessSnapshot(ProcessIdentity Identity, ExecutionOrigin Origin,
     string InterpreterVersion, DateTimeOffset StartedAt, bool? Paused = null, bool? Suspended = null,
-    bool WindowVerified = false);
+    bool WindowVerified = false, ReasonCode? ControlUnavailableReason = null)
+{
+    public ReasonCode? ControlUnavailableReason
+    {
+        get;
+        init => field = Normalize(value);
+    } = Normalize(ControlUnavailableReason);
+    static ReasonCode? Normalize(ReasonCode? reason) => reason switch
+    {
+        null or ReasonCode.None => null,
+        ReasonCode.AccessDenied or ReasonCode.ManualElevationRequired => reason,
+        _ => throw new ArgumentOutOfRangeException(nameof(reason))
+    };
+}
 public sealed record HotkeySnapshot(string Chord, string NormalizedChord, HotkeyOrigin Origin,
     string? Context = null, string? SourcePath = null, int? Line = null, bool IsRemap = false,
     bool PossibleConflict = false);
@@ -57,8 +70,20 @@ public sealed record ActivitySnapshot(Guid Id, DateTimeOffset Timestamp, Guid? S
 public sealed record ManagerSnapshot(long Revision, ImmutableArray<ScriptSnapshot> Scripts,
     ImmutableArray<CollectionSnapshot> Collections, ManagerSettings Settings,
     ImmutableArray<ActivitySnapshot> Activity, ImmutableArray<Issue> Issues,
-    bool ReadOnly, bool EffectsAvailable, DateTimeOffset? ObservedAt)
+    bool ReadOnly, bool EffectsAvailable, DateTimeOffset? ObservedAt,
+    ReasonCode? NormalLaunchUnavailableReason = null)
 {
+    public ReasonCode? NormalLaunchUnavailableReason
+    {
+        get;
+        init => field = NormalizeLaunchReason(value);
+    } = NormalizeLaunchReason(NormalLaunchUnavailableReason);
+    static ReasonCode? NormalizeLaunchReason(ReasonCode? reason) => reason switch
+    {
+        null or ReasonCode.None => null,
+        ReasonCode.AccessDenied or ReasonCode.CapabilityUnverified => reason,
+        _ => throw new ArgumentOutOfRangeException(nameof(reason))
+    };
     public static ManagerSnapshot Empty { get; } = new(0, [], [], new(), [], [], false, false, null);
     public int RunningCount => Scripts.Count(s => s.Status == ScriptStatus.Running);
     public int ProblemCount => Issues.Length + Scripts.Sum(s => s.Issues.Length);

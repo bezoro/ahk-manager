@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { HostState, ThemeState } from '../shared/contracts.js';
 
-const initial: HostState = { snapshot: null, connection: 'starting', busy: false, error: null };
+const initial: HostState = { snapshot: null, connection: 'starting', busy: false, error: null, authorityMode: null, administrationPending: false };
 const initialTheme: ThemeState = { dark: matchMedia('(prefers-color-scheme:dark)').matches, highContrast: matchMedia('(forced-colors:active)').matches, reducedMotion: matchMedia('(prefers-reduced-motion:reduce)').matches, accent: '', material: 'solid' };
 export function useHost(): HostState {
   const [state, setState] = React.useState(initial);

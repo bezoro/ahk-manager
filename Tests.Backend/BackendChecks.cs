@@ -19,8 +19,75 @@ internal static class BackendChecks
     static async Task<ResponseFrame> Receive(FrameReader reader) => JsonSerializer.Deserialize(await reader.ReadAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)) ?? throw new IOException(), Protocol.Json.ResponseFrame)!;
     public static async Task RunAsync(string root)
     {
-        await Framing(); await HostBoundaries(); await QueueAndDeadlines(); await Tokens(root); await Migration(root); Startup(root); StartupCommandChecks.Run(root, Check); await HeaderSnapshotAsync(root);
+        ObservationInventory(); OwnedAhkChecks.ScopeChecks(root, Check); await ElevationChecks.RunAsync(Check); await Framing(); await HostBoundaries(); await QueueAndDeadlines(); await Tokens(root); await Migration(root); Startup(root); StartupCommandChecks.Run(root, Check); await HeaderSnapshotAsync(root);
         Console.WriteLine("BACKEND checks=" + count);
+    }
+    static void ObservationInventory()
+    {
+        var source = new OpaqueObservation();
+        var held = ProcessObservation.Read([@"C:\fixtures\renamed-interpreter.exe"], out bool complete, out var issues, CancellationToken.None, source);
+        try { Check(!complete && issues.Any(i => i.Code == ReasonCode.ObservationIncomplete), "renamed configured opaque interpreter cannot disappear as complete inventory"); }
+        finally { foreach (var item in held) item.Handle.Dispose(); }
+        var ordinary = new InventoryRows(new(int.MaxValue, "ordinary-host.exe", null, null, null, System.Diagnostics.Process.GetCurrentProcess().SessionId));
+        held = ProcessObservation.Read([], out complete, out issues, CancellationToken.None, ordinary);
+        try { Check(complete && held.Count == 0 && issues.IsEmpty, "unrelated inaccessible process does not freeze the recognized interpreter inventory"); }
+        finally { foreach (var item in held) item.Handle.Dispose(); }
+        InventoryRelevance();
+    }
+    static void InventoryRelevance()
+    {
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        var ordinary = new ProcessCommandRow(int.MaxValue, "ordinary-host.exe", null, null, null, self.SessionId);
+        string renamed = @"C:\fixture\renamed-interpreter.exe";
+        foreach (var row in new[]
+        {
+            ordinary with { Name = "AUTOHOTKEY.EXE" }, ordinary with { Name = "autohotkey64.EXE" }, ordinary with { Name = "AutoHotkey32.exe" },
+            ordinary with { Name = "renamed-interpreter.EXE" }, ordinary with { ExecutablePath = renamed },
+            ordinary with { CommandLine = "\"" + renamed + "\" \"C:\\fixture\\inert.ahk\"" },
+            ordinary with { CommandLine = "\"C:\\other\\AutoHotkey64.exe\" \"C:\\fixture\\inert.ahk\"" }
+        })
+        {
+            Check(ProcessRelevance.IsCandidate(row, [renamed], null, "Other product"), "recognized path basename or argv signal survives unrelated product metadata");
+            var held = ProcessObservation.Read([renamed], out bool complete, out var issues, CancellationToken.None, new InventoryRows(row));
+            try { Check(!complete && held.Count == 0 && issues.Any(i => i.Code == ReasonCode.ObservationIncomplete), "recognized inaccessible candidate cannot prove absence or authorize adoption"); }
+            finally { foreach (var item in held) item.Handle.Dispose(); }
+        }
+        Check(ProcessRelevance.IsCandidate(ordinary, [renamed], renamed, null), "native configured renamed image remains relevant with null WMI and no token proof");
+        var readableImage = ProcessObservation.Read([renamed], out bool readableComplete, out var readableIssues, CancellationToken.None, new InventoryRows(ordinary), readImage: _ => renamed);
+        try { Check(!readableComplete && readableImage.Count == 0 && readableIssues.Any(i => i.Code == ReasonCode.ObservationIncomplete), "readable configured native image with unavailable full identity stays incomplete and unadopted"); }
+        finally { foreach (var item in readableImage) item.Handle.Dispose(); }
+        var unreadableMetadata = ProcessObservation.Read([], out bool metadataComplete, out _, CancellationToken.None, new InventoryRows(ordinary), readImage: _ => @"C:\fixture\absent-ordinary-image.exe");
+        try { Check(metadataComplete && unreadableMetadata.Count == 0, "metadata read failure for an unrecognized native image does not freeze the catalog"); }
+        finally { foreach (var item in unreadableMetadata) item.Handle.Dispose(); }
+        Check(ProcessRelevance.IsCandidate(ordinary, [], @"C:\renamed\worker.exe", "AutoHotkey v2"), "native AutoHotkey product is a positive relevance signal only");
+        foreach (string? product in new string?[] { null, "", "Ordinary product" })
+            Check(!ProcessRelevance.IsCandidate(ordinary, [renamed], @"C:\ordinary\host.exe", product), "unrelated image with unavailable empty or ordinary product is outside declared domain");
+        Check(!ProcessRelevance.IsCandidate(ordinary with { Name = "AutoHotkeyHelper.exe" }, [], null, null), "interpreter basenames are exact rather than unrestricted prefixes");
+        var incomplete = ProcessObservation.Read([], out bool completeInput, out _, CancellationToken.None, new InventoryRows(ordinary, false));
+        try { Check(!completeInput, "relevance never promotes an incomplete enumeration to complete"); }
+        finally { foreach (var item in incomplete) item.Handle.Dispose(); }
+        var otherSession = ProcessObservation.Read([], out bool completeOther, out _, CancellationToken.None, new InventoryRows(ordinary with { Name = "AutoHotkey64.exe", SessionId = self.SessionId + 1 }));
+        try { Check(completeOther && otherSession.Count == 0, "recognized candidate in independently reported other session does not block"); }
+        finally { foreach (var item in otherSession) item.Handle.Dispose(); }
+        using var native = new NativeProcessIdentity(self.Id);
+        Check(native.TryReadImage(out string image) && ScriptPaths.Equal(image, Environment.ProcessPath) && native.TryRead(out var stamp) && ScriptPaths.Equal(image, stamp.Executable), "partial native image and full identity agree on retained live handle");
+        var hiddenNative = ProcessObservation.Read([image], out bool hiddenComplete, out _, CancellationToken.None, new InventoryRows(ordinary with { Pid = self.Id }));
+        try { Check(!hiddenComplete && hiddenNative.Count == 0, "native configured image is considered before misleading ordinary WMI name but never bypasses interpreter validation"); }
+        finally { foreach (var item in hiddenNative) item.Handle.Dispose(); }
+        var changedImage = ProcessObservation.Read([renamed], out bool changedComplete, out _, CancellationToken.None, new InventoryRows(ordinary with { Pid = self.Id }), readImage: _ => renamed);
+        try { Check(!changedComplete && changedImage.Count == 0, "partial native image conflicting with full retained identity cannot authorize adoption"); }
+        finally { foreach (var item in changedImage) item.Handle.Dispose(); }
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel(); bool observedCancel = false;
+        try { _ = ProcessObservation.Read([], out _, out _, cancelled.Token, new InventoryRows(ordinary)); } catch (OperationCanceledException) { observedCancel = true; }
+        Check(observedCancel, "cancelled inventory remains cancelled without a false complete observation");
+    }
+    sealed class InventoryRows(ProcessCommandRow row, bool complete = true) : IProcessObservationSource
+    {
+        public ObservedProcessCommands Read(CancellationToken ct) => new([row], complete, []);
+    }
+    sealed class OpaqueObservation : IProcessObservationSource
+    {
+        public ObservedProcessCommands Read(CancellationToken ct) => new([new(int.MaxValue, "renamed-interpreter.exe", null, null, null, System.Diagnostics.Process.GetCurrentProcess().SessionId)], true, []);
     }
     static async Task HeaderSnapshotAsync(string root)
     {
@@ -59,6 +126,16 @@ internal static class BackendChecks
     }
     static async Task Framing()
     {
+        var contractIdentity = new ProcessIdentity(1, 1, @"C:\fixture\AHK.exe", @"C:\fixture\safe.ahk", "S-1-fixture", 1);
+        var contractProcess = new ProcessSnapshot(contractIdentity, ExecutionOrigin.External, "2", DateTimeOffset.UnixEpoch, ControlUnavailableReason: ReasonCode.None);
+        Check(contractProcess.ControlUnavailableReason is null && (contractProcess with { ControlUnavailableReason = ReasonCode.None }).ControlUnavailableReason is null && (ManagerSnapshot.Empty with { NormalLaunchUnavailableReason = ReasonCode.None }).NormalLaunchUnavailableReason is null, "optional authority reasons normalize None to null on construction and updates");
+        foreach (var access in new[] { ReasonCode.AccessDenied, ReasonCode.ManualElevationRequired })
+        {
+            var current = contractProcess with { ControlUnavailableReason = access };
+            Check(JsonSerializer.SerializeToElement(current, Protocol.Json.ProcessSnapshot).GetProperty("controlUnavailableReason").GetString() == access.ToString(), "control reason is a strict enum string " + access);
+        }
+        bool invalidAccess = false; try { _ = contractProcess with { ControlUnavailableReason = ReasonCode.DispatchFailed }; } catch (ArgumentOutOfRangeException) { invalidAccess = true; }
+        Check(invalidAccess, "non-whitelisted process access reason cannot leak to wire");
         var huge = ManagerSnapshot.Empty with { Revision = 9007199254740993L };
         var serialized = JsonSerializer.SerializeToElement(huge, Protocol.Json.ManagerSnapshot);
         Check(serialized.GetProperty("revision").GetString() == "9007199254740993", "revision larger than JS integer precision remains exact decimal string");

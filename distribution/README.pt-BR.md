@@ -1,8 +1,10 @@
 # AHK Manager — Windows 11 x64
 
-**Candidato em validação.** Instalação, atualização, desinstalação e execução do programa completo ainda precisam de validação. Este documento descreve o fluxo previsto, sem afirmar aprovação para uso diário.
+**Versão 1.0.3.** A atualização da instalação existente, a abertura e a transferência para administrador foram verificadas no Windows 11. Os testes com AutoHotkey temporário confirmaram execução padrão e elevada. Os limites de validação visual, acessibilidade e login real estão em [VALIDATION.md](../VALIDATION.md).
 
-Execute **AHK-Manager-1.0.0-Setup-x64.exe**. A instalação é por usuário e não exige administrador. O executável instalado é **Bezoro.AhkManager.exe**, acompanhado do runtime Electron e de `backend/AhkManager.Backend.exe`. Não é necessário instalar Node, npm, Visual Studio, SDK ou .NET. O pacote não tem assinatura digital de editor verificado e pode apresentar SmartScreen. Não há atualização automática.
+Execute **AHK-Manager-1.0.3-Setup-x64.exe**. A instalação é por usuário e não exige administrador. O executável instalado é **Bezoro.AhkManager.exe**, acompanhado do runtime Electron e de `backend/AhkManager.Backend.exe`. Não é necessário instalar Node, npm, Visual Studio, SDK ou .NET. O pacote não tem assinatura digital de editor verificado e pode apresentar SmartScreen. Não há atualização automática.
+
+As checkboxes **Iniciar com Windows** e **Administrador** são preferências por script. A segunda exige confirmação manual ao executar; não eleva o processo atual nem ativa UAC no login. Use **Reabrir como administrador** quando o Windows impedir observar ou controlar um processo elevado. Sem acesso suficiente, o estado continua não confirmado.
 
 Para executar scripts, instale AutoHotkey **v2** ou escolha seu executável nas Preferências. Adicionar arquivos não os executa. Editar usa um editor seguro, não a associação Abrir de .ahk.
 
@@ -12,6 +14,6 @@ Início com Windows é opcional e por usuário. Um Manager anterior aberto imped
 
 A interface usa Fluent UI React; os controles web não são WinUI. Moldura, botões da janela, seletores e confirmações usam o Windows. Mica é solicitado pela API suportada, com fundo sólido quando indisponível. Os manifests do pacote identificam seus arquivos e dependências.
 
-A atualização prevista é manual: escolha **Sair do gerenciador**, desinstale a versão anterior preservando os perfis e scripts e instale a nova versão. A atualização in-place é recusada antes de remover arquivos ou alterar a entrada de login. Guarde a distribuição anterior e uma cópia dos dados; depois da reinstalação, confira a preferência de inicialização com Windows e confirme novamente seu registro, se desejar usá-la. O instalador não encerra árvores de processos.
+A atualização é manual: escolha **Sair mantendo os scripts**, desinstale a versão anterior preservando os perfis e scripts e instale a nova versão. A atualização in-place é recusada antes de remover arquivos ou alterar a entrada de login. Guarde a distribuição anterior e uma cópia dos dados; depois da reinstalação, confira a preferência de inicialização com Windows e confirme novamente seu registro, se desejar usá-la. O instalador não encerra árvores de processos.
 
 Para remover, saia do Manager e use o desinstalador do Windows. Ele oferece remover a entrada de login somente se corresponder exatamente a esta instalação, com resposta padrão Não. A remoção verifica a lista exata, hashes e caminhos antes de apagar arquivos; alterações ou redirecionamentos interrompem a operação. Arquivos alheios à lista e diretórios não vazios são preservados. Perfis, backups e scripts permanecem disponíveis; remova esses dados separadamente somente se não quiser mais catálogo, histórico e preferências.
