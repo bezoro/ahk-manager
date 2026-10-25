@@ -1,4 +1,4 @@
-## Descrição do cabeçalho (1.0.2 em staging)
+## Descrição do cabeçalho (1.0.2)
 
 O Inspector usa primeiro as linhas `; @description Texto` do cabeçalho do arquivo raiz, unidas em múltiplas linhas. Sem uma tag não vazia, usa a descrição manual salva. A descrição manual continua editável e independente; o texto derivado não é salvo no catálogo. Edite o cabeçalho no arquivo e pressione F5 para atualizar; não há watcher nem promessa de atualização instantânea.
 
@@ -10,7 +10,7 @@ O Inspector usa primeiro as linhas `; @description Texto` do cabeçalho do arqui
 
 A análise termina no primeiro código ou diretiva não permitida, inclusive `#Include`. Não importa descrições de includes, strings ou comentários de bloco. O limite é de 64 linhas/8192 caracteres de cabeçalho e 4000 de descrição; excesso ou NUL rejeita o valor inteiro e mantém o fallback manual com diagnóstico parcial. A busca usa nome, caminho e descrição efetiva.
 
-Esta seção descreve a candidata1.0.2 em preparação. As referências à instalação e à validação live1.0.1 abaixo são históricas; não significam que1.0.2 já foi instalada.
+A versão 1.0.2 foi revisada, empacotada e instalada no mesmo local, preservando perfil, scripts e inicialização com Windows. O usuário confirmou a descrição ao selecionar um script e a atualização por F5 na janela instalada. As referências à validação visual 1.0.1 abaixo são históricas.
 
 # AHK Manager — Windows 11
 
@@ -18,7 +18,7 @@ Esta seção descreve a candidata1.0.2 em preparação. As referências à insta
 
 Gerenciador de scripts AutoHotkey **v2** para Windows 11 x64. A interface usa Electron, TypeScript, React e Fluent UI; o backend .NET conserva a autoridade de processos, identidade, persistência e recuperação. Os controles Fluent são controles web. A moldura e os botões da janela, seletores de arquivos, confirmações e área de notificação usam integração do Windows. Mica é solicitado pela API suportada no Windows 11 22H2 ou superior; há fundo sólido quando indisponível ou em alto contraste. Tema e cor de destaque acompanham o sistema por padrão.
 
-Instale pelo **AHK-Manager-1.0.1-Setup-x64.exe**, por usuário, sem privilégios administrativos. A pasta instalada contém **Bezoro.AhkManager.exe**, Electron e o backend autossuficiente em `backend/AhkManager.Backend.exe`. Não exige Node, npm, SDK, Visual Studio ou .NET instalado. AutoHotkey v2 é um requisito separado para executar scripts. A distribuição não tem assinatura digital de editor verificado; o Windows pode apresentar SmartScreen. Não há atualização automática.
+Instale pelo **AHK-Manager-1.0.2-Setup-x64.exe**, por usuário, sem privilégios administrativos. A pasta instalada contém **Bezoro.AhkManager.exe**, Electron e o backend autossuficiente em `backend/AhkManager.Backend.exe`. Não exige Node, npm, SDK, Visual Studio ou .NET instalado. AutoHotkey v2 é um requisito separado para executar scripts. A distribuição não tem assinatura digital de editor verificado; o Windows pode apresentar SmartScreen. Não há atualização automática.
 
 Adicionar arquivos apenas cadastra caminhos. Iniciar valida o interpretador e o arquivo. Parar solicita saída normal e confirma o encerramento; OnExit pode recusar. Reiniciar só inicia uma substituição depois da saída comprovada. Não há encerramento forçado automático. Pausa e suspensão são diferentes; funções sem observação comprovável ficam indisponíveis com explicação.
 
@@ -40,6 +40,6 @@ Integração real opcional: `Tests.Backend.exe --ahk-owned --root <pasta-absolut
 
 Ctrl+F pesquisa; F5 atualiza; Tab percorre os controles. Consulte [SAFE-TESTS.md](SAFE-TESTS.md) e [VALIDATION.md](VALIDATION.md).
 
-A atualização é manual: escolha **Sair mantendo os scripts**, desinstale a versão anterior preservando os perfis e scripts e instale a nova versão. Esse fluxo foi validado na substituição 1.0.0 → 1.0.1, preservando o catálogo, os arquivos dos scripts e a entrada de login existente. A atualização in-place é recusada antes de remover arquivos ou alterar a entrada de login. Guarde a distribuição anterior e uma cópia dos dados; depois da reinstalação, confira a preferência de inicialização com Windows e confirme novamente seu registro, se desejar usá-la. O instalador não encerra árvores de processos.
+A atualização é manual: escolha **Sair mantendo os scripts**, desinstale a versão anterior preservando os perfis e scripts e instale a nova versão. Esse fluxo foi validado nas substituições 1.0.0 → 1.0.1 e 1.0.1 → 1.0.2, preservando o catálogo, os arquivos dos scripts e a entrada de login existente. A atualização in-place é recusada antes de remover arquivos ou alterar a entrada de login. Guarde a distribuição anterior e uma cópia dos dados; depois da reinstalação, confira a preferência de inicialização com Windows e confirme novamente seu registro, se desejar usá-la. O instalador não encerra árvores de processos.
 
 Para remover, saia do Manager e use o desinstalador do Windows. Ele oferece remover somente a entrada de login que corresponde exatamente à instalação atual, com confirmação padrão Cancelar/Não. Antes de qualquer remoção, verifica a lista exata de arquivos empacotados, seus hashes e caminhos sem redirecionamento. Arquivos alterados ou caminhos inacessíveis interrompem a remoção; arquivos alheios à lista e diretórios não vazios são preservados. Os perfis, backups e scripts permanecem disponíveis; sua remoção deve ser feita separadamente pelo usuário.
