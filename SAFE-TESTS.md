@@ -10,6 +10,8 @@ O seletor atual `Tests.Backend.exe --inventory-scoped-readonly --root <pasta-abs
 
 O ensaio `--ahk-owned --root <outra-pasta-absoluta-inexistente>` mantém um conjunto fechado de identidades externas comprovadamente anteriores à raiz. Só as exclui da observação do ensaio enquanto identidade e argumentos permanecem iguais; isso não modifica a política de observação do produto. Novas instâncias, identidades alteradas ou informações insuficientes continuam bloqueando uma conclusão segura. Nunca reutilize a raiz de uma tentativa anterior.
 
+A etapa nativa de reciclagem exige o helper Electron de diagnóstico auditado, definido por `AHK_OWNED_TRASH_HELPER`, com caminho e hash fixados no ensaio. Esse helper e seus recibos pertencem à preparação local de validação e não são distribuídos no aplicativo. O comando não constitui um teste portátil sem essas dependências previamente preparadas; os testes comuns de core/backend/Node continuam separados.
+
 Os seletores WinUI abaixo são históricos e não validam a interface Electron:
 
 Feche jogos e Playnite antes dos testes gráficos ou com AutoHotkey. Execute sem elevação. Não use o perfil real nem a pasta publish anterior. O executável Tests.WinUI/bin/x64/Release/net10.0-windows10.0.26100.0/win-x64/Bezoro.AhkManager.WinUI.Tests.exe exige seletor explícito e uma raiz inexistente:

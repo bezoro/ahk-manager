@@ -13,7 +13,9 @@ Para declarar um clique duplo, coloque a anotação imediatamente antes da hotke
 }
 ```
 
-A interface mostra **Clique duplo com o botão esquerdo** como gesto informado pelo script. Uma anotação inválida ou separada da declaração não vira uma afirmação sobre o comportamento do código. Veja os resultados e limites da entrega em [VALIDATION.md](VALIDATION.md).
+A interface mostra **Clique duplo (botão principal do mouse)** como gesto informado pelo script. Uma anotação inválida ou separada da declaração não vira uma afirmação sobre o comportamento do código.
+
+A versão 1.0.4 está instalada no local existente. Os 270 arquivos foram conferidos, com preservação do catálogo, das preferências e da inicialização com Windows. O ciclo real de parada e envio à Lixeira passou em 97 verificações. A captura própria da janela administrativa mostrou os quatro registros, os três atalhos legíveis e o tema **Seguir o sistema**. O script de ícones recebeu a anotação e passou a usar o intervalo de duplo clique configurado no Windows; uma instância já aberta só usa o novo intervalo após seu próximo reinício. Veja os limites em [VALIDATION.md](VALIDATION.md).
 
 ## Versão 1.0.3 — histórico da instalação anterior
 
@@ -66,6 +68,6 @@ Integração real opcional: `Tests.Backend.exe --ahk-owned --root <pasta-absolut
 
 Ctrl+F pesquisa; F5 atualiza; Tab percorre os controles. Consulte [SAFE-TESTS.md](SAFE-TESTS.md) e [VALIDATION.md](VALIDATION.md).
 
-A atualização é manual: escolha **Sair mantendo os scripts**, desinstale a versão anterior preservando os perfis e scripts e instale a nova versão. Esse fluxo foi validado nas substituições 1.0.0 → 1.0.1, 1.0.1 → 1.0.2 e 1.0.2 → 1.0.3, preservando o catálogo, os arquivos dos scripts e a entrada de login existente. A atualização in-place é recusada antes de remover arquivos ou alterar a entrada de login. Guarde a distribuição anterior e uma cópia dos dados; depois da reinstalação, confira a preferência de inicialização com Windows e confirme novamente seu registro, se desejar usá-la. O instalador não encerra árvores de processos.
+A atualização é manual: escolha **Sair mantendo os scripts**, desinstale a versão anterior preservando os perfis e scripts e instale a nova versão. Esse fluxo foi validado nas substituições 1.0.0 → 1.0.1, 1.0.1 → 1.0.2, 1.0.2 → 1.0.3 e 1.0.3 → 1.0.4, preservando o catálogo, os arquivos dos scripts e a entrada de login existente. A atualização in-place é recusada antes de remover arquivos ou alterar a entrada de login. Guarde a distribuição anterior e uma cópia dos dados; depois da reinstalação, confira a preferência de inicialização com Windows e confirme novamente seu registro, se desejar usá-la. O instalador não encerra árvores de processos.
 
 Para remover, saia do Manager e use o desinstalador do Windows. Ele oferece remover somente a entrada de login que corresponde exatamente à instalação atual, com confirmação padrão Cancelar/Não. Antes de qualquer remoção, verifica a lista exata de arquivos empacotados, seus hashes e caminhos sem redirecionamento. Arquivos alterados ou caminhos inacessíveis interrompem a remoção; arquivos alheios à lista e diretórios não vazios são preservados. Os perfis, backups e scripts permanecem disponíveis; sua remoção deve ser feita separadamente pelo usuário.
