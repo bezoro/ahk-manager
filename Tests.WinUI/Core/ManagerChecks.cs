@@ -14,6 +14,7 @@ public static partial class CoreSuite
         Check(interpreters.Length > 0, "environment has a validated real v2 executable for read-only version fixtures");
         string interpreter = interpreters[0].Path;
         InterpreterFixture = interpreter;
+        await HeaderDescriptionsAsync(interpreter);
         var root = Path.Combine(FixtureRoot, "manager-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string script = Path.Combine(root, "ação com espaço.ahk");
@@ -94,6 +95,34 @@ public static partial class CoreSuite
         var wrong = AutoHotkeyDiscovery.Validate(interpreter);
         Check(wrong.Version.StartsWith('2'), "interpreter product metadata establishes actual v2");
         Console.WriteLine("FIXTURE " + root);
+    }
+    static async Task HeaderDescriptionsAsync(string interpreter)
+    {
+        string root = Path.Combine(FixtureRoot, "header-manager"), script = Path.Combine(root, "header.ahk"); Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(script, "; @description original header\n#Requires AutoHotkey v2\n^j::return");
+        var owner = new FakeOwner(root); var processes = new FakeProcesses(owner); var registration = new FakeStartup();
+        var startup = new UserStartupService(registration, Path.Combine(root, "Manager.exe")); string data = Path.Combine(root, "data");
+        await using (var service = new ManagerService(data, owner, processes, startup, Path.Combine(root, "legacy-absent")))
+        {
+            await service.LoadAsync(); var added = await service.AddFilesAsync([script]); Guid id = added.Added.Single();
+            Check(service.Snapshot.Scripts.Single().HeaderDescription == "original header", "Add obtains root header without effects");
+            Check((await service.SaveMetadataAsync(id, new("Header fixture", "manual fallback", null, false, false, false, []))).Succeeded, "manual description saved separately");
+            await File.WriteAllBytesAsync(Path.Combine(root, "bad.ahk"), [0xc3]);
+            await File.WriteAllTextAsync(script, "; @description changed\n; @description second line\n#Include bad.ahk\n^j::return"); await service.RefreshAsync();
+            Check(service.Snapshot.Scripts.Single().HeaderDescription == "changed\nsecond line" && service.Snapshot.Scripts.Single().Description == "manual fallback", "F5 reanalysis changes derived text while preserving manual");
+            await File.WriteAllTextAsync(script, "; @description a\0b\n#Requires AutoHotkey v2"); await service.RefreshAsync(); var invalid = service.Snapshot.Scripts.Single();
+            Check(invalid.HeaderDescription is null && invalid.Description == "manual fallback" && invalid.Issues.Any(i => i.Code == ReasonCode.PartialAnalysis && i.Detail is { Length: <= 128 } detail && !detail.Contains('\0')), "NUL root tag yields bounded safe issue and intact fallback");
+            await File.WriteAllTextAsync(script, "#Requires AutoHotkey v2\n^j::return"); await service.RefreshAsync();
+            Check(service.Snapshot.Scripts.Single().HeaderDescription is null && service.Snapshot.Scripts.Single().Description == "manual fallback", "removed tags immediately restore fallback on refresh");
+            string persisted = await File.ReadAllTextAsync(Path.Combine(data, "settings.json")); Check(!persisted.Contains("HeaderDescription", StringComparison.OrdinalIgnoreCase) && !persisted.Contains("original header"), "derived header never enters persisted settings");
+        }
+        await File.WriteAllTextAsync(script, "; @description reloaded header\n#Requires AutoHotkey v2");
+        await using (var reloaded = new ManagerService(data, owner, processes, startup, Path.Combine(root, "legacy-absent")))
+        {
+            await reloaded.LoadAsync(); Check(reloaded.Snapshot.Scripts.Single().HeaderDescription == "reloaded header" && reloaded.Snapshot.Scripts.Single().Description == "manual fallback", "Load derives fresh header and reloads manual independently");
+            File.Delete(script); await reloaded.RefreshAsync(); Check(reloaded.Snapshot.Scripts.Single().HeaderDescription is null, "missing file clears stale derived header");
+        }
+        Check(processes.Starts == 0 && processes.Controls == 0 && registration.Writes == 0, "header refresh/save/load never starts AHK or writes real/fake startup");
     }
     static SelectionContext Select(ManagerService manager, Guid id) => new(id, new(Version: 7), manager.Snapshot.Revision);
 

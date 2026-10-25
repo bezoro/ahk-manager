@@ -130,7 +130,7 @@ public sealed class ManagerService : IManagerService
             if (entry.LegacyGuard) issues.Add(new(ReasonCode.LegacyGuard, null, entry.Id));
             if (entry.RunAtLogin == true && !document.Settings.LaunchManagerAtLogin) issues.Add(new(ReasonCode.StartupInactive, null, entry.Id));
             var keys = analysis.Hotkeys.AddRange(entry.ManualHotkeys.Select(chord => new HotkeySnapshot(chord, HotkeyAnalyzer.Normalize(chord), HotkeyOrigin.Manual)));
-            scripts.Add(new(entry.Id, entry.Path, entry.FriendlyName, entry.Description, entry.CollectionId, entry.RunAtLogin, entry.RunAsAdministrator, entry.LaunchBlocked, status, matching.Length == 1 ? matching[0] : null, keys, analysis.Coverage, issues.ToImmutable()));
+            scripts.Add(new(entry.Id, entry.Path, entry.FriendlyName, entry.Description, entry.CollectionId, entry.RunAtLogin, entry.RunAsAdministrator, entry.LaunchBlocked, status, matching.Length == 1 ? matching[0] : null, keys, analysis.Coverage, issues.ToImmutable(), analysis.HeaderDescription));
         }
         var global = storageIssues.AddRange(observed.Issues);
         if (!owner.Held || !owner.Trusted) global = global.Add(new(ReasonCode.EffectOwnerUnavailable));

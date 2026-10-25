@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Bezoro.AhkManager.Backend;
 using Bezoro.AhkManager.WinUI.Models;
 using Bezoro.AhkManager.WinUI.Services;
+using Bezoro.AhkManager.WinUI.Infrastructure;
 
 namespace Tests.Backend;
 
@@ -18,8 +19,43 @@ internal static class BackendChecks
     static async Task<ResponseFrame> Receive(FrameReader reader) => JsonSerializer.Deserialize(await reader.ReadAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)) ?? throw new IOException(), Protocol.Json.ResponseFrame)!;
     public static async Task RunAsync(string root)
     {
-        await Framing(); await HostBoundaries(); await QueueAndDeadlines(); await Tokens(root); await Migration(root); Startup(root); StartupCommandChecks.Run(root, Check);
+        await Framing(); await HostBoundaries(); await QueueAndDeadlines(); await Tokens(root); await Migration(root); Startup(root); StartupCommandChecks.Run(root, Check); await HeaderSnapshotAsync(root);
         Console.WriteLine("BACKEND checks=" + count);
+    }
+    static async Task HeaderSnapshotAsync(string root)
+    {
+        string folder = Path.Combine(root, "header-wire"); Directory.CreateDirectory(folder); string path = Path.Combine(folder, "nul.ahk");
+        await File.WriteAllTextAsync(path, "; @description a\0b\n#Requires AutoHotkey v2");
+        using var owner = new HeaderOwner(); var processes = new HeaderProcesses(); var registration = new FakeStartup();
+        await using var service = new ManagerService(Path.Combine(folder, "data"), owner, processes, new UserStartupService(registration, Path.Combine(folder, "Manager.exe")), Path.Combine(folder, "legacy-absent"));
+        await service.LoadAsync(); var added = await service.AddFilesAsync([path]); var id = added.Added.Single();
+        Check((await service.SaveMetadataAsync(id, new("NUL header fixture", "manual fallback survives", null, false, false, false, []))).Succeeded, "header fixture manual metadata persists separately");
+        var snapshot = service.Snapshot; var row = snapshot.Scripts.Single();
+        Check(row.HeaderDescription is null && row.Description == "manual fallback survives" && row.Issues.Any(i => i.Code == ReasonCode.PartialAnalysis && i.Detail is { Length: <= 128 } d && !d.Contains('\0')), "NUL file produces safe null header snapshot with manual fallback");
+        foreach (string? header in new string?[] { null, "Header line1\n<script>literal</script>", new string('x', 4000) })
+        {
+            var value = snapshot with { Scripts = [row with { HeaderDescription = header }] };
+            byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(value, Protocol.Json.ManagerSnapshot);
+            var restored = JsonSerializer.Deserialize(bytes, Protocol.Json.ManagerSnapshot)!;
+            Check(restored.Scripts.Single().HeaderDescription == header && restored.Scripts.Single().Description == row.Description, "source-generated header nullable/text roundtrip preserves manual field");
+        }
+        await File.WriteAllBytesAsync(Path.Combine(root, "header-description-snapshot.json"), JsonSerializer.SerializeToUtf8Bytes(snapshot, Protocol.Json.ManagerSnapshot));
+        Check(processes.Effects == 0 && registration.Writes == 0, "header wire fixture has zero process/startup effects");
+    }
+    sealed class HeaderOwner : IEffectOwner
+    {
+        public bool Held => true; public bool Trusted => true; public string Sid => "S-1-5-21-header-fixture"; public string LoginKey => "header-fixture";
+        public bool Allows(string script, string interpreter) => false;
+        public void Dispose() { }
+    }
+    sealed class HeaderProcesses : IProcessManager
+    {
+        public int Effects; public event EventHandler? Invalidated { add { } remove { } }
+        public bool Supports(ScriptOperation operation) => false;
+        public Task<ObservedProcesses> ObserveAsync(IReadOnlyCollection<string> known, CancellationToken ct = default) => Task.FromResult(new ObservedProcesses([], true, []));
+        public Task<LaunchResult> StartAsync(string interpreter, string script, bool elevated, CancellationToken ct = default) { Effects++; throw new InvalidOperationException("Header fixture cannot launch"); }
+        public Task<OperationResult> ControlAsync(ProcessIdentity expected, ScriptOperation operation, CancellationToken ct = default) { Effects++; throw new InvalidOperationException("Header fixture cannot control"); }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
     static async Task Framing()
     {

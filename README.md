@@ -1,3 +1,17 @@
+## Descrição do cabeçalho (1.0.2 em staging)
+
+O Inspector usa primeiro as linhas `; @description Texto` do cabeçalho do arquivo raiz, unidas em múltiplas linhas. Sem uma tag não vazia, usa a descrição manual salva. A descrição manual continua editável e independente; o texto derivado não é salvo no catálogo. Edite o cabeçalho no arquivo e pressione F5 para atualizar; não há watcher nem promessa de atualização instantânea.
+
+```autohotkey
+; @description Alterna os ícones da área de trabalho.
+; @description Funciona com duplo clique ou Ctrl+Alt+D.
+#Requires AutoHotkey v2.0
+```
+
+A análise termina no primeiro código ou diretiva não permitida, inclusive `#Include`. Não importa descrições de includes, strings ou comentários de bloco. O limite é de 64 linhas/8192 caracteres de cabeçalho e 4000 de descrição; excesso ou NUL rejeita o valor inteiro e mantém o fallback manual com diagnóstico parcial. A busca usa nome, caminho e descrição efetiva.
+
+Esta seção descreve a candidata1.0.2 em preparação. As referências à instalação e à validação live1.0.1 abaixo são históricas; não significam que1.0.2 já foi instalada.
+
 # AHK Manager — Windows 11
 
 **Versão 1.0.1:** a correção da tela cinza foi instalada e validada no Windows 11. Foram verificados lista, detalhes, busca, menus, páginas, temas claro/escuro, fechamento para a bandeja e reabertura da mesma instância. A preferência final é **Seguir o sistema**. A integração com AutoHotkey real passou por 97 verificações com scripts temporários inofensivos. Ainda há limites de aceitação, descritos em [VALIDATION.md](VALIDATION.md); esta não é uma aprovação geral de distribuição.

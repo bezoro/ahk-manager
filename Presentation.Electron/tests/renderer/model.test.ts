@@ -1,7 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ActivitySnapshot, HostState, ManagerSnapshot, ScriptSnapshot } from '../../src/shared/contracts.js';
-import { actionReason, activityAssociation, brandPalette, changeDraft, changeManualDraft, defaultQuery, filterActivity, metadataOf, newDraft, nextQuery, reconcileDraft, rowWindow, visibleScripts } from '../../src/renderer/model.js';
+import { actionReason, activityAssociation, brandPalette, changeDraft, changeManualDraft, defaultQuery, effectiveDescription, filterActivity, metadataOf, newDraft, nextQuery, reconcileDraft, rowWindow, visibleScripts } from '../../src/renderer/model.js';
+
+test('header precedence and effective description search preserve only manual metadata and dirty drafts', () => {
+  const row = script('header', { description: 'manual fallback', headerDescription: 'Cabeçalho\n<script>literal</script>' });
+  assert.equal(effectiveDescription(row), row.headerDescription);
+  assert.equal(metadataOf(row).description, 'manual fallback');
+  const draft = newDraft(row); assert.equal(draft.dirty, false);
+  assert.equal(reconcileDraft(draft, { ...row, headerDescription: 'external refresh' }, new Set()), draft);
+  const dirty = changeDraft(draft, { description: 'unsaved manual' });
+  assert.equal(reconcileDraft(dirty, { ...row, headerDescription: null }, new Set()), dirty);
+  assert.equal(dirty.value.description, 'unsaved manual');
+  assert.equal(visibleScripts(snapshot([row]), { ...defaultQuery(), search: 'literal' }).length, 1);
+  assert.equal(visibleScripts(snapshot([row]), { ...defaultQuery(), search: 'manual fallback' }).length, 0);
+  assert.equal(effectiveDescription({ ...row, headerDescription: null }), 'manual fallback');
+  assert.equal(effectiveDescription({ ...row, headerDescription: '' }), 'manual fallback');
+  assert.equal(visibleScripts(snapshot([{ ...row, headerDescription: null }]), { ...defaultQuery(), search: 'manual fallback' }).length, 1);
+});
 
 // Isolated model fixtures only. Production renders exclusively host snapshots.
 function script(id: string, patch: Partial<ScriptSnapshot> = {}): ScriptSnapshot { return { id, friendlyName: id, path: `C:\\fixture\\${id}.ahk`, description: '', collectionId: null, runAtLogin: null, runAsAdministrator: false, launchBlocked: false, status: 'Stopped', process: null, hotkeys: [], coverage: 'Partial', issues: [], ...patch }; }

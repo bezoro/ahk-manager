@@ -5,7 +5,7 @@ using Bezoro.AhkManager.WinUI.Models;
 
 namespace Bezoro.AhkManager.WinUI.Services;
 
-public sealed record HotkeyAnalysis(ImmutableArray<HotkeySnapshot> Hotkeys, AnalysisCoverage Coverage, ImmutableArray<Issue> Issues);
+public sealed record HotkeyAnalysis(ImmutableArray<HotkeySnapshot> Hotkeys, AnalysisCoverage Coverage, ImmutableArray<Issue> Issues, string? HeaderDescription = null);
 
 public sealed class HotkeyAnalyzer
 {
@@ -15,14 +15,14 @@ public sealed class HotkeyAnalyzer
         var hotkeys = ImmutableArray.CreateBuilder<HotkeySnapshot>();
         var issues = ImmutableArray.CreateBuilder<Issue>();
         HashSet<string> visited = new(StringComparer.OrdinalIgnoreCase);
-        int total = 0; string? context = null;
+        int total = 0; string? context = null, headerDescription = null;
         try
         {
             await Read(scriptPath, 0).ConfigureAwait(false);
-            return new HotkeyAnalysis(hotkeys.ToImmutable(), AnalysisCoverage.Partial, issues.ToImmutable());
+            return new HotkeyAnalysis(hotkeys.ToImmutable(), AnalysisCoverage.Partial, issues.ToImmutable(), headerDescription);
         }
         catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is System.ComponentModel.Win32Exception)
-        { issues.Add(new(ReasonCode.PartialAnalysis, ex.Message)); return new HotkeyAnalysis(hotkeys.ToImmutable(), hotkeys.Count == 0 ? AnalysisCoverage.Unanalysable : AnalysisCoverage.Partial, issues.ToImmutable()); }
+        { issues.Add(new(ReasonCode.PartialAnalysis, ex.Message)); return new HotkeyAnalysis(hotkeys.ToImmutable(), hotkeys.Count == 0 ? AnalysisCoverage.Unanalysable : AnalysisCoverage.Partial, issues.ToImmutable(), headerDescription); }
 
         async Task Read(string path, int depth)
         {
@@ -34,6 +34,11 @@ public sealed class HotkeyAnalyzer
             total += bytes.Length;
             if (total > MaximumBytes) { issues.Add(new(ReasonCode.IncludeLimitReached, path)); return; }
             var text = AutoHotkeyDiscovery.Decode(bytes);
+            if (depth == 0)
+            {
+                var header = ReadHeader(text, ct); headerDescription = header.Description;
+                if (header.Partial) issues.Add(new(ReasonCode.PartialAnalysis, "Cabeçalho inválido ou limite de descrição excedido."));
+            }
             bool blockComment = false, continuation = false;
             int number = 0;
             foreach (var raw in text.Split('\n'))
@@ -70,6 +75,62 @@ public sealed class HotkeyAnalyzer
             }
         }
     }, ct);
+
+    // Uses the root text already decoded for hotkey analysis; no extra file read.
+    public static (string? Description, bool Partial) ReadHeader(string text, CancellationToken ct = default)
+    {
+        const int maximumLines = 64, maximumCharacters = 8192, maximumDescription = 4000;
+        const string marker = "; @description ";
+        List<string> parts = []; int position = text.StartsWith('\uFEFF') ? 1 : 0, lines = 0, characters = 0, length = 0;
+        bool block = false;
+        while (position < text.Length)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (lines == maximumLines || characters == maximumCharacters) return (null, true);
+            int scan = Math.Min(text.Length - position, maximumCharacters - characters + 1);
+            var remaining = text.AsSpan(position, scan);
+            int end = remaining.IndexOfAny('\r', '\n');
+            int count = end < 0 ? remaining.Length : end;
+            if (count > maximumCharacters - characters) return (null, true);
+            var line = remaining[..count];
+            if (line.IndexOf('\0') >= 0) return (null, true);
+            position += count; characters += count; lines++;
+            if (position < text.Length && text[position] is '\r' or '\n')
+            {
+                int newline = text[position] == '\r' && position + 1 < text.Length && text[position + 1] == '\n' ? 2 : 1;
+                if (characters + newline > maximumCharacters) return (null, true);
+                position += newline; characters += newline;
+            }
+            bool originalStart = !block;
+            line = line.TrimStart(" \t");
+            while (block || line.StartsWith("/*", StringComparison.Ordinal))
+            {
+                if (!block) { line = line[2..]; block = true; }
+                int close = line.IndexOf("*/", StringComparison.Ordinal); originalStart = false;
+                if (close < 0) { line = []; break; }
+                line = line[(close + 2)..].TrimStart(" \t"); block = false;
+            }
+            if (line.Length == 0) continue;
+            if (line[0] == ';')
+            {
+                if (originalStart && line.StartsWith(marker, StringComparison.Ordinal))
+                {
+                    string value = line[marker.Length..].Trim().ToString();
+                    if (value.Length > 0)
+                    {
+                        length += value.Length + (parts.Count > 0 ? 1 : 0);
+                        if (length > maximumDescription) return (null, true);
+                        parts.Add(value);
+                    }
+                }
+                continue;
+            }
+            if (Directive(line, "#Requires") || Directive(line, "#SingleInstance")) continue;
+            break;
+        }
+        return (parts.Count == 0 ? null : string.Join('\n', parts), false);
+        static bool Directive(ReadOnlySpan<char> line, string name) => line.StartsWith(name, StringComparison.OrdinalIgnoreCase) && (line.Length == name.Length || line[name.Length] is ' ' or '\t');
+    }
 
     static string StripStringsAndComments(string raw)
     {

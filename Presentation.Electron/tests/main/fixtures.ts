@@ -15,3 +15,5 @@ export function runningSnapshot(count=1):ManagerSnapshot {
     return {...row,process:{identity:{pid:100+i,creationFileTime:String(9007199254740993n+BigInt(i)),executablePath:'C:\\fixtures\\AutoHotkey64.exe',scriptPath:row.path,userSid:'S-1-5-21-fixture',sessionId:7,scriptHash:'a'.repeat(64),interpreterHash:'b'.repeat(64)},origin:'External' as const,interpreterVersion:'2.0.19',startedAt:state.observedAt!,paused:false,suspended:false,windowVerified:true}};
   });state.runningCount=count;return state;
 }
+
+export const withHeaderDescription = (value: string | null): ManagerSnapshot => { const state = snapshot(); state.scripts[0]!.headerDescription = value; return state; };

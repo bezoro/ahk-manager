@@ -37,7 +37,7 @@ public sealed record HotkeySnapshot(string Chord, string NormalizedChord, Hotkey
 public sealed record ScriptSnapshot(Guid Id, string Path, string FriendlyName, string Description,
     Guid? CollectionId, bool? RunAtLogin, bool RunAsAdministrator, bool LaunchBlocked,
     ScriptStatus Status, ProcessSnapshot? Process, ImmutableArray<HotkeySnapshot> Hotkeys,
-    AnalysisCoverage Coverage, ImmutableArray<Issue> Issues);
+    AnalysisCoverage Coverage, ImmutableArray<Issue> Issues, string? HeaderDescription = null);
 public sealed record CollectionSnapshot(Guid Id, string Name);
 public sealed record WindowPlacement(int X = 100, int Y = 100, int Width = 1200, int Height = 780,
     bool Maximized = false, double Dpi = 96);

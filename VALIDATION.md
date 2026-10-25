@@ -1,3 +1,17 @@
+## Descrição do cabeçalho (1.0.2 em staging)
+
+O Inspector usa primeiro as linhas `; @description Texto` do cabeçalho do arquivo raiz, unidas em múltiplas linhas. Sem uma tag não vazia, usa a descrição manual salva. A descrição manual continua editável e independente; o texto derivado não é salvo no catálogo. Edite o cabeçalho no arquivo e pressione F5 para atualizar; não há watcher nem promessa de atualização instantânea.
+
+```autohotkey
+; @description Alterna os ícones da área de trabalho.
+; @description Funciona com duplo clique ou Ctrl+Alt+D.
+#Requires AutoHotkey v2.0
+```
+
+A análise termina no primeiro código ou diretiva não permitida, inclusive `#Include`. Não importa descrições de includes, strings ou comentários de bloco. O limite é de 64 linhas/8192 caracteres de cabeçalho e 4000 de descrição; excesso ou NUL rejeita o valor inteiro e mantém o fallback manual com diagnóstico parcial. A busca usa nome, caminho e descrição efetiva.
+
+Na candidata 1.0.2: backend fake 67/67, core fake 185/185, Node 108/108 (zero skips), typecheck e harness isolado 20/20 passaram. O bundle frontend e o publish Release self-contained foram gerados em staging fresco. Os registros schema1 vinculam fontes, ferramentas, comandos e logs completos. O harness comprovou precedência/fallback, draft intacto, HTML escapado e multiline; as capturas próprias claro/escuro têm transparência nas áreas Mica e não substituem prova de composição nativa. A validação visual live histórica 1.0.1 permanece separada e não prova instalação nem aparência da 1.0.2. A instalação/aplicação e a revisão independente da candidata 1.0.2 continuam pendentes nesta preparação. Nenhum script AHK real é executado por estes checks.
+
 # Validação
 
 ## Electron 1.0.1 — validação em 23/10/2026

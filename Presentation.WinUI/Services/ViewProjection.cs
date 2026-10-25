@@ -10,7 +10,7 @@ public static class ScriptViews
         IEnumerable<ScriptSnapshot> scripts = state.Scripts;
         if (query.CollectionId.HasValue) scripts = scripts.Where(s => s.CollectionId == query.CollectionId);
         string term = query.Search.Trim();
-        if (term.Length > 0) scripts = scripts.Where(s => (s.FriendlyName + " " + s.Path + " " + s.Description).Contains(term, StringComparison.CurrentCultureIgnoreCase));
+        if (term.Length > 0) scripts = scripts.Where(s => (s.FriendlyName + " " + s.Path + " " + (string.IsNullOrWhiteSpace(s.HeaderDescription) ? s.Description : s.HeaderDescription)).Contains(term, StringComparison.CurrentCultureIgnoreCase));
         scripts = query.Status switch
         {
             StatusFilter.Running => scripts.Where(s => s.Status == ScriptStatus.Running),

@@ -2,9 +2,35 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
+import fs from 'node:fs';
+import { snapshot as validateSnapshot } from '../../src/shared/validation.js';
 import { BackendClient, MAX_FRAME, UnknownAfterDispatchError } from '../../src/main/backend.js';
-import { snapshot } from './fixtures.js';
+import { snapshot, withHeaderDescription } from './fixtures.js';
 const nonce='a'.repeat(64),host='C:\\App\\Bezoro.AhkManager.exe';
+
+test('strict additive header field accepts absent/null/4000 and rejects forged type/NUL/length/unknown properties', () => {
+  const base = snapshot();
+  for (const value of [undefined, null, 'line1\n<script>literal</script>', 'x'.repeat(4000)]) {
+    const state = value === undefined ? structuredClone(base) : withHeaderDescription(value);
+    assert.equal(validateSnapshot(state), true);
+  }
+  for (const value of [42, {}, 'a\0b', 'x'.repeat(4001)]) {
+    const state = structuredClone(base); (state.scripts[0] as any).headerDescription = value;
+    assert.equal(validateSnapshot(state), false);
+  }
+  const forged = structuredClone(base); (forged.scripts[0] as any).unknownHeader = 'forged'; assert.equal(validateSnapshot(forged), false);
+});
+
+test('actual source-generated NUL-file snapshot stays valid through broker subscription and connection', { skip: !process.env.AHK_HEADER_SNAPSHOT_INPUT }, async () => {
+  const path = process.env.AHK_HEADER_SNAPSHOT_INPUT; assert.ok(path, 'Bind the backend fake snapshot artifact for this integrated check');
+  const state = JSON.parse(fs.readFileSync(path, 'utf8')) as ReturnType<typeof snapshot>;
+  assert.equal(validateSnapshot(state), true); assert.equal(state.scripts[0]!.headerDescription, null); assert.equal(state.scripts[0]!.description, 'manual fallback survives');
+  assert.ok(state.scripts[0]!.issues.some(issue => issue.code === 'PartialAnalysis' && !issue.detail?.includes('\0')));
+  const { client, child, envelope } = setup(); await client.start(); let observed: unknown = null;
+  client.on('snapshot', value => { observed = value; });
+  child.stdout.write(JSON.stringify(envelope('snapshot', null, state, 'snapshot')) + '\n');
+  assert.deepEqual(observed, state); assert.equal(client.ready, true); await client.shutdown();
+});
 function setup(options:{proof?:Record<string,unknown>;ignore?:string;invalid?:string;exitOnEnd?:boolean;noShutdownExit?:boolean;failedSpawn?:boolean}={}){
   const calls:any[]=[];const child=new EventEmitter() as any;child.pid=options.failedSpawn?undefined:9001;child.stdout=new PassThrough();child.stderr=new PassThrough();
   const envelope=(action:string,id:string|null,payload:unknown,kind='response')=>({version:1,kind,id,session:nonce,action,code:'Ok',payload,error:null});

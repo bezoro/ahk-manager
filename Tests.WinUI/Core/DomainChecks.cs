@@ -29,6 +29,7 @@ public static partial class CoreSuite
         Directory.CreateDirectory(root);
         var path = System.IO.Path.Combine(root, "main.ahk");
         await CheckRequirementsAsync(root);
+        await CheckHeaderDescriptionsAsync(root);
         await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2.0\n; ^x:: comment\ntext := \"^z:: fake\"\n^!a::MsgBox 'ok'\n#HotIf WinActive('Example')\nF2::return\n#Include missing.ahk\nHotkey('F3', (*) => 0)\na::b\n");
         var result = await new HotkeyAnalyzer().AnalyzeAsync(path);
         Check(result.Hotkeys.Any(h => h.NormalizedChord == HotkeyAnalyzer.Normalize("!^a")), "static declaration detected");
@@ -37,6 +38,63 @@ public static partial class CoreSuite
         Check(result.Hotkeys.Any(h => h.Chord == "a" && h.IsRemap), "remap distinct from ordinary hotkey");
         Check(result.Issues.Any(i => i.Code == ReasonCode.IncludeUnresolved) && result.Issues.Any(i => i.Code == ReasonCode.DynamicHotkeys), "unresolved include and dynamic hotkeys keep analysis partial");
         Console.WriteLine("FIXTURE " + root);
+    }
+
+    static async Task CheckHeaderDescriptionsAsync(string root)
+    {
+        foreach (var (body, expected) in new (string, string?)[]
+        {
+            ("; @description first\n#Requires AutoHotkey v2\n\t ; @description second  \n#SingleInstance Off\n; @description   \nMsgBox 'body'\n; @description hidden", "first\nsecond"),
+            ("\uFEFF; ordinary\n\n; @description only", "only"),
+            ("; @Description wrong\n;@description wrong\n;  @description wrong\n; @description\twrong", null),
+            ("; @description \n; @description    ", null),
+            ("/* ; @description hidden */\n/*\n; @description hidden\n*/\n; @description root", "root"),
+            ("; @description first\n/* ignored */ MsgBox 'code'\n; @description hidden", "first"),
+            ("/* ignored */ ; @description not-at-physical-start\n; @description root", "root"),
+            ("#RequiresExtra v2\n; @description hidden", null),
+            ("#SingleInstanceExtra Off\n; @description hidden", null),
+            ("#Include include.ahk\n; @description hidden", null),
+            ("text := '; @description string'\n; @description body", null),
+            ("(\n; @description continuation\n)", null),
+            ("; @description first\r\n; @description second\r#Requires v2", "first\nsecond")
+        })
+        {
+            var parsed = HotkeyAnalyzer.ReadHeader(body);
+            Check(parsed.Description == expected && !parsed.Partial, "header grammar root/physical-line boundary " + expected);
+        }
+        foreach (string body in new[] { "; @description a\0b", "; @description valid\n; ordinary\0comment", "; @description " + new string('x', 4001), "; @description valid\n" + new string('\n', 64), "; @description valid\n;" + new string('x', 8192) })
+        {
+            var parsed = HotkeyAnalyzer.ReadHeader(body);
+            Check(parsed.Description is null && parsed.Partial, "invalid/over-limit header rejects whole derived value");
+        }
+        Check(HotkeyAnalyzer.ReadHeader("; @description " + new string('x', 4000)).Description?.Length == 4000, "header description exact4000 boundary");
+        Check(HotkeyAnalyzer.ReadHeader("; @description exact\n" + new string('\n', 63)).Description == "exact", "header exact64physical lines boundary");
+        string path = System.IO.Path.Combine(root, "description.ahk");
+        foreach (var encoding in new System.Text.Encoding[] { new System.Text.UTF8Encoding(false, true), new System.Text.UTF8Encoding(true, true), new System.Text.UnicodeEncoding(false, true, true), new System.Text.UnicodeEncoding(true, true, true) })
+        {
+            string body = "; @description Texto Unicode 漢字\n#Requires AutoHotkey v2\n^j::return\n";
+            await File.WriteAllBytesAsync(path, encoding.GetPreamble().Concat(encoding.GetBytes(body)).ToArray());
+            var result = await new HotkeyAnalyzer().AnalyzeAsync(path);
+            Check(result.HeaderDescription == "Texto Unicode 漢字" && result.Hotkeys.Any(h => h.Chord == "^j"), "header decode reuses UTF8/BOM/UTF16 and preserves hotkeys " + encoding.WebName);
+        }
+        string include = System.IO.Path.Combine(root, "header-include.ahk");
+        await File.WriteAllBytesAsync(include, [0xc3]);
+        await File.WriteAllTextAsync(path, "; @description root survives\n#Include header-include.ahk\n; @description hidden");
+        var included = await new HotkeyAnalyzer().AnalyzeAsync(path);
+        Check(included.HeaderDescription == "root survives" && included.Issues.Any(i => i.Code == ReasonCode.IncludeUnresolved), "invalid include cannot erase valid root header");
+        await File.WriteAllTextAsync(include, "; @description never root");
+        await File.WriteAllTextAsync(path, "#Include header-include.ahk");
+        Check((await new HotkeyAnalyzer().AnalyzeAsync(path)).HeaderDescription is null, "included description never becomes root header");
+        await File.WriteAllBytesAsync(path, [0xc3]);
+        Check((await new HotkeyAnalyzer().AnalyzeAsync(path)).HeaderDescription is null, "invalid decoding leaves absent header");
+        Check((await new HotkeyAnalyzer().AnalyzeAsync(path + ".missing.ahk")).HeaderDescription is null, "read failure leaves absent header");
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel(); bool propagated = false;
+        try { await new HotkeyAnalyzer().AnalyzeAsync(path, cancelled.Token); } catch (OperationCanceledException) { propagated = true; }
+        Check(propagated, "header analysis cancellation propagates");
+        var id = Guid.NewGuid(); var state = ManagerSnapshot.Empty with { Scripts = [Row(id, "header", ScriptStatus.Stopped) with { Description = "manual hidden", HeaderDescription = "automatic match" }] };
+        Check(ScriptViews.Project(state, new(Search: "automatic match"), id).EffectiveSelectedId == id && ScriptViews.Project(state, new(Search: "manual hidden"), id).VisibleIds.Length == 0, "backend search uses effective header and selection");
+        state = state with { Scripts = [state.Scripts[0] with { HeaderDescription = null }] };
+        Check(ScriptViews.Project(state, new(Search: "manual hidden"), id).EffectiveSelectedId == id, "backend search restores manual fallback");
     }
 
     static async Task CheckRequirementsAsync(string root)

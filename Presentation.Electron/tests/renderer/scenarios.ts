@@ -141,5 +141,30 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     if (innerWidth <= 900) { button(text.hideDetails, inspector).click(); await tick(); assert(inspector.hidden, 'Details did not close'); verify(); button(text.details).click(); await tick(); assert(!inspector.hidden, 'Details did not reopen'); }
     noticeDetails.open = false; analysis.open = false; metadata.open = false; workspace.scrollTop = 0; await tick(); verify(); await window.fixtureHarness.resetResponses();
   });
+  await check('root header is escaped multiline primary text; refresh/removal preserve editable manual fallback draft', async () => {
+    button(text.scripts).click(); const search = document.querySelector<HTMLInputElement>('input[aria-label="Pesquisar scripts"]'); if (search) edit(search, '');
+    const header = '<script>literal sem executar</script>\nSegunda linha — ' + 'palavra'.repeat(110);
+    const withHeader: HostState = { ...host, snapshot: { ...host.snapshot!, scripts: [{ ...host.snapshot!.scripts[0]!, description: 'Manual persistida', headerDescription: header }, host.snapshot!.scripts[1]!] } };
+    await window.fixtureHarness.setState(withHeader); selectScript(withHeader.snapshot!.scripts[0]!.id); await until(() => !!document.getElementById('draft-description'), 'Description editor missing');
+    const panel = document.querySelector<HTMLElement>('.inspector')!; const discard = button(text.discard, panel); if (!discard.disabled) { discard.click(); await tick(); }
+    const metadata = panel.querySelector<HTMLDetailsElement>('.metadata-expander')!; metadata.open = true;
+    const manual = document.getElementById('draft-description') as HTMLTextAreaElement;
+    assert(String(manual.value) === 'Manual persistida', 'Header overwrote manual metadata');
+    assert(panel.textContent?.includes(text.headerDescription) && panel.textContent.includes(text.headerDescriptionHint), 'Header source/edit guidance missing');
+    edit(manual, 'Manual em edição'); await tick(); await window.fixtureHarness.clearCalls();
+    for (const dark of [false, true]) {
+      await window.fixtureHarness.setTheme({ ...light, dark }); await tick();
+      const paragraph = panel.querySelector<HTMLElement>('.description')!;
+      assert(paragraph.textContent === header && !paragraph.querySelector('script,img'), 'Header HTML interpreted instead of escaped');
+      assert(getComputedStyle(paragraph).whiteSpace === 'pre-wrap' && getComputedStyle(paragraph).overflowWrap === 'anywhere', 'Header multiline/wrapping lost');
+      assert(paragraph.scrollWidth <= paragraph.clientWidth + 1 && paragraph.scrollHeight <= paragraph.clientHeight + 1, 'Header text clipped');
+    }
+    await window.fixtureHarness.setState({ ...withHeader, snapshot: { ...withHeader.snapshot!, revision: '9007199254741800', scripts: [{ ...withHeader.snapshot!.scripts[0]!, headerDescription: 'Cabeçalho atualizado' }, withHeader.snapshot!.scripts[1]!] } }); await tick();
+    assert(manual.value === 'Manual em edição' && panel.querySelector('.description')?.textContent === 'Cabeçalho atualizado', 'External header refresh replaced dirty manual draft');
+    await window.fixtureHarness.setState({ ...withHeader, snapshot: { ...withHeader.snapshot!, scripts: [{ ...withHeader.snapshot!.scripts[0]!, headerDescription: null }, withHeader.snapshot!.scripts[1]!] } }); await tick();
+    assert(panel.querySelector('.description')?.textContent === 'Manual persistida' && manual.value === 'Manual em edição', 'Header removal did not restore snapshot manual fallback independently');
+    assert(!(await window.fixtureHarness.calls()).some(call => call.method === 'saveMetadata'), 'Derived refresh persisted without explicit save');
+    await window.fixtureHarness.setState(withHeader); await tick(); metadata.open = false; panel.scrollTop = 0;
+  });
   return results;
 }

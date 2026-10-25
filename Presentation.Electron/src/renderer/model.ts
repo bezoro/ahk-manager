@@ -2,10 +2,11 @@ import type { ActivitySnapshot, HostState, ManagerSnapshot, ScriptMetadata, Scri
 
 export const defaultQuery = (): ScriptQuery => ({ search: '', status: 'All', sort: 'Name', collectionId: null, version: '0' });
 export const nextQuery = (query: ScriptQuery, patch: Partial<Omit<ScriptQuery, 'version'>>): ScriptQuery => ({ ...query, ...patch, version: (BigInt(query.version) + 1n).toString() });
+export const effectiveDescription = (script: ScriptSnapshot): string => script.headerDescription?.trim() ? script.headerDescription : script.description;
 export function visibleScripts(snapshot: ManagerSnapshot, query: ScriptQuery): ScriptSnapshot[] {
   const search = query.search.trim().toLocaleLowerCase('pt-BR');
   const names = new Map(snapshot.collections.map(c => [c.id, c.name]));
-  return snapshot.scripts.filter(script => (!query.collectionId || script.collectionId === query.collectionId) && (!search || `${script.friendlyName}\n${script.path}`.toLocaleLowerCase('pt-BR').includes(search)) && (query.status === 'All' || query.status === 'Running' && script.status === 'Running' || query.status === 'Stopped' && script.status === 'Stopped' || query.status === 'Problems' && (script.issues.length > 0 || !['Stopped', 'Running'].includes(script.status))))
+  return snapshot.scripts.filter(script => (!query.collectionId || script.collectionId === query.collectionId) && (!search || `${script.friendlyName} ${script.path} ${effectiveDescription(script)}`.toLocaleLowerCase('pt-BR').includes(search)) && (query.status === 'All' || query.status === 'Running' && script.status === 'Running' || query.status === 'Stopped' && script.status === 'Stopped' || query.status === 'Problems' && (script.issues.length > 0 || !['Stopped', 'Running'].includes(script.status))))
     .sort((a, b) => {
       const first = query.sort === 'Status' ? a.status.localeCompare(b.status) : query.sort === 'Collection' ? (names.get(a.collectionId ?? '') ?? '').localeCompare(names.get(b.collectionId ?? '') ?? '', 'pt-BR') : 0;
       return first || a.friendlyName.localeCompare(b.friendlyName, 'pt-BR', { sensitivity: 'base', numeric: true }) || a.id.localeCompare(b.id);
