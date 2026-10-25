@@ -45,6 +45,8 @@ const api:AhkManagerApi={
   onState:listener=>subscribe('manager:state',listener,hostState),
   refresh:()=>checked('refresh',{},empty),addFiles:()=>checked('addFiles',{},nullable(catalogResult)),addFolder:()=>checked('addFolder',{},nullable(catalogResult)),
   removeScript:(scriptId,revision)=>checked('removeScript',{scriptId,revision},operationResult),
+  locateScript:selection=>checked('locateScript',{selection},operationResult),
+  deleteScriptFile:selection=>checked('deleteScriptFile',{selection},operationResult),
   saveMetadata:(scriptId,metadata,revision)=>checked('saveMetadata',{scriptId,metadata,revision},operationResult),
   saveCollection:(collectionId,name)=>checked('saveCollection',{collectionId,name},operationResult),
   removeCollection:(collectionId,revision)=>checked('removeCollection',{collectionId,revision},operationResult),

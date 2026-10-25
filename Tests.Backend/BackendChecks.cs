@@ -107,6 +107,13 @@ internal static class BackendChecks
             Check(restored.Scripts.Single().HeaderDescription == header && restored.Scripts.Single().Description == row.Description, "source-generated header nullable/text roundtrip preserves manual field");
         }
         await File.WriteAllBytesAsync(Path.Combine(root, "header-description-snapshot.json"), JsonSerializer.SerializeToUtf8Bytes(snapshot, Protocol.Json.ManagerSnapshot));
+        await File.WriteAllTextAsync(path, string.Concat(Enumerable.Repeat("; @gesture invalid\n", 200)) + "\n; @gesture double-click\n~RButton Up::return\nF13::return\n");
+        await service.RefreshAsync();
+        var gestureBytes = JsonSerializer.SerializeToUtf8Bytes(service.Snapshot, Protocol.Json.ManagerSnapshot);
+        var gestureSnapshot = JsonSerializer.Deserialize(gestureBytes, Protocol.Json.ManagerSnapshot)!;
+        Check(gestureSnapshot.Scripts.Single().Hotkeys.Any(h => h.Chord == "~RButton Up" && h.DeclaredGesture == DeclaredGesture.DoubleClick) && gestureSnapshot.Scripts.Single().Hotkeys.Any(h => h.Chord == "F13" && h.DeclaredGesture is null), "sourceGenerated strictgesture roundtrip preserves raw and nullable gesture");
+        Check(gestureSnapshot.Scripts.Single().Issues.Count(i => i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true) == 33, "serialized annotation overflow bound across real snapshot");
+        await File.WriteAllBytesAsync(Path.Combine(root, "declared-gesture-snapshot.json"), gestureBytes);
         Check(processes.Effects == 0 && registration.Writes == 0, "header wire fixture has zero process/startup effects");
     }
     sealed class HeaderOwner : IEffectOwner

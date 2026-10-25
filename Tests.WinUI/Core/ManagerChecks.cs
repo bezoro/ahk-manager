@@ -38,6 +38,7 @@ public static partial class CoreSuite
         Check(interpreters.Length > 0, "environment has a validated real v2 executable for read-only version fixtures");
         string interpreter = interpreters[0].Path;
         InterpreterFixture = interpreter;
+        await FileActionsAsync(interpreter);
         await HeaderDescriptionsAsync(interpreter);
         await PreserveInactiveStartupAsync(interpreter);
         var root = Path.Combine(FixtureRoot, "manager-" + Guid.NewGuid().ToString("N"));
@@ -162,6 +163,126 @@ public static partial class CoreSuite
     }
     static SelectionContext Select(ManagerService manager, Guid id) => new(id, new(Version: 7), manager.Snapshot.Revision);
 
+    static async Task FileActionsAsync(string interpreter)
+    {
+        string root = Path.Combine(FixtureRoot, "file-actions"); Directory.CreateDirectory(root);
+        async Task<(ManagerService Manager, FakeProcesses Processes, FakeStartup Startup, string Path)> Create(string name)
+        {
+            string folder = Path.Combine(root, name); Directory.CreateDirectory(folder);
+            string path = Path.Combine(folder, "inert.ahk"); await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2.0\nF13::return\n");
+            var owner = new FakeOwner(folder); var processes = new FakeProcesses(owner); var startup = new FakeStartup();
+            var manager = new ManagerService(Path.Combine(folder, "data"), owner, processes, new UserStartupService(startup, Path.Combine(folder, "Manager.exe")));
+            await manager.LoadAsync(); await manager.AddFilesAsync([path]);
+            return (manager, processes, startup, path);
+        }
+        var locate = await Create("locate");
+        await using (var manager = locate.Manager)
+        {
+            var id = manager.Snapshot.Scripts.Single().Id;
+            var metadata = new ScriptMetadata("Preserved", "description", null, true, true, true, ["Ctrl+F13"]);
+            Check((await manager.SaveMetadataAsync(id, metadata, true)).Succeeded, "file fixture metadata/startup saved through fake boundary");
+            int startupWrites = locate.Startup.Writes;
+            string replacement = Path.Combine(Path.GetDirectoryName(locate.Path)!, "renamed.ahk"); await File.WriteAllTextAsync(replacement, "F13::return");
+            File.Delete(locate.Path); await manager.RefreshAsync();
+            Check(manager.Snapshot.Scripts.Single().Status == ScriptStatus.Missing, "missing row stays selectable");
+            Check((await manager.RelinkAsync(Select(manager, id), locate.Path, replacement, false)).Code == ReasonCode.StartupConsentRequired, "relink startup intent requires explicit consent");
+            var result = await manager.RelinkAsync(Select(manager, id), locate.Path, replacement, true);
+            var row = manager.Snapshot.Scripts.Single();
+            Check(result.Succeeded && row.Id == id && row.Path == replacement && row.FriendlyName == metadata.FriendlyName && row.Description == metadata.Description && row.RunAtLogin == true && row.RunAsAdministrator && row.LaunchBlocked && row.Hotkeys.Any(h => h.Origin == HotkeyOrigin.Manual && h.Chord == "Ctrl+F13"), "relink changes only sameID path and preserves metadata/manual/login/admin/block preferences");
+            Check(locate.Startup.Writes == startupWrites && locate.Processes.Starts == 0 && locate.Processes.Controls == 0, "relink consent performs zero startup/process effects");
+            File.Delete(replacement); await manager.RefreshAsync();
+            var missingSelection = Select(manager, id);
+            Check((await manager.RelinkAsync(missingSelection, replacement, replacement + ".missing.ahk", true)).Code == ReasonCode.InvalidPath && manager.Snapshot.Scripts.Single().Path == replacement, "disappeared picker target preserves registration");
+            string duplicate = Path.Combine(Path.GetDirectoryName(locate.Path)!, "duplicate.ahk"); await File.WriteAllTextAsync(duplicate, "F24::return"); await manager.AddFilesAsync([duplicate]);
+            Check((await manager.RelinkAsync(Select(manager, id), replacement, duplicate.ToUpperInvariant(), true)).Code == ReasonCode.InvalidPath, "relink duplicate canonical path rejected case-insensitively");
+            Check((await manager.RelinkAsync(missingSelection, replacement, duplicate, true)).Code == ReasonCode.StaleSelection, "relink stale revision rejected");
+            await File.WriteAllTextAsync(replacement, "F13::return");
+            Check((await manager.RelinkAsync(Select(manager, id), replacement, duplicate, true)).Code == ReasonCode.StaleSelection && manager.Snapshot.Scripts.Single(s => s.Id == id).Status != ScriptStatus.Missing, "old path reappearing rejects recovery and refreshes missing status");
+        }
+        var targetedFailures = new List<string>();
+        foreach (string scenario in new[] { "cancel", "stopped", "running-failure", "veto", "changed-process", "changed-file", "incomplete", "unknown", "late-receipt", "replacement", "catalog-failure", "post-stop-cancel", "journal-stop-write", "journal-receipt-write" })
+        {
+            var fixture = await Create(scenario); await using var manager = fixture.Manager;
+            var id = manager.Snapshot.Scripts.Single().Id;
+            if (scenario is "running-failure" or "veto" or "changed-process" or "post-stop-cancel" or "journal-stop-write") { fixture.Processes.SetRunning(fixture.Path, interpreter); await manager.RefreshAsync(); }
+            var plan = await manager.PrepareRecycleAsync(Select(manager, id)); Check(plan.Allowed, "prepare recycle without effect " + scenario);
+            Check(fixture.Processes.Controls == 0 && File.Exists(fixture.Path), "prepare never stops or deletes " + scenario);
+            if (scenario == "cancel")
+            {
+                var cancelled = await manager.AuthorizeRecycleAsync(plan.OperationId, plan.Selection, false);
+                Check(cancelled.Result.Outcome == Outcome.CancelledBeforeDispatch && File.Exists(fixture.Path) && manager.Snapshot.Scripts.Length == 1, "defaultCancel keeps file and catalog"); continue;
+            }
+            if (scenario == "veto") fixture.Processes.NextControl = new(Outcome.Unknown, ReasonCode.ExitNotObserved);
+            if (scenario == "changed-process") fixture.Processes.Current = fixture.Processes.Current with { Processes = [fixture.Processes.Current.Processes[0] with { Identity = fixture.Processes.Current.Processes[0].Identity with { CreationFileTime = plan.ExpectedIdentity!.CreationFileTime + 1 } }] };
+            if (scenario == "changed-file") await File.AppendAllTextAsync(fixture.Path, "; changed");
+            if (scenario == "incomplete") fixture.Processes.Current = fixture.Processes.Current with { Complete = false };
+            using var cancellationAfterStop = new CancellationTokenSource(); FileStream? journalWriteLock = null;
+            if (scenario == "post-stop-cancel") fixture.Processes.AfterControl = () => cancellationAfterStop.Cancel();
+            if (scenario == "journal-stop-write") fixture.Processes.AfterControl = () => journalWriteLock = new FileStream(Path.Combine(manager.DataRoot, "operations.json"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            RecycleAuthorization authorized;
+            try { authorized = await manager.AuthorizeRecycleAsync(plan.OperationId, plan.Selection, true, cancellationAfterStop.Token); }
+            finally { journalWriteLock?.Dispose(); }
+            if (scenario is "post-stop-cancel" or "journal-stop-write")
+            {
+                Check(authorized.File is null && File.Exists(fixture.Path) && manager.Snapshot.Scripts.Length == 1 && fixture.Processes.Current.Processes.IsEmpty && fixture.Processes.Starts == 0, "instrumented fake confirmsStop before cancellation/journal-write refusal; file/catalog preserved " + scenario);
+                bool truthful = authorized.Stopped && authorized.Result.Outcome is Outcome.Partial or Outcome.Unknown && authorized.Result.Detail?.Contains("encerrada", StringComparison.Ordinal) == true;
+                Console.WriteLine((truthful ? "PASS " : "FAIL ") + "confirmedStop remains reported after " + scenario);
+                if (!truthful) targetedFailures.Add(scenario);
+                continue;
+            }
+            if (scenario is "veto" or "changed-process" or "changed-file" or "incomplete")
+            {
+                Check(authorized.File is null && File.Exists(fixture.Path) && manager.Snapshot.Scripts.Length == 1, "unsafe identity/observation/veto denies native dispatch " + scenario);
+                if (scenario == "changed-process") Check(fixture.Processes.Controls == 0, "replacement process never stopped");
+                continue;
+            }
+            Check(authorized.Result.Outcome == Outcome.Pending && authorized.File is not null && File.Exists(fixture.Path), "durable authorization precedes injected native dispatch " + scenario);
+            Check((await manager.AuthorizeRecycleAsync(plan.OperationId, plan.Selection, true)).File is null, "recycle authorization is single-use " + scenario);
+            if (scenario == "running-failure")
+            {
+                Check(authorized.Stopped && fixture.Processes.Controls == 1 && fixture.Processes.Current.Processes.IsEmpty, "exact verified gracefulStop completed before native permission failure");
+                var failure = await manager.CompleteRecycleAsync(plan.OperationId, Outcome.Failed, "permission denied");
+                Check(failure.Outcome == Outcome.Partial && failure.Detail!.Contains("encerrada") && File.Exists(fixture.Path) && manager.Snapshot.Scripts.Length == 1 && fixture.Processes.Starts == 0, "UAC denial after stop preserves file/catalog and stopped state without restart");
+            }
+            else if (scenario == "unknown")
+            {
+                await manager.CompleteRecycleAsync(plan.OperationId, Outcome.Unknown, "deadline");
+                Check((await manager.RecoverPendingAsync()).Outcome == Outcome.Unknown, "recycleUnknown never resolves from process absence");
+                Check((await manager.RemoveAsync(id)).Succeeded && File.Exists(fixture.Path), "safe list removal retains file and journal uncertainty");
+                var readded = await manager.AddFilesAsync([fixture.Path]); var newId = readded.Added.Single();
+                Check(newId != id && (await manager.PrepareAsync(Select(manager, newId), ScriptOperation.Start)).Reason == ReasonCode.PendingOperation && (await manager.PrepareRecycleAsync(Select(manager, newId))).Reason == ReasonCode.PendingOperation, "pending canonical path survives Remove/readd newID and blocks start/recycle");
+                File.Delete(fixture.Path); string newPath = Path.Combine(Path.GetDirectoryName(fixture.Path)!, "replacement.ahk"); await File.WriteAllTextAsync(newPath, "F13::return"); await manager.RefreshAsync();
+                Check((await manager.RelinkAsync(Select(manager, newId), fixture.Path, newPath, true)).Code == ReasonCode.PendingOperation && (await manager.RecoverPendingAsync()).Outcome == Outcome.Unknown, "pending canonical path also blocks relink and absence recovery");
+                Check(fixture.Processes.Starts == 0 && fixture.Processes.Controls == 0, "unknown recovery/readd performs zero process effects");
+                await manager.DisposeAsync();
+                var recoveredOwner = new FakeOwner(Path.GetDirectoryName(fixture.Path)!); var recoveredProcesses = new FakeProcesses(recoveredOwner);
+                await using var recovered = new ManagerService(manager.DataRoot, recoveredOwner, recoveredProcesses, new UserStartupService(new FakeStartup(), Path.Combine(root, "Manager.exe")));
+                await recovered.LoadAsync();
+                Check((await recovered.RecoverPendingAsync()).Outcome == Outcome.Unknown && (await recovered.PrepareAsync(Select(recovered, newId), ScriptOperation.Start)).Reason == ReasonCode.PendingOperation && recoveredProcesses.Starts == 0 && recoveredProcesses.Controls == 0, "restart retains canonical recycle uncertainty without absence inference or replay");
+            }
+            else if (scenario == "journal-receipt-write")
+            {
+                File.Delete(fixture.Path); OperationResult completed;
+                using (var locked = new FileStream(Path.Combine(manager.DataRoot, "operations.json"), FileMode.Open, FileAccess.ReadWrite, FileShare.None)) completed = await manager.CompleteRecycleAsync(plan.OperationId, Outcome.Confirmed, null);
+                Check(completed.Outcome == Outcome.Unknown && manager.Snapshot.Scripts.Length == 1 && !File.Exists(fixture.Path), "receipt journal-write failure preserves catalog and durable uncertainty after injected native success");
+            }
+            else
+            {
+                if (scenario == "late-receipt") await manager.CompleteRecycleAsync(plan.OperationId, Outcome.Unknown, "deadline");
+                File.Delete(fixture.Path); // Injected affirmative native effect: owned fixture only.
+                if (scenario == "replacement") await File.WriteAllTextAsync(fixture.Path, "F24::return ; replacement must survive");
+                if (scenario == "catalog-failure") await File.AppendAllTextAsync(Path.Combine(Path.GetDirectoryName(fixture.Path)!, "data", "settings.json"), " ");
+                var completed = await manager.CompleteRecycleAsync(plan.OperationId, Outcome.Confirmed, null);
+                Check(scenario is "catalog-failure" or "replacement" ? completed.Outcome == Outcome.Partial && manager.Snapshot.Scripts.Length == 1 : completed.Succeeded && manager.Snapshot.Scripts.IsEmpty, "affirmative receipt controls catalog persistence " + scenario);
+                if (scenario == "replacement") Check((await File.ReadAllTextAsync(fixture.Path)).Contains("replacement must survive"), "replacement file after native receipt is preserved");
+                var again = await manager.CompleteRecycleAsync(plan.OperationId, Outcome.Confirmed, null);
+                Check(again.Outcome == completed.Outcome, "sameOperation completion idempotent " + scenario);
+            }
+            Check(fixture.Processes.Starts == 0 && fixture.Startup.Writes == 0, "file action has zero launch/startup writes " + scenario);
+        }
+        Check(targetedFailures.Count == 0, "targeted postStop reporting regressions: " + string.Join(", ", targetedFailures));
+    }
+
     sealed class FakeOwner(string root) : IEffectOwner
     {
         public bool Held { get; set; } = true;
@@ -183,6 +304,8 @@ public static partial class CoreSuite
         public int Starts, Controls; public bool UnknownStart, UnknownWithIdentity, Administrator, LastElevated;
         public bool IsAdministrator => Administrator;
         public OperationResult NextControl = new(Outcome.Confirmed);
+        // Test-only deterministic fault injection after the fake has confirmed a Stop.
+        public Action? AfterControl;
         public ObservedProcesses Current = new([], true, []);
         public event EventHandler? Invalidated { add { } remove { } }
         public bool Supports(ScriptOperation operation) => true;
@@ -201,7 +324,7 @@ public static partial class CoreSuite
         {
             Controls++;
             if (!Current.Processes.Any(p => NativeProcessIdentity.Same(p.Identity, expected))) return Task.FromResult(new OperationResult(Outcome.Failed, ReasonCode.IdentityChanged));
-            if (NextControl.Succeeded && operation == ScriptOperation.Stop) Current = new([], true, []);
+            if (NextControl.Succeeded && operation == ScriptOperation.Stop) { Current = new([], true, []); AfterControl?.Invoke(); }
             return Task.FromResult(NextControl);
         }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

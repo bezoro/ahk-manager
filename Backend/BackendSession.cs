@@ -83,6 +83,19 @@ internal sealed class BackendSession : IBackendSession
                 return Pack(await manager.AddFilesAsync(files.Paths, ct).ConfigureAwait(false), Protocol.Json.CatalogResult);
             case "addFolder": return Pack(await manager.AddFolderAsync(Read(payload, Protocol.Json.PathPayload).Path, ct).ConfigureAwait(false), Protocol.Json.CatalogResult);
             case "remove": return Pack(await manager.RemoveAsync(Nonempty(Read(payload, Protocol.Json.ScriptPayload).ScriptId), ct).ConfigureAwait(false), Protocol.Json.OperationResult);
+            case "relink":
+                var relink = Read(payload, Protocol.Json.RelinkPayload); ValidateSelection(relink.Selection);
+                return Pack(await manager.RelinkAsync(relink.Selection, relink.OldPath, relink.ReplacementPath, relink.StartupConsent, ct).ConfigureAwait(false), Protocol.Json.OperationResult);
+            case "prepareRecycle":
+                var recyclePrepare = Read(payload, Protocol.Json.RecyclePreparePayload); ValidateSelection(recyclePrepare.Selection);
+                return Pack(await manager.PrepareRecycleAsync(recyclePrepare.Selection, ct).ConfigureAwait(false), Protocol.Json.RecyclePlan);
+            case "authorizeRecycle":
+                var recycleAuthorize = Read(payload, Protocol.Json.RecycleAuthorizePayload); ValidateSelection(recycleAuthorize.Selection);
+                return Pack(await manager.AuthorizeRecycleAsync(Nonempty(recycleAuthorize.OperationId), recycleAuthorize.Selection, recycleAuthorize.Confirmed, ct).ConfigureAwait(false), Protocol.Json.RecycleAuthorization);
+            case "completeRecycle":
+                var recycleComplete = Read(payload, Protocol.Json.RecycleCompletePayload);
+                if (recycleComplete.Receipt is not (Outcome.Confirmed or Outcome.Failed or Outcome.Unknown) || recycleComplete.Detail?.Length > 16000) throw new ProtocolException("InvalidRequest");
+                return Pack(await manager.CompleteRecycleAsync(Nonempty(recycleComplete.OperationId), recycleComplete.Receipt, recycleComplete.Detail, ct).ConfigureAwait(false), Protocol.Json.OperationResult);
             case "saveMetadata":
                 var metadata = Read(payload, Protocol.Json.MetadataPayload);
                 return Pack(await manager.SaveMetadataAsync(Nonempty(metadata.ScriptId), metadata.Metadata ?? throw new ProtocolException("InvalidRequest"), metadata.StartupConsent, ct).ConfigureAwait(false), Protocol.Json.OperationResult);

@@ -21,6 +21,29 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   const previousDialog = document.querySelector('[role="dialog"]'); if (previousDialog) button('Cancelar', previousDialog).click(); await window.fixtureHarness.resetResponses(); button('Scripts').click(); const oldSearch = document.querySelector<HTMLInputElement>('input[aria-label="Pesquisar scripts"]'); if (oldSearch) edit(oldSearch, '');
   const host = state(); await window.fixtureHarness.setState(host); await window.fixtureHarness.setTheme(light); await until(() => !!document.getElementById('script-11111111-1111-1111-1111-111111111111'), 'Renderer did not show fixture rows');
   await check('actual snapshot labels, startup heading and accessible list options', async () => { assert(document.querySelector('h1')?.textContent === 'Scripts', 'Page heading'); assert(document.querySelector('.table-head')?.textContent?.includes('Iniciar com Windows'), 'Explicit startup heading'); assert(document.querySelectorAll('tbody tr.script-row').length === 2, 'Real fixture rows'); assert(document.querySelector('.native-title>span')?.textContent === 'AHK Manager', 'Native caption drag surface'); });
+  await check('readable hotkeys agree across list Inspector page and raw/readable search with accessible details',async()=>{
+    const keys=['!^#+u','~LButton Up','F13'].map((chord,index)=>({chord,normalizedChord:chord,origin:'Parsed' as const,context:'fixture context',sourcePath:'C:\\FIXTURE ISOLADA\\generic.ahk',line:index+1,isRemap:false,possibleConflict:index===0,declaredGesture:index===1?'DoubleClick' as const:null}));
+    const current={...host,snapshot:{...host.snapshot!,scripts:[{...host.snapshot!.scripts[0]!,hotkeys:keys},host.snapshot!.scripts[1]!]}};
+    await window.fixtureHarness.setState(current);await tick();selectScript(current.snapshot.scripts[0]!.id);await tick();
+    const label='Ctrl + Alt + Shift + Win + U';assert(document.querySelector('.row-hotkey kbd')?.textContent===label,'List label still raw');
+    assert([...document.querySelectorAll('.inspector kbd')].some(node=>node.textContent===label),'Inspector label differs');assert([...document.querySelectorAll('.inspector kbd')].some(node=>node.textContent==='F13'),'F13 changed');
+    const key=document.querySelector<HTMLElement>('.row-hotkey kbd')!;key.focus();assert(document.activeElement===key&&!!key.getAttribute('aria-label'),'Readable instruction not keyboard reachable');
+    const details=document.querySelector<HTMLDetailsElement>('.inspector .hotkey-explanation')!;details.open=true;assert(details.textContent?.includes('!^#+u'),'Raw syntax lost');assert(document.querySelector('.inspector .conflict-label'),'Conflict badge lost');
+    assert(document.querySelector('.script-row')!.getBoundingClientRect().height<=70,'Readable label broke 68px virtualization');
+    button(text.hotkeys).click();await tick();assert(document.querySelector('.data-table kbd')?.textContent===label,'Hotkeys page label differs');
+    const search=input(text.searchOther);edit(search,'Ctrl + Alt');await tick();assert(document.querySelectorAll('.data-table tbody tr').length===1,'Readable search failed');edit(search,'!^#+u');await tick();assert(document.querySelectorAll('.data-table tbody tr').length===1,'Raw search lost');
+    edit(search,'');button(text.scripts).click();await window.fixtureHarness.setState(host);await tick();
+  });
+  await check('missing file offers direct recovery/removal and dirty draft disables all catalog/file entry points',async()=>{
+    const row={...host.snapshot!.scripts[0]!,status:'Missing' as const,issues:[{code:'MissingFile',detail:null,scriptId:null}]};const current={...host,snapshot:{...host.snapshot!,scripts:[row,host.snapshot!.scripts[1]!]}};
+    await window.fixtureHarness.setState(current);await tick();selectScript(row.id);await tick();
+    const notice=document.querySelector('.missing-file-notice')!;assert(notice.textContent?.includes(row.path),'Old path absent beside recovery');assert(button(text.locateScript,notice)&&button(text.remove,notice),'Missing direct actions');
+    await window.fixtureHarness.clearCalls();button(text.locateScript,notice).click();await untilCall('locateScript');assert((await window.fixtureHarness.calls()).filter(call=>call.method==='locateScript').length===1,'Locate dispatch missing');await tick();
+    const name=document.getElementById('draft-name') as HTMLInputElement;document.querySelector<HTMLDetailsElement>('.metadata-expander')!.open=true;edit(name,'Dirty file action');await tick();
+    assert(button(text.locateScript,notice).disabled&&button(text.remove,notice).disabled&&notice.textContent?.includes(text.fileDraftGuard),'Dirty actions or explanation missing');
+    await window.fixtureHarness.clearCalls();document.querySelector('[role="grid"]')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Delete',bubbles:true}));await tick();assert(!(await window.fixtureHarness.calls()).some(call=>call.method==='removeScript'),'Delete bypassed dirty guard');
+    button(text.discard).click();await tick();await window.fixtureHarness.setState(host);await tick();assert(button(text.deleteFile,document.querySelector('.inspector')!),'Existing file delete action missing');
+  });
   await check('manual metadata draft, focus and caret survive live theme and snapshot updates', async () => {
     selectScript('11111111-1111-1111-1111-111111111111'); await until(() => !!document.getElementById('draft-name'), 'Inspector missing'); const details = document.querySelector<HTMLDetailsElement>('.metadata-expander')!; details.open = true;
     const name = document.getElementById('draft-name') as HTMLInputElement; const hotkeys = document.getElementById('draft-hotkeys') as HTMLTextAreaElement; edit(name, 'Nome em rascunho'); edit(hotkeys, '^k\n\n'); name.focus(); name.setSelectionRange(2, 6); await tick();
@@ -314,4 +337,60 @@ export async function previewDescription(): Promise<AssertionRecord[]> {
   const panel = document.querySelector('.inspector')!;
   assert(panel.querySelector('.description')?.textContent === 'Descrição manual preservada.' && panel.querySelector('.description-guidance pre')?.textContent === text.descriptionHeaderExample, 'Absent-header preview did not preserve manual/guidance');
   return [{ name: 'absent-header focused preview preserves manual and exact comment example', passed: true }];
+}
+
+export async function previewHotkeys(missing=false):Promise<AssertionRecord[]> {
+  button(text.scripts).click();
+  const host=state();host.snapshot!.scripts[0]={...host.snapshot!.scripts[0]!,friendlyName:'Atalhos de exemplo',path:'C:\\FIXTURE ISOLADA\\Caminho longo para testar a quebra de texto\\Projeto de exemplo\\arquivo de teste.ahk',description:'Fixture sintética. Nenhum script real é executado.',status:missing?'Missing':'Stopped',issues:missing?[{code:'MissingFile',detail:null,scriptId:null}]:[],hotkeys:[{chord:'!^#+u',normalizedChord:'!^#+u',origin:'Parsed',context:'Contexto de exemplo',sourcePath:null,line:1,isRemap:false,possibleConflict:true},{chord:'~<^>!LButton Up',normalizedChord:'~<^>!LButton Up',origin:'Parsed',context:null,sourcePath:null,line:3,isRemap:false,possibleConflict:false,declaredGesture:'DoubleClick'},{chord:'F13',normalizedChord:'F13',origin:'Parsed',context:null,sourcePath:null,line:5,isRemap:false,possibleConflict:false}]};
+  await window.fixtureHarness.setState(host);await tick();selectScript(host.snapshot!.scripts[0]!.id);await tick();
+  const discard=[...document.querySelectorAll<HTMLButtonElement>('button')].find(node=>node.textContent?.trim()===text.discard);if(discard&&!discard.disabled){discard.click();await tick();}
+  document.querySelector<HTMLButtonElement>('.notice button')?.click();await tick();
+  const panel=document.querySelector<HTMLElement>('.inspector')!;panel.scrollTop=missing?0:Math.max(0,(panel.querySelector('.hotkey-details') as HTMLElement)?.offsetTop-180);
+  if(innerWidth<=900)panel.scrollIntoView({block:'start'});
+  return [{name:'synthetic hotkeys and long path preview',passed:!document.documentElement.scrollWidth||document.documentElement.scrollWidth<=innerWidth}];
+}
+
+export async function focusRecovery():Promise<AssertionRecord[]> {
+  await previewHotkeys(true);
+  for(const label of [text.locateScript,text.remove]){
+    const node=button(label,document.querySelector('.missing-file-notice')!);node.focus({preventScroll:true});node.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});await tick();
+    const rect=node.getBoundingClientRect();assert(document.activeElement===node&&!node.disabled&&rect.width>0&&rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,'Recovery action unreachable at zoom: '+label);
+  }
+  document.querySelector('.missing-file-notice .file-actions')!.scrollIntoView({block:'center',behavior:'instant'});await tick();
+  for(const node of document.querySelectorAll<HTMLButtonElement>('.missing-file-notice .file-actions button')){const rect=node.getBoundingClientRect();assert(rect.top>=0&&rect.bottom<=innerHeight,'Recovery buttons do not fit together after scrolling');}
+  return [{name:'Localizar and Remover individually keyboard focused, wrapped and visible at200% zoom',passed:true}];
+}
+
+export async function checkPrimaryLabel():Promise<AssertionRecord[]> {
+  const key=document.querySelector<HTMLElement>('.row-hotkey kbd')!;const range=document.createRange();range.selectNodeContents(key);
+  const bounds=key.getBoundingClientRect(),lines=[...range.getClientRects()];
+  assert(key.textContent==='Ctrl + Alt + Shift + Win + U'&&lines.length<=2&&lines.every(line=>line.bottom<=bounds.bottom+1),'Complete primary shortcut does not fit two visible lines at normal1240');
+  return [{name:'1240px primary shortcut visibly retains all modifiers and U within two lines',passed:true}];
+}
+
+export async function runDeleteSelectionScopes():Promise<AssertionRecord[]> {
+  const results:AssertionRecord[]=[];
+  const filter=(value:string)=>{const node=document.querySelector<HTMLSelectElement>('.script-filters select')!;node.value=value;node.dispatchEvent(new Event('change',{bubbles:true}));};
+  for(const scope of ['Running','Stopped'] as const){
+    let waiting=false;const host=state();host.snapshot!.scripts[0]!.status=scope;
+    try{
+      button(text.scripts).click();await window.fixtureHarness.resetResponses();await window.fixtureHarness.setState(host);await tick();
+      edit(input('Pesquisar scripts'),'');filter(scope);await tick();selectScript(host.snapshot!.scripts[0]!.id);await tick();
+      const discard=[...document.querySelectorAll<HTMLButtonElement>('button')].find(node=>node.textContent?.trim()===text.discard);if(discard&&!discard.disabled){discard.click();await tick();}
+      await window.fixtureHarness.setResponse('deleteScriptFile',{pending:true});await window.fixtureHarness.clearCalls();button(text.deleteFile,document.querySelector('.inspector')!).click();await untilCall('deleteScriptFile');waiting=true;
+      const pending={...host,busy:true,snapshot:{...host.snapshot!,revision:'9007199254741100',scripts:[{...host.snapshot!.scripts[0]!,status:'Unknown' as const,process:null,issues:[{code:'PendingOperation',detail:null,scriptId:host.snapshot!.scripts[0]!.id}]},host.snapshot!.scripts[1]!]}};
+      await window.fixtureHarness.setState(pending);await tick();
+      assert(document.querySelector('.inspector-name')?.textContent===host.snapshot!.scripts[0]!.friendlyName,'Own Pending hid active delete Inspector under '+scope);
+      assert(!(await window.fixtureHarness.calls()).some(call=>call.method==='updateSelection'&&call.args[0]===null),'Own Pending invalidated controller epoch under '+scope);
+      await window.fixtureHarness.clearCalls();
+      if(scope==='Running'){edit(input('Pesquisar scripts'),'no matching scope');await tick();assert((await window.fixtureHarness.calls()).some(call=>call.method==='updateSelection'&&call.args[0]===null),'Real query change did not invalidate delete scope');}
+      else{selectScript(host.snapshot!.scripts[1]!.id);await tick();assert((await window.fixtureHarness.calls()).some(call=>call.method==='updateSelection'&&(call.args[0] as {scriptId?:string}|null)?.scriptId===host.snapshot!.scripts[1]!.id),'Real selection change did not reach controller');}
+      await window.fixtureHarness.resolveResponse('deleteScriptFile',{value:{outcome:'Partial',code:'Cancelled',detail:'Execução encerrada.',correlationId:null}});waiting=false;
+      await window.fixtureHarness.setState({...pending,busy:false});await tick();
+      if(scope==='Stopped')assert(document.querySelector('.inspector-name')?.textContent===host.snapshot!.scripts[1]!.friendlyName,'Old delete completion cleared new selection');
+      results.push({name:'delete own Pending retains '+scope+' scope; real user change and late cleanup preserve cancellation',passed:true});
+    }catch(error){results.push({name:'delete own Pending '+scope+' scope',passed:false,detail:String(error)});}
+    finally{if(waiting)await window.fixtureHarness.resolveResponse('deleteScriptFile',{value:{outcome:'Partial',code:'Cancelled',detail:'fixture cleanup',correlationId:null}});await window.fixtureHarness.setState(host);await tick();filter('All');edit(input('Pesquisar scripts'),'');await tick();}
+  }
+  return results;
 }

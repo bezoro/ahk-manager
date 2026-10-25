@@ -10,7 +10,7 @@ public sealed class OperationJournal(string path)
     public bool Ready { get; private set; }
     public IReadOnlyList<OperationRecord> Records => document.Operations.AsReadOnly();
     public bool HasPending => document.Operations.Any(IsPending);
-    public static bool IsPending(OperationRecord record) => record.Outcome is Outcome.Accepted or Outcome.Pending or Outcome.Unknown
+    public static bool IsPending(OperationRecord record) => (record.Outcome is Outcome.Accepted or Outcome.Pending or Outcome.Unknown || record.Operation == ScriptOperation.RecycleFile && record.RecycleReceipt && record.Outcome == Outcome.Partial)
         && !(record.Operation is ScriptOperation.TogglePause or ScriptOperation.ToggleSuspend && record.Code == ReasonCode.StateNotObservable);
     public async Task LoadAsync(CancellationToken ct = default)
     {

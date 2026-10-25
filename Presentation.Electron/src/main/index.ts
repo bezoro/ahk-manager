@@ -1,4 +1,5 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, session, systemPreferences, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, session, shell, systemPreferences, Tray } from 'electron';
+import { scriptFileStamp } from './script-files.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -91,10 +92,10 @@ async function confirm(title:string,detail:string):Promise<boolean> {
   const response=await dialog.showMessageBox(window,{type:'question',title,message:title,detail,buttons:[t.cancel,t.confirm],defaultId:0,cancelId:0,noLink:true});
   return response.response===1&&alive();
 }
-async function pick(kind:'scripts'|'folder'|'interpreter'|'editor'|'import'|'migration'):Promise<string[]> {
+async function pick(kind:'scripts'|'locate'|'folder'|'interpreter'|'editor'|'import'|'migration'):Promise<string[]> {
   if(!alive()||!window)return [];
   const directory=kind==='folder'||kind==='migration';
-  const response=await dialog.showOpenDialog(window,{title:t.pickerTitles[kind],properties:directory?['openDirectory','dontAddToRecent']:kind==='scripts'?['openFile','multiSelections','dontAddToRecent']:['openFile','dontAddToRecent'],filters:directory?[]:kind==='scripts'?[{name:t.fileFilters.scripts,extensions:['ahk']}]:kind==='import'?[{name:t.fileFilters.catalog,extensions:['json']}]:[{name:t.fileFilters.applications,extensions:['exe']}]});
+  const response=await dialog.showOpenDialog(window,{title:t.pickerTitles[kind],properties:directory?['openDirectory','dontAddToRecent']:kind==='scripts'?['openFile','multiSelections','dontAddToRecent']:['openFile','dontAddToRecent'],filters:directory?[]:kind==='scripts'||kind==='locate'?[{name:t.fileFilters.scripts,extensions:['ahk']}]:kind==='import'?[{name:t.fileFilters.catalog,extensions:['json']}]:[{name:t.fileFilters.applications,extensions:['exe']}]});
   if(response.canceled||!alive())return [];
   if(response.filePaths.length>4096)throw new Error(t.fileLimit);
   for(const file of response.filePaths){if(!path.isAbsolute(file)||file.includes('\0'))throw new Error(t.invalidPath);const info=await fs.stat(file);if(directory?!info.isDirectory():!info.isFile())throw new Error(t.wrongFileType);}
@@ -153,7 +154,7 @@ async function start():Promise<void> {
   window.on('close',event=>{if(quitComplete)return;event.preventDefault();void closeWindow();});
   nativeTheme.on('updated',updateTheme);
   systemPreferences.on('accent-color-changed',updateTheme);
-  const native={files:pick,confirm,placement,alive};
+  const native={files:pick,confirm,placement,alive,fileStamp:scriptFileStamp,trash:(target:string)=>shell.trashItem(path.win32.normalize(target))};
   controller=new ManagerController({request:()=>Promise.reject(new Error('Backend starting'))},native,state=>{guard?.send('manager:state',state);updateTheme();updateTray();});
   administration=new ElevationCoordinator({
     eligible:()=>!quitting&&!stopExit.active&&controller?.state.connection==='ready'&&controller.state.authorityMode==='Normal'&&!controller.state.busy&&!!backend?.ready,
@@ -273,6 +274,8 @@ function registerIpc():void {
   bind('requestAdministration',none,()=>requestAdministration());
   bind('refresh',none,()=>controller!.refresh());bind('addFiles',none,()=>controller!.add('scripts'));bind('addFolder',none,()=>controller!.add('folder'));
   bind('removeScript',shape({scriptId:guid,revision:decimal}),v=>controller!.remove(v.scriptId,v.revision));
+  bind('locateScript',shape({selection}),v=>controller!.locate(assertSelection(v.selection)));
+  bind('deleteScriptFile',shape({selection}),v=>controller!.deleteFile(assertSelection(v.selection)));
   bind('saveMetadata',shape({scriptId:guid,metadata,revision:decimal}),v=>controller!.saveMetadata(v.scriptId,assertMetadata(v.metadata),v.revision));
   bind('saveCollection',shape({collectionId:nullable(guid),name:text(4096)}),v=>controller!.saveCollection(v.collectionId,v.name));
   bind('removeCollection',shape({collectionId:guid,revision:decimal}),v=>controller!.removeCollection(v.collectionId,v.revision));

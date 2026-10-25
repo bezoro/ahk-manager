@@ -6,6 +6,7 @@ internal static class Program
     {
         try
         {
+            if (args.Length > 0 && args[0] == "--inventory-scoped-readonly") return await OwnedAhkChecks.RunReadOnlyDiagnosticAsync(args);
             if (args.Length != 3 || args[1] != "--root" || args[0] is not ("--backend" or "--core" or "--corrections" or "--inventory" or "--ahk-owned")) throw new ArgumentException("Use --backend|--core|--corrections|--inventory|--ahk-owned --root <fixture directory>.");
             if (args[0] == "--ahk-owned" && !Path.IsPathFullyQualified(args[2])) throw new ArgumentException("Owned AHK fixture root must be an absolute local path.");
             string root = Path.GetFullPath(args[2]);

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ActivityQuery, ActivitySnapshot, CatalogResult, HostState, ImportPreview, ManagerSettings, ManagerSnapshot, OperationResult, ProcessIdentity, ScriptMetadata, ScriptOperation, ScriptSnapshot, SelectionContext, WindowPlacement } from '../shared/contracts.js';
+import type { ActivityQuery, ActivitySnapshot, CatalogResult, HostState, ImportPreview, ManagerSettings, ManagerSnapshot, OperationResult, ProcessIdentity, RecyclePlan, RecycleAuthorization, ScriptFileIdentity, ScriptMetadata, ScriptOperation, ScriptSnapshot, SelectionContext, WindowPlacement } from '../shared/contracts.js';
 import type { PreparedOperation, ProfileMigrationPreview } from './backend.js';
 import { MAX_PENDING } from './backend.js';
 import {hostText as t} from '../shared/host-pt-BR.js';
@@ -17,10 +17,12 @@ export function sameProcessIdentity(a:ProcessIdentity|null,b:ProcessIdentity|nul
 
 export interface Authority { request<T>(action:string,payload:unknown):Promise<T> }
 export interface NativeBoundary {
-  files(kind:'scripts'|'folder'|'interpreter'|'editor'|'import'|'migration'):Promise<string[]>;
+  files(kind:'scripts'|'locate'|'folder'|'interpreter'|'editor'|'import'|'migration'):Promise<string[]>;
   confirm(title:string,detail:string):Promise<boolean>;
   placement():WindowPlacement;
   alive():boolean;
+  fileStamp?(file:ScriptFileIdentity):Promise<string>;
+  trash?(path:string):Promise<void>;
 }
 const cancelled=():OperationResult=>({outcome:'CancelledBeforeDispatch',code:'Cancelled',detail:null,correlationId:null});
 const stale=():OperationResult=>({outcome:'CancelledBeforeDispatch',code:'StaleSelection',detail:null,correlationId:null});
@@ -78,6 +80,64 @@ export class ManagerController {
     if(metadata.runAtLogin===true&&script.runAtLogin!==true){startupConsent=await this.native.confirm(t.scriptStartupTitle,t.scriptStartupDetail(script.friendlyName,script.path));if(!startupConsent)return cancelled();}
     if(!this.native.alive()||!this.matches(revision))return stale();return this.authority.request('saveMetadata',{scriptId,metadata,startupConsent});
   });}
+  async locate(selection:SelectionContext):Promise<OperationResult> {
+    const epoch=this.selectionEpoch;
+    return this.serialize(async()=>{
+      const valid=()=>this.native.alive()&&epoch===this.selectionEpoch&&selectionKey(selection)===selectionKey(this.selection)&&this.matches(selection.stateRevision);
+      if(!valid())return stale();
+      const script=this.requireReady().scripts.find(s=>s.id===selection.scriptId);
+      if(!script||this.requireReady().readOnly||!selectionVisible(this.requireReady(),selection)||!(script.status==='Missing'||script.issues.some(i=>i.code==='MissingFile')))return stale();
+      const paths=await this.native.files('locate');
+      if(!paths.length)return cancelled();
+      if(paths.length!==1||!valid())return stale();
+      let startupConsent=false;
+      if(script.runAtLogin===true){startupConsent=await this.native.confirm(t.locateStartupTitle,t.locateStartupDetail(paths[0]!));if(!startupConsent)return cancelled();}
+      if(!valid())return stale();
+      return this.authority.request('relink',{selection,oldPath:script.path,replacementPath:paths[0],startupConsent});
+    });
+  }
+  async deleteFile(selection:SelectionContext):Promise<OperationResult> {
+    const epoch=this.selectionEpoch;
+    return this.serialize(async()=>{
+      const authority=this.authority;
+      const valid=()=>this.native.alive()&&authority===this.authority&&epoch===this.selectionEpoch&&selectionKey(selection)===selectionKey(this.selection)&&selectionVisible(this.requireReady(),selection);
+      if(!valid()||!this.matches(selection.stateRevision)||this.requireReady().readOnly)return stale();
+      if(!this.native.fileStamp||!this.native.trash)return {outcome:'Failed',code:'CapabilityUnverified',detail:null,correlationId:null};
+      const plan=await authority.request<RecyclePlan>('prepareRecycle',{selection});
+      if(!plan.allowed||!plan.file)return {outcome:'Failed',code:plan.reason,detail:null,correlationId:plan.operationId};
+      if(!valid()||!this.matches(selection.stateRevision))return stale();
+      const stamp=await this.native.fileStamp(plan.file);
+      if(!await this.native.confirm(t.deleteTitle,t.deleteDetail(plan.path,plan.expectedIdentity?.pid??null)))return cancelled();
+      if(!valid()||!this.matches(selection.stateRevision))return stale();
+      const authorization=await authority.request<RecycleAuthorization>('authorizeRecycle',{operationId:plan.operationId,selection,confirmed:true});
+      if(authorization.result.outcome!=='Pending'||!authorization.file)return authorization.result;
+      const dispatchValid=()=>{
+        const current=this.state.snapshot;const target=current?.scripts.find(script=>script.id===plan.scriptId);
+        return this.native.alive()&&authority===this.authority&&epoch===this.selectionEpoch&&selectionKey(selection)===selectionKey(this.selection)&&this.state.connection==='ready'&&!!current&&!current.readOnly&&current.effectsAvailable&&!!target&&target.path.toLowerCase()===plan.path.toLowerCase()&&(!target.process||sameProcessIdentity(target.process.identity,plan.expectedIdentity))&&!(target.status==='Unknown'&&!target.issues.some(issue=>issue.code==='PendingOperation'))&&!target.issues.some(issue=>blockingScript.has(issue.code)&&issue.code!=='PendingOperation');
+      };
+      const complete=(receipt:'Confirmed'|'Failed'|'Unknown',detail:string|null):Promise<OperationResult>=>authority.request('completeRecycle',{operationId:plan.operationId,receipt,detail});
+      const unknown=():OperationResult=>({outcome:'Unknown',code:'PendingOperation',detail:(authorization.stopped?t.recycleStopped:'')+t.recycleUnknown,correlationId:plan.operationId});
+      try{
+        if(!dispatchValid())return await complete('Failed',t.recycleFailed);
+        const finalStamp=await this.native.fileStamp(authorization.file);
+        if(finalStamp!==stamp||!dispatchValid())return await complete('Failed',t.recycleFailed);
+      }catch(error){return complete('Failed',error instanceof Error?error.message:t.recycleFailed).catch(unknown);}
+      // Keep this handler alive independently of the renderer and report only this operation ID.
+      const authorizedPath=authorization.file.path;
+      const authorizedFile=authorization.file;
+      const nativeFailure=async()=>{
+        try{if(await this.native.fileStamp!(authorizedFile)===stamp)return await complete('Failed',t.recycleFailed);}catch{}
+        return complete('Unknown',t.recycleUnknown);
+      };
+      const completion=Promise.resolve().then(()=>{
+        if(!dispatchValid())return complete('Failed',t.recycleFailed);
+        return this.native.trash!(authorizedPath).then(()=>complete('Confirmed',null),nativeFailure);
+      }).catch(unknown);
+      let timer:ReturnType<typeof setTimeout>|undefined;
+      const timeout=new Promise<OperationResult>(resolve=>{timer=setTimeout(()=>{resolve(unknown());void Promise.resolve().then(()=>complete('Unknown',t.recycleUnknown)).catch(()=>undefined);},30000);});
+      try{return await Promise.race([completion,timeout]);}finally{clearTimeout(timer);}
+    });
+  }
   async saveCollection(collectionId:string|null,name:string):Promise<OperationResult> {return this.serialize(()=>this.authority.request('saveCollection',{collectionId,name}));}
   async removeCollection(collectionId:string,revision:string):Promise<OperationResult> {return this.serialize(async()=>{
     if(!this.matches(revision))return stale();const collection=this.state.snapshot!.collections.find(c=>c.id===collectionId);if(!collection)return stale();

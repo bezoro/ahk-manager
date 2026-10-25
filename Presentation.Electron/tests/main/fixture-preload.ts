@@ -9,7 +9,7 @@ let guardProvider:(()=>AdministrationUiGuard)|null=null;
 const api:AhkManagerApi={
   requestAdministration:()=>invoke('requestAdministration'),onAdministrationPreflight:provider=>{guardProvider=provider;return()=>{if(guardProvider===provider)guardProvider=null;};},
   getState:()=>invoke('getState'),onState:listener=>listen('fixture:state',listener),refresh:()=>invoke('refresh'),
-  addFiles:()=>invoke('addFiles'),addFolder:()=>invoke('addFolder'),removeScript:(...args)=>invoke('removeScript',...args),
+  addFiles:()=>invoke('addFiles'),addFolder:()=>invoke('addFolder'),removeScript:(...args)=>invoke('removeScript',...args),  locateScript:(...args)=>invoke('locateScript',...args),deleteScriptFile:(...args)=>invoke('deleteScriptFile',...args),
   saveMetadata:(...args)=>invoke('saveMetadata',...args),saveCollection:(...args)=>invoke('saveCollection',...args),removeCollection:(...args)=>invoke('removeCollection',...args),
   operate:(...args)=>invoke('operate',...args),updateSelection:selection=>{void invoke('updateSelection',selection);},saveSettings:(...args)=>invoke('saveSettings',...args),
   pickInterpreter:()=>invoke('pickInterpreter'),pickEditor:()=>invoke('pickEditor'),getActivity:(...args)=>invoke('getActivity',...args),

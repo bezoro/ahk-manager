@@ -5,6 +5,43 @@ import { snapshot, selection, scriptId, planId, runningSnapshot } from './fixtur
 import type { ManagerSnapshot, OperationPlan, OperationResult, ProcessIdentity } from '../../src/shared/contracts.js';
 import { metadataOf } from '../../src/renderer/model.js';
 const confirmed:OperationResult={outcome:'Confirmed',code:'None',detail:null,correlationId:null};
+test('locate native cancellation/stale selection never mutates the catalog',async()=>{
+  const {controller,native,requests}=setup();const state=snapshot();state.scripts[0]!.status='Missing';controller.setSnapshot(state);
+  assert.equal((await controller.locate(selection())).outcome,'CancelledBeforeDispatch');assert.equal(requests.length,0);
+  native.files=async()=>{controller.updateSelection(null);return ['C:\\fixtures\\replacement.ahk'];};
+  assert.equal((await controller.locate(selection())).code,'StaleSelection');assert.equal(requests.length,0);
+});
+test('locate sends native-selected path only with unchanged identity/revision and separate startup consent',async()=>{
+  const {controller,native,requests}=setup();const state=snapshot();state.scripts[0]!.status='Missing';state.scripts[0]!.runAtLogin=true;controller.setSnapshot(state);
+  native.files=async(kind)=>{assert.equal(kind,'locate');return ['C:\\fixtures\\replacement.ahk'];};
+  native.confirm=async()=>false;assert.equal((await controller.locate(selection())).outcome,'CancelledBeforeDispatch');assert.equal(requests.length,0);
+  native.confirm=async()=>true;await controller.locate(selection());assert.deepEqual(requests.map(r=>r.action),['relink']);assert.equal(requests[0]!.payload.oldPath,state.scripts[0]!.path);assert.equal(requests[0]!.payload.startupConsent,true);
+});
+test('delete exact consent precedes backend stop authorization and native trash, then reports same operation receipt',async()=>{
+  const {controller,native,requests,authority}=setup();const events:string[]=[];const file={path:snapshot().scripts[0]!.path,fileId:'windows-id',hash:'a'.repeat(64)};
+  authority.request=async<T>(action:string,payload:any):Promise<T>=>{requests.push({action,payload});events.push(action);if(action==='prepareRecycle')return {operationId:planId,scriptId,path:file.path,file,expectedIdentity:null,selection:selection(),allowed:true,reason:'None'} as T;if(action==='authorizeRecycle')return {result:{...confirmed,outcome:'Pending'},file,stopped:true} as T;return confirmed as T;};
+  native.fileStamp=async()=>{events.push('stamp');return 'same';};native.confirm=async(_title,detail)=>{assert.ok(detail.includes(file.path)&&detail.includes('Lixeira')&&detail.includes('administrador'));events.push('confirm');return true;};native.trash=async target=>{assert.equal(target,file.path);events.push('trash');};
+  assert.equal((await controller.deleteFile(selection())).outcome,'Confirmed');
+  assert.deepEqual(events,['prepareRecycle','stamp','confirm','authorizeRecycle','stamp','trash','completeRecycle']);assert.equal(requests.at(-1)!.payload.receipt,'Confirmed');assert.equal(requests.at(-1)!.payload.operationId,planId);
+});
+test('delete cancellation, host stamp change and native rejection never claim a confirmed recycle',async()=>{
+  for(const scenario of ['cancel','stamp','denied','uncertain-denial']){
+    const {controller,native,requests,authority}=setup();let stamps=0,trash=0;const file={path:snapshot().scripts[0]!.path,fileId:'windows-id',hash:'a'.repeat(64)};
+    authority.request=async<T>(action:string,payload:any):Promise<T>=>{requests.push({action,payload});if(action==='prepareRecycle')return {operationId:planId,scriptId,path:file.path,file,expectedIdentity:null,selection:selection(),allowed:true,reason:'None'} as T;if(action==='authorizeRecycle')return {result:{...confirmed,outcome:'Pending'},file,stopped:true} as T;return {...confirmed,outcome:'Partial'} as T;};
+    native.confirm=async()=>scenario!=='cancel';native.fileStamp=async()=>{stamps++;if(scenario==='uncertain-denial'&&stamps>2)throw new Error('File preservation unobservable');return scenario==='stamp'?String(stamps):'same';};native.trash=async()=>{trash++;throw new Error('permission denied');};
+    const result=await controller.deleteFile(selection());assert.notEqual(result.outcome,'Confirmed');assert.equal(trash,scenario==='denied'||scenario==='uncertain-denial'?1:0);assert.equal(requests.some(r=>r.action==='completeRecycle'&&r.payload.receipt==='Confirmed'),false);assert.equal(requests.some(r=>r.action==='authorizeRecycle'),scenario!=='cancel');if(scenario==='uncertain-denial')assert.equal(requests.at(-1)!.payload.receipt,'Unknown');
+  }
+});
+test('native deadline is Unknown and same operation receives one late affirmative receipt without dispatch replay',async context=>{
+  context.mock.timers.enable({apis:['setTimeout']});
+  const {controller,native,requests,authority}=setup();let trash=0;let finish!:()=>void;const pending=new Promise<void>(resolve=>{finish=resolve;});const file={path:snapshot().scripts[0]!.path,fileId:'windows-id',hash:'a'.repeat(64)};
+  authority.request=async<T>(action:string,payload:any):Promise<T>=>{requests.push({action,payload});if(action==='prepareRecycle')return {operationId:planId,scriptId,path:file.path,file,expectedIdentity:null,selection:selection(),allowed:true,reason:'None'} as T;if(action==='authorizeRecycle')return {result:{...confirmed,outcome:'Pending'},file,stopped:true} as T;return confirmed as T;};
+  native.fileStamp=async()=> 'same';native.trash=async()=>{trash++;await pending;};
+  const result=controller.deleteFile(selection());for(let i=0;i<20&&trash===0;i++)await new Promise(resolve=>setImmediate(resolve));assert.equal(trash,1);
+  context.mock.timers.tick(30001);assert.equal((await result).outcome,'Unknown');assert.equal(requests.at(-1)!.payload.receipt,'Unknown');
+  controller.updateSelection(null);finish();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(trash,1);assert.deepEqual(requests.filter(r=>r.action==='completeRecycle').map(r=>[r.payload.operationId,r.payload.receipt]),[[planId,'Unknown'],[planId,'Confirmed']]);
+});
 function setup(confirm:NativeBoundary['confirm']=async()=>true){
   const requests:{action:string;payload:any}[]=[];
   const native:NativeBoundary={confirm,files:async()=>[],alive:()=>true,placement:()=>snapshot().settings.window};
@@ -17,6 +54,48 @@ function setup(confirm:NativeBoundary['confirm']=async()=>true){
   const controller=new ManagerController(authority,native,()=>{});controller.setSnapshot(snapshot());controller.setConnection('ready');controller.updateSelection(selection());
   return {controller,requests,native,authority};
 }
+function reviewRecycle(filter:'All'|'Running'|'Stopped'='All'){
+  const held=setup();const state=snapshot();state.revision='1';const selected={...selection(),stateRevision:'1',query:{...selection().query,status:filter}};
+  if(filter==='Running'){state.scripts[0]!.status='Running';const process=runningSnapshot().scripts[0]!.process!;state.scripts[0]!.process={...process,identity:{...process.identity,scriptPath:state.scripts[0]!.path}};}
+  held.controller.setSnapshot(state);held.controller.updateSelection(selected);
+  const file={path:state.scripts[0]!.path,fileId:'windows-id',hash:'a'.repeat(64)};let trash=0;
+  held.native.fileStamp=async()=> 'same';held.native.trash=async()=>{trash++;};
+  held.authority.request=async<T>(action:string,payload:any):Promise<T>=>{
+    held.requests.push({action,payload});
+    if(action==='prepareRecycle')return {operationId:planId,scriptId,path:file.path,file,expectedIdentity:state.scripts[0]!.process?.identity??null,selection:selected,allowed:true,reason:'None'} as T;
+    if(action==='authorizeRecycle'){
+      held.controller.setSnapshot({...state,revision:'2',scripts:[{...state.scripts[0]!,status:'Unknown',process:null,issues:[{code:'PendingOperation',detail:null,scriptId}]}]});
+      return {result:{...confirmed,outcome:'Pending'},file,stopped:true} as T;
+    }
+    return {...confirmed,...(payload.receipt==='Failed'?{outcome:'Partial',detail:'Execução encerrada.'}: {})} as T;
+  };
+  return {...held,selected,get trash(){return trash;}};
+}
+for(const invalidate of ['selection','document','authority','readonly','disconnect','path','process','unknown'])test('review: final asynchronous stamp cannot outlive '+invalidate+' consent',async()=>{
+    const fixture=reviewRecycle();let release!:(value:string)=>void,stamps=0;const stamp=new Promise<string>(resolve=>{release=resolve;});
+    fixture.native.fileStamp=async()=>++stamps===2?stamp:'same';const result=fixture.controller.deleteFile(fixture.selected);
+    for(let i=0;i<20&&stamps<2;i++)await new Promise(resolve=>setImmediate(resolve));assert.equal(stamps,2);
+    if(invalidate==='selection')fixture.controller.updateSelection(null);else if(invalidate==='document')fixture.native.alive=()=>false;else if(invalidate==='authority')fixture.controller.setAuthority({request:async<T>()=>confirmed as T});else if(invalidate==='disconnect')fixture.controller.setConnection('failed');else{
+      const state=fixture.controller.state.snapshot!;const row=state.scripts[0]!;let updated={...row};
+      if(invalidate==='path')updated.path='C:\\fixtures\\different.ahk';if(invalidate==='unknown')updated.issues=[];
+      if(invalidate==='process'){const process=runningSnapshot().scripts[0]!.process!;updated={...updated,status:'Running',process:{...process,identity:{...process.identity,pid:9999,scriptPath:row.path}}};}
+      fixture.controller.setSnapshot({...state,readOnly:invalidate==='readonly',scripts:[updated]});
+    }
+    release('same');const completed=await result;
+    assert.equal(fixture.trash,0,'Trash escaped invalidated '+invalidate);assert.equal(completed.outcome,'Partial');assert.equal(completed.detail,'Execução encerrada.');if(invalidate!=='process')assert.equal(fixture.controller.state.snapshot!.scripts[0]!.process,null);
+});
+for(const filter of ['Running','Stopped'] as const)test('review: own Pending snapshot must not veto confirmed deletion under '+filter+' filter',async()=>{
+  const fixture=reviewRecycle(filter);const result=await fixture.controller.deleteFile(fixture.selected);assert.equal(fixture.trash,1,'Own Pending snapshot cancelled '+filter);assert.equal(result.outcome,'Confirmed');assert.equal(fixture.requests.at(-1)!.payload.receipt,'Confirmed');
+});
+test('review: native deadline resolves UI Unknown even if background completion reporting never settles',async context=>{
+  context.mock.timers.enable({apis:['setTimeout']});const fixture=reviewRecycle();
+  const original=fixture.authority.request;fixture.authority.request=async<T>(action:string,payload:any):Promise<T>=>action==='completeRecycle'?new Promise<T>(()=>{}):original<T>(action,payload);
+  fixture.native.trash=async()=>new Promise<void>(()=>{});let stamps=0;fixture.native.fileStamp=async()=>{stamps++;return 'same';};
+  let settled=false;const result=fixture.controller.deleteFile(fixture.selected);void result.then(()=>{settled=true;});
+  for(let i=0;i<20&&stamps<2;i++)await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+  context.mock.timers.tick(30001);for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(settled,'UI deadline waited for hung backend reporting');assert.equal((await result).outcome,'Unknown');
+});
 test('cross-row metadata uses explicit snapshot ID/revision without changing selected context or process effects', async () => {
   let consent=0;const {controller,requests}=setup(async()=>{consent++;return true;});const state=snapshot();
   const other={...state.scripts[0]!,id:'22222222-2222-2222-2222-222222222222',friendlyName:'Other row',description:'server manual',runAtLogin:null};state.scripts.push(other);controller.setSnapshot(state);

@@ -17,7 +17,8 @@ public enum ReasonCode
     IncludeUnresolved, IncludeLimitReached, DynamicHotkeys, PossibleConflict, EditorUnavailable,
     ActivityUnavailable, InvalidMetadata, ManualElevationRequired, ExternalStartupConflict
 }
-public enum ScriptOperation { Start, Stop, Restart, TogglePause, ToggleSuspend, Edit, OpenFolder, Recover }
+public enum ScriptOperation { Start, Stop, Restart, TogglePause, ToggleSuspend, Edit, OpenFolder, Recover, RecycleFile }
+public enum DeclaredGesture { DoubleClick }
 public enum HotkeyOrigin { Parsed, Manual, Unanalysed }
 public enum AnalysisCoverage { Partial, Unanalysable }
 public enum StatusFilter { All, Running, Stopped, Problems }
@@ -46,7 +47,11 @@ public sealed record ProcessSnapshot(ProcessIdentity Identity, ExecutionOrigin O
 }
 public sealed record HotkeySnapshot(string Chord, string NormalizedChord, HotkeyOrigin Origin,
     string? Context = null, string? SourcePath = null, int? Line = null, bool IsRemap = false,
-    bool PossibleConflict = false);
+    bool PossibleConflict = false, DeclaredGesture? DeclaredGesture = null);
+public sealed record ScriptFileIdentity(string Path, string FileId, string Hash);
+public sealed record RecyclePlan(Guid OperationId, Guid ScriptId, string Path, ScriptFileIdentity? File,
+    ProcessIdentity? ExpectedIdentity, SelectionContext Selection, bool Allowed, ReasonCode Reason);
+public sealed record RecycleAuthorization(OperationResult Result, ScriptFileIdentity? File = null, bool Stopped = false);
 public sealed record ScriptSnapshot(Guid Id, string Path, string FriendlyName, string Description,
     Guid? CollectionId, bool? RunAtLogin, bool RunAsAdministrator, bool LaunchBlocked,
     ScriptStatus Status, ProcessSnapshot? Process, ImmutableArray<HotkeySnapshot> Hotkeys,
@@ -121,6 +126,10 @@ public interface IManagerService : IAsyncDisposable
     Task<CatalogResult> AddFilesAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
     Task<CatalogResult> AddFolderAsync(string path, CancellationToken cancellationToken = default);
     Task<OperationResult> RemoveAsync(Guid scriptId, CancellationToken cancellationToken = default);
+    Task<OperationResult> RelinkAsync(SelectionContext selection, string oldPath, string replacementPath, bool startupConsent, CancellationToken cancellationToken = default) => Task.FromResult(new OperationResult(Outcome.Failed, ReasonCode.CapabilityUnverified));
+    Task<RecyclePlan> PrepareRecycleAsync(SelectionContext selection, CancellationToken cancellationToken = default) => Task.FromResult(new RecyclePlan(Guid.NewGuid(), selection.ScriptId, "", null, null, selection, false, ReasonCode.CapabilityUnverified));
+    Task<RecycleAuthorization> AuthorizeRecycleAsync(Guid operationId, SelectionContext selection, bool confirmed, CancellationToken cancellationToken = default) => Task.FromResult(new RecycleAuthorization(new(Outcome.Failed, ReasonCode.CapabilityUnverified)));
+    Task<OperationResult> CompleteRecycleAsync(Guid operationId, Outcome receipt, string? detail, CancellationToken cancellationToken = default) => Task.FromResult(new OperationResult(Outcome.Failed, ReasonCode.CapabilityUnverified));
     Task<OperationResult> SaveMetadataAsync(Guid scriptId, ScriptMetadata metadata, bool startupConsent = false, CancellationToken cancellationToken = default);
     Task<OperationResult> SaveCollectionAsync(Guid? collectionId, string name, CancellationToken cancellationToken = default);
     Task<OperationResult> RemoveCollectionAsync(Guid collectionId, CancellationToken cancellationToken = default);

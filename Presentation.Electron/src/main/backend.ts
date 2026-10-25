@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import {hostText as t} from '../shared/host-pt-BR.js';
+import { recyclePlan, recycleAuthorization } from '../shared/validation.js';
 import { TextDecoder } from 'node:util';
 import type { AuthorityMode, ManagerSnapshot, OperationPlan, OperationResult } from '../shared/contracts.js';
 import { array, activity, authorityMode, elevationStatus, bool, catalogResult, guid, importPreview, integer, issue, nullable, object, oneOf, operationPlan, operationResult, parseStrictJson, reason, requireValid, shape, snapshot, text, type Validator } from '../shared/validation.js';
@@ -13,6 +14,7 @@ const protocolCode = oneOf('Ok','InvalidFrame','InvalidRequest','NotAuthenticate
 const envelope = shape({version:v=>v===1,kind:oneOf('response','snapshot','parentProof'),id:nullable(text(20)),session:text(64),action:text(64),code:protocolCode,payload:()=>true,error:nullable(text(4096))});
 const migration = shape({previewId:guid,sourceRoot:text(),sourceFingerprint:text(128),fileCount:integer,pendingOperations:integer,canMigrate:bool,issues:array(issue)});
 const results: Record<string, Validator> = {
+  relink:operationResult,prepareRecycle:recyclePlan,authorizeRecycle:recycleAuthorization,completeRecycle:operationResult,
   beginAdministration:elevationStatus,administrationStatus:elevationStatus,commitAdministration:elevationStatus,cancelAdministration:elevationStatus,
   hello:shape({protocolVersion:v=>v===1,profileRoot:text(),hostExecutable:text()}),
   load:snapshot,snapshot,refresh:snapshot,addFiles:catalogResult,addFolder:catalogResult,

@@ -30,6 +30,52 @@ public static partial class CoreSuite
         var path = System.IO.Path.Combine(root, "main.ahk");
         await CheckRequirementsAsync(root);
         await CheckHeaderDescriptionsAsync(root);
+        var punctuationFailures = new List<string>();
+        foreach (var (source, expected) in new[] { (":::return\n", ":"), ("^&::return\n", "^&"), ("& Up::return\n", "& Up") })
+        {
+            await File.WriteAllTextAsync(path, source);
+            var parsed = await new HotkeyAnalyzer().AnalyzeAsync(path);
+            bool passed = parsed.Hotkeys.Length == 1 && parsed.Hotkeys[0].Chord == expected;
+            Console.WriteLine((passed ? "PASS " : "FAIL ") + "literal punctuation trigger " + expected);
+            if (!passed) punctuationFailures.Add(expected);
+        }
+        Check(punctuationFailures.Count == 0, "literal punctuation trigger regressions: " + string.Join(", ", punctuationFailures));
+        await File.WriteAllTextAsync(path, "::abbreviation::replacement\n:*:abbreviation::replacement\na & b::return\na & b Up::return\n");
+        var combinations = await new HotkeyAnalyzer().AnalyzeAsync(path);
+        Check(combinations.Hotkeys.Select(h => h.Chord).SequenceEqual(new[] { "a & b", "a & b Up" }), "hotstrings excluded while spaced custom combinations and release remain declarations");
+        await File.WriteAllTextAsync(path, "'::return\n;::return\n=::return\n!^#+u::return\nF13::return\n");
+        var punctuation = await new HotkeyAnalyzer().AnalyzeAsync(path);
+        Check(punctuation.Hotkeys.Select(h => h.Chord).SequenceEqual(new[] { "'", ";", "=", "!^#+u", "F13" }), "declaration punctuation and raw modifiers survive body stripping");
+        foreach (string button in new[] { "LButton", "RButton", "MButton", "XButton1", "XButton2" })
+        {
+            await File.WriteAllTextAsync(path, "; @gesture double-click\n~^" + button + " Up::return\nF13::return\n");
+            var gestures = await new HotkeyAnalyzer().AnalyzeAsync(path);
+            Check(gestures.Hotkeys[0].DeclaredGesture == DeclaredGesture.DoubleClick && gestures.Hotkeys[1].DeclaredGesture is null, "gesture binds only adjacent eligible mouse declaration " + button);
+        }
+        foreach (string body in new[] { "; @gesture unknown\nLButton::return", "; @gesture double-click\n\nLButton::return", "; @gesture double-click\n; other\nLButton::return", "; @gesture double-click\n#HotIf true\nLButton::return", "; @gesture double-click\n; @gesture double-click\nLButton::return", "; @gesture double-click\na & LButton::return", "; @gesture double-click\nWheelUp::return", "; @gesture double-click\nF13::return", "; @gesture " + new string('x', 300) + "\nLButton::return", "; @gesture double-click" })
+        {
+            await File.WriteAllTextAsync(path, body);
+            var gestures = await new HotkeyAnalyzer().AnalyzeAsync(path);
+            Check(gestures.Hotkeys.All(h => h.DeclaredGesture is null) && gestures.Issues.Any(i => i.Code == ReasonCode.PartialAnalysis), "invalid/unsupported/orphan annotation falls back without gesture");
+        }
+        await File.WriteAllTextAsync(path, "/*\n; @gesture double-click\n*/\nLButton::return\ntext := '; @gesture double-click'\nRButton::return\n(\n; @gesture double-click\n)\nMButton::return\n");
+        Check((await new HotkeyAnalyzer().AnalyzeAsync(path)).Hotkeys.All(h => h.DeclaredGesture is null), "gesture lookalikes inside comments/strings/continuations ignored");
+        await File.WriteAllTextAsync(path, string.Concat(Enumerable.Repeat("; @gesture malformed\n", 80)) + "F13::return\n");
+        var bounded = await new HotkeyAnalyzer().AnalyzeAsync(path);
+        Check(bounded.Issues.Count(i => i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true) == 33 && bounded.Issues.Last().Detail == "Anotações @gesture adicionais omitidas: 48." && bounded.Hotkeys.Single().Chord == "F13", "annotation diagnostics retain32 plus accurate overflow and ordinary declarations");
+        string gestureChild = Path.Combine(root, "gesture-child.ahk");
+        await File.WriteAllTextAsync(gestureChild, "RButton::return\n");
+        await File.WriteAllTextAsync(path, "; @gesture double-click\n#Include gesture-child.ahk\nLButton::return\n");
+        var includeBoundary = await new HotkeyAnalyzer().AnalyzeAsync(path);
+        Check(includeBoundary.Hotkeys.Length == 2 && includeBoundary.Hotkeys.All(h => h.DeclaredGesture is null) && includeBoundary.Issues.Any(i => i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true), "gesture annotation before include cannot bind included or later parent declaration");
+        await File.WriteAllTextAsync(gestureChild, "RButton::return\n; @gesture double-click");
+        await File.WriteAllTextAsync(path, "#Include gesture-child.ahk\nLButton::return\n");
+        includeBoundary = await new HotkeyAnalyzer().AnalyzeAsync(path);
+        Check(includeBoundary.Hotkeys.Length == 2 && includeBoundary.Hotkeys.All(h => h.DeclaredGesture is null) && includeBoundary.Issues.Any(i => i.Detail?.Contains("gesture-child.ahk", StringComparison.Ordinal) == true), "orphan annotation at include end cannot escape into parent declaration");
+        await File.WriteAllTextAsync(gestureChild, string.Concat(Enumerable.Repeat("; @gesture malformed\n", 20)) + "F24::return\n");
+        await File.WriteAllTextAsync(path, string.Concat(Enumerable.Repeat("; @gesture malformed\n", 20)) + "#Include gesture-child.ahk\nF13::return\n");
+        var globalBudget = await new HotkeyAnalyzer().AnalyzeAsync(path);
+        Check(globalBudget.Issues.Count(i => i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true) == 33 && globalBudget.Issues.Last().Detail == "Anotações @gesture adicionais omitidas: 8." && globalBudget.Hotkeys.Select(h => h.Chord).SequenceEqual(new[] { "F24", "F13" }), "32 annotation diagnostics plus accurate overflow shared across parent and included file");
         await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2.0\n; ^x:: comment\ntext := \"^z:: fake\"\n^!a::MsgBox 'ok'\n#HotIf WinActive('Example')\nF2::return\n#Include missing.ahk\nHotkey('F3', (*) => 0)\na::b\n");
         var result = await new HotkeyAnalyzer().AnalyzeAsync(path);
         Check(result.Hotkeys.Any(h => h.NormalizedChord == HotkeyAnalyzer.Normalize("!^a")), "static declaration detected");

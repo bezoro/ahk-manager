@@ -36,7 +36,8 @@ app.whenReady().then(async()=>{
   const assets=new Set(JSON.parse(fs.readFileSync(path.join(frontend,'assets.json'),'utf8')) as string[]);
   protocol.handle('ahk-manager',request=>{const name=assetFromUrl(request.url,assets);if(!name)return new Response('Forbidden',{status:403});const ext=path.extname(name);return new Response(fs.readFileSync(path.join(frontend,'renderer',name)),{headers:{'Content-Type':ext==='.html'?'text/html':ext==='.css'?'text/css':'text/javascript','Content-Security-Policy':CSP}});});
   window=new BrowserWindow({width:1240,height:820,minWidth:760,minHeight:560,show:false,title:'AHK Manager — FIXTURE ISOLADA',titleBarStyle:'hidden',titleBarOverlay:{height:44},backgroundColor:'#00000000',webPreferences:{preload:path.join(__dirname,'fixture-preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,devTools:false}});
-  if(Number(process.getSystemVersion().split('.')[2]??0)>=22621){window.setBackgroundMaterial('mica');material='mica';}
+  // Solid fixture surfaces make internal screenshots independent of desktop Mica composition.
+  window.setBackgroundColor('#202020');
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));window.webContents.on('will-navigate',event=>event.preventDefault());window.webContents.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
   ipcMain.handle('fixture:invoke',(event,envelope:{method:string;args:unknown[]})=>{
     if(event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame||event.senderFrame.url!==APP_URL)throw new Error('Invalid fixture sender');
@@ -59,7 +60,7 @@ app.whenReady().then(async()=>{
     if(method==='pickInterpreter')return 'C:\\FixtureIsolada\\AutoHotkey64.exe';if(method==='pickEditor')return 'C:\\FixtureIsolada\\Editor.exe';
     if(method==='addFiles'||method==='addFolder')return {result,added:[],duplicateCount:0,issues:[]};
     if(method==='previewImport')return null;
-    if(['requestAdministration','removeScript','saveMetadata','saveCollection','removeCollection','operate','saveSettings','commitImport','migrateProfile','transferStartup','restoreBackup','recoverPending'].includes(method))return result;
+    if(['requestAdministration','locateScript','deleteScriptFile','removeScript','saveMetadata','saveCollection','removeCollection','operate','saveSettings','commitImport','migrateProfile','transferStartup','restoreBackup','recoverPending'].includes(method))return result;
     throw new Error('Unknown fixture method');
   });
   nativeTheme.on('updated',emitTheme);
@@ -72,8 +73,13 @@ app.whenReady().then(async()=>{
       fs.writeFileSync(path.join(output,command.name+'.internal.png'),(await window.webContents.capturePage()).toPNG());
       const dom=await window.webContents.executeJavaScript('({width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,active:document.activeElement?.id,fixture:!!document.getElementById("fixture-warning")})');report();write(command.name+'.done.json',{dom,theme:currentTheme(),fixture:true});
     }else if(command.action==='theme'&&['system','light','dark'].includes(command.value)){nativeTheme.themeSource=command.value;emitTheme();}
-    else if(command.action==='resize'&&[760,1000,1240,1440].includes(command.width)&&[560,600,720,820,900].includes(command.height)){window.setSize(command.width,command.height);report();}
+    else if(command.action==='resize'&&[740,760,1000,1240,1440].includes(command.width)&&[560,600,720,820,900].includes(command.height)){window.setMinimumSize(700,560);window.setSize(command.width,command.height);report();}
+    else if(command.action==='zoom'&&[1,2].includes(command.factor)){window.webContents.setZoomFactor(command.factor);report();}
     else if(command.action==='assertions'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.runScenarios()');write('assertions-'+command.id+'.json',{assertions,fixture:true});}
+    else if(command.action==='hotkeyVisual'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.previewHotkeys('+Boolean(command.missing)+')');write('visual-'+command.id+'.json',{assertions,fixture:true});}
+    else if(command.action==='focusRecovery'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.focusRecovery()');write('recovery-'+command.id+'.json',{assertions,fixture:true});}
+    else if(command.action==='checkPrimary'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.checkPrimaryLabel()');write('primary-'+command.id+'.json',{assertions,fixture:true});}
+    else if(command.action==='deleteScopes'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.runDeleteSelectionScopes()');write('assertions-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='preferences'){window.webContents.send('fixture:preferences');report();}
     else if(command.action==='close'){nativeTheme.themeSource='system';write('closed.json',{themeRestored:nativeTheme.themeSource,fixture:true});app.quit();}
     else throw new Error('Unknown fixture command');

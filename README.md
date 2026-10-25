@@ -1,4 +1,21 @@
-## Versão 1.0.3 — instalada e validada no escopo abaixo
+## Versão 1.0.4 — recuperação de arquivos e atalhos legíveis
+
+Arquivos ausentes mostram **Localizar script…** e **Remover da lista** no painel. Localizar preserva o registro e suas preferências; remover da lista preserva o arquivo. Para arquivos existentes, **Excluir arquivo…** solicita confirmação e usa a Lixeira do Windows. Se o script estiver em execução, a mensagem explica que ele será parado primeiro. A exclusão só prossegue após o encerramento comprovado; recusa de saída, identidade incerta ou mudança de arquivo interrompem a operação.
+
+Os atalhos identificados usam nomes legíveis para modificadores, teclas e mouse. Por exemplo, `!^#+u` aparece como **Ctrl + Alt + Shift + Win + U**; **F13** continua F13. A sintaxe original, origem e limitações ficam nos detalhes. A análise não executa o código nem deduz gestos complexos a partir de `LButton Up`.
+
+Para declarar um clique duplo, coloque a anotação imediatamente antes da hotkey de mouse correspondente:
+
+```autohotkey
+; @gesture double-click
+~LButton Up:: {
+    ; A implementação do gesto continua sendo responsabilidade do script.
+}
+```
+
+A interface mostra **Clique duplo com o botão esquerdo** como gesto informado pelo script. Uma anotação inválida ou separada da declaração não vira uma afirmação sobre o comportamento do código. Veja os resultados e limites da entrega em [VALIDATION.md](VALIDATION.md).
+
+## Versão 1.0.3 — histórico da instalação anterior
 
 O painel mostra apenas a descrição quando há `; @description` no cabeçalho. Sem ela, apresenta a descrição manual e um exemplo do cabeçalho. As colunas **Iniciar com Windows** e **Administrador** usam checkboxes; falhas ao salvar preservam as alterações ainda não salvas no painel. Buscar pelo texto do cabeçalho também permite operar o script encontrado.
 
@@ -27,7 +44,7 @@ A versão 1.0.2 foi revisada, empacotada e instalada no mesmo local, preservando
 
 Gerenciador de scripts AutoHotkey **v2** para Windows 11 x64. A interface usa Electron, TypeScript, React e Fluent UI; o backend .NET conserva a autoridade de processos, identidade, persistência e recuperação. Os controles Fluent são controles web. A moldura e os botões da janela, seletores de arquivos, confirmações e área de notificação usam integração do Windows. Mica é solicitado pela API suportada no Windows 11 22H2 ou superior; há fundo sólido quando indisponível ou em alto contraste. Tema e cor de destaque acompanham o sistema por padrão.
 
-Instale pelo **AHK-Manager-1.0.3-Setup-x64.exe**, por usuário, sem privilégios administrativos. A pasta instalada contém **Bezoro.AhkManager.exe**, Electron e o backend autossuficiente em `backend/AhkManager.Backend.exe`. Não exige Node, npm, SDK, Visual Studio ou .NET instalado. AutoHotkey v2 é um requisito separado para executar scripts. A distribuição não tem assinatura digital de editor verificado; o Windows pode apresentar SmartScreen. Não há atualização automática.
+Instale pelo **AHK-Manager-1.0.4-Setup-x64.exe**, por usuário, sem privilégios administrativos. A pasta instalada contém **Bezoro.AhkManager.exe**, Electron e o backend autossuficiente em `backend/AhkManager.Backend.exe`. Não exige Node, npm, SDK, Visual Studio ou .NET instalado. AutoHotkey v2 é um requisito separado para executar scripts. A distribuição não tem assinatura digital de editor verificado; o Windows pode apresentar SmartScreen. Não há atualização automática.
 
 Adicionar arquivos apenas cadastra caminhos. Iniciar valida o interpretador e o arquivo. Parar solicita saída normal e confirma o encerramento; OnExit pode recusar. Reiniciar só inicia uma substituição depois da saída comprovada. Não há encerramento forçado automático. Pausa e suspensão são diferentes; funções sem observação comprovável ficam indisponíveis com explicação.
 

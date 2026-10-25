@@ -6,13 +6,16 @@ export type NormalLaunchUnavailableReason = 'AccessDenied' | 'CapabilityUnverifi
 export type ElevationState = 'PendingApproval' | 'Ready' | 'CommitPending' | 'CommitAcked' | 'Cancelled' | 'Denied' | 'Failed' | 'Expired' | 'Completed' | 'Unknown';
 export interface ElevationStatus { operationId: string; revision: Decimal; state: ElevationState; reason: string | null; receiptId: string | null; canResumeNormal: boolean }
 export type ScriptStatus = 'Stopped' | 'Running' | 'Unknown' | 'Multiple' | 'Missing' | 'Blocked';
-export type ScriptOperation = 'Start' | 'Stop' | 'Restart' | 'TogglePause' | 'ToggleSuspend' | 'Edit' | 'OpenFolder' | 'Recover';
+export type ScriptOperation = 'Start' | 'Stop' | 'Restart' | 'TogglePause' | 'ToggleSuspend' | 'Edit' | 'OpenFolder' | 'Recover' | 'RecycleFile';
 export type Outcome = 'Accepted' | 'Pending' | 'Confirmed' | 'Partial' | 'CancelledBeforeDispatch' | 'Failed' | 'Unknown';
 export type AppThemePreference = 'System' | 'Light' | 'Dark';
 export interface Issue { code: string; detail: string | null; scriptId: string | null }
 export interface ProcessIdentity { pid: number; creationFileTime: Decimal; executablePath: string; scriptPath: string; userSid: string; sessionId: number; scriptHash: string; interpreterHash: string }
 export interface ProcessSnapshot { identity: ProcessIdentity; origin: 'None' | 'Manager' | 'External' | 'Recovered'; interpreterVersion: string; startedAt: string; paused: boolean | null; suspended: boolean | null; windowVerified: boolean; controlUnavailableReason?: ControlUnavailableReason | null }
-export interface HotkeySnapshot { chord: string; normalizedChord: string; origin: 'Parsed' | 'Manual' | 'Unanalysed'; context: string | null; sourcePath: string | null; line: number | null; isRemap: boolean; possibleConflict: boolean }
+export interface HotkeySnapshot { chord: string; normalizedChord: string; origin: 'Parsed' | 'Manual' | 'Unanalysed'; context: string | null; sourcePath: string | null; line: number | null; isRemap: boolean; possibleConflict: boolean; declaredGesture?: 'DoubleClick' | null }
+export interface ScriptFileIdentity { path:string; fileId:string; hash:string }
+export interface RecyclePlan { operationId:string; scriptId:string; path:string; file:ScriptFileIdentity|null; expectedIdentity:ProcessIdentity|null; selection:SelectionContext; allowed:boolean; reason:string }
+export interface RecycleAuthorization { result:OperationResult; file:ScriptFileIdentity|null; stopped:boolean }
 export interface ScriptSnapshot { id: string; path: string; friendlyName: string; description: string; headerDescription?: string | null; collectionId: string | null; runAtLogin: boolean | null; runAsAdministrator: boolean; launchBlocked: boolean; status: ScriptStatus; process: ProcessSnapshot | null; hotkeys: HotkeySnapshot[]; coverage: 'Partial' | 'Unanalysable'; issues: Issue[] }
 export interface CollectionSnapshot { id: string; name: string }
 export interface WindowPlacement { x: number; y: number; width: number; height: number; maximized: boolean; dpi: number }
@@ -39,6 +42,8 @@ export interface AhkManagerApi {
   addFiles(): Promise<CatalogResult | null>;
   addFolder(): Promise<CatalogResult | null>;
   removeScript(scriptId: string, revision: Decimal): Promise<OperationResult>;
+  locateScript(selection: SelectionContext): Promise<OperationResult>;
+  deleteScriptFile(selection: SelectionContext): Promise<OperationResult>;
   saveMetadata(scriptId: string, metadata: ScriptMetadata, revision: Decimal): Promise<OperationResult>;
   saveCollection(collectionId: string | null, name: string): Promise<OperationResult>;
   removeCollection(collectionId: string, revision: Decimal): Promise<OperationResult>;

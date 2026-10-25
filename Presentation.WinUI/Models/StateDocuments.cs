@@ -30,7 +30,8 @@ public sealed record SettingsDocument
 public sealed record OperationRecord(Guid Id, Guid ScriptId, ScriptOperation Operation, string ScriptPath,
     string InterpreterPath, string ScriptHash, string InterpreterHash, string UserSid,
     string LoginKey, DateTimeOffset RequestedAt, Outcome Outcome, ProcessIdentity? Identity = null,
-    ReasonCode Code = ReasonCode.None, bool RestartOldExited = false);
+    ReasonCode Code = ReasonCode.None, bool RestartOldExited = false,
+    bool RecycleReceipt = false, bool RecycleStopped = false);
 public sealed record JournalDocument
 {
     public int Schema { get; init; } = 1;

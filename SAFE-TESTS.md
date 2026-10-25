@@ -6,6 +6,10 @@ Não há argumento de produto para trocar perfil, ignorar o proprietário de efe
 
 O instalador deve ser ensaiado em destino isolado, com o Manager fechado. Inicialização real permanece desautorizada nos testes. Verificar instalação, atualização, desinstalação e preservação dos dados é diferente de apenas compilar o NSIS. Uma confirmação de shutdown só vale junto com a saída observada do backend; prazo excedido é desconhecido e não autoriza matar processos ou repetir efeitos.
 
+O seletor atual `Tests.Backend.exe --inventory-scoped-readonly --root <pasta-absoluta-inexistente>` consulta uma vez o inventário delimitado do ensaio, com prazo de 30 segundos. Cria apenas seus arquivos inertes de diagnóstico e não inicia, encerra ou exclui scripts. O JSON contém contadores e códigos fixos, sem caminhos ou argumentos de scripts externos.
+
+O ensaio `--ahk-owned --root <outra-pasta-absoluta-inexistente>` mantém um conjunto fechado de identidades externas comprovadamente anteriores à raiz. Só as exclui da observação do ensaio enquanto identidade e argumentos permanecem iguais; isso não modifica a política de observação do produto. Novas instâncias, identidades alteradas ou informações insuficientes continuam bloqueando uma conclusão segura. Nunca reutilize a raiz de uma tentativa anterior.
+
 Os seletores WinUI abaixo são históricos e não validam a interface Electron:
 
 Feche jogos e Playnite antes dos testes gráficos ou com AutoHotkey. Execute sem elevação. Não use o perfil real nem a pasta publish anterior. O executável Tests.WinUI/bin/x64/Release/net10.0-windows10.0.26100.0/win-x64/Bezoro.AhkManager.WinUI.Tests.exe exige seletor explícito e uma raiz inexistente:

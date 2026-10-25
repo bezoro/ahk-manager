@@ -20,6 +20,10 @@ public sealed record ElevationStatus(Guid OperationId, long Revision, ElevationS
 public sealed record PathsPayload(string[] Paths);
 public sealed record PathPayload(string Path);
 public sealed record ScriptPayload(Guid ScriptId);
+public sealed record RelinkPayload(SelectionContext Selection, string OldPath, string ReplacementPath, bool StartupConsent);
+public sealed record RecyclePreparePayload(SelectionContext Selection);
+public sealed record RecycleAuthorizePayload(Guid OperationId, SelectionContext Selection, bool Confirmed);
+public sealed record RecycleCompletePayload(Guid OperationId, Outcome Receipt, string? Detail);
 public sealed record MetadataPayload(Guid ScriptId, ScriptMetadata Metadata, bool StartupConsent);
 public sealed record CollectionPayload(Guid? CollectionId, string Name);
 public sealed record CollectionIdPayload(Guid CollectionId);
@@ -79,6 +83,7 @@ public static class Protocol
         options.Converters.Add(new JsonStringEnumConverter<ReasonCode>(allowIntegerValues: false));
         options.Converters.Add(new JsonStringEnumConverter<ScriptOperation>(allowIntegerValues: false));
         options.Converters.Add(new JsonStringEnumConverter<HotkeyOrigin>(allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeclaredGesture>(allowIntegerValues: false));
         options.Converters.Add(new JsonStringEnumConverter<AnalysisCoverage>(allowIntegerValues: false));
         options.Converters.Add(new JsonStringEnumConverter<StatusFilter>(allowIntegerValues: false));
         options.Converters.Add(new JsonStringEnumConverter<ScriptSort>(allowIntegerValues: false));

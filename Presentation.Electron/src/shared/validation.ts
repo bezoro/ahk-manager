@@ -16,7 +16,7 @@ export function shape(required: Record<string, Validator>, optional: Record<stri
     Object.entries(required).every(([k, validate]) => Object.hasOwn(v, k) && validate(v[k])) &&
     Object.entries(optional).every(([k, validate]) => !Object.hasOwn(v, k) || validate(v[k]));
 }
-export const operation = oneOf('Start', 'Stop', 'Restart', 'TogglePause', 'ToggleSuspend', 'Edit', 'OpenFolder', 'Recover');
+export const operation = oneOf('Start', 'Stop', 'Restart', 'TogglePause', 'ToggleSuspend', 'Edit', 'OpenFolder', 'Recover', 'RecycleFile');
 export const outcome = oneOf('Accepted', 'Pending', 'Confirmed', 'Partial', 'CancelledBeforeDispatch', 'Failed', 'Unknown');
 export const reason = oneOf('None','InvalidPath','MissingFile','UnsupportedInterpreter','AccessDenied','ObservationIncomplete','AlreadyRunning','MultipleInstances','IdentityChanged','WindowUnverified','CapabilityUnverified','EffectOwnerUnavailable','LegacyGuard','PendingOperation','StaleSelection','ReadOnlySettings','InvalidSettings','UnsupportedSchema','RecoveredBackup','ConcurrentSettingsChange','StorageFailure','Cancelled','DispatchFailed','ExitNotObserved','StateNotObservable','RestartPartial','LaunchUncertain','StartupConsentRequired','StartupEntryConflict','StartupInactive','StartupAlreadyProcessed','ImportSourceChanged','ImportInvalid','ImportAvailable','FolderLimitReached','PartialAnalysis','IncludeUnresolved','IncludeLimitReached','DynamicHotkeys','PossibleConflict','EditorUnavailable','ActivityUnavailable','InvalidMetadata','ManualElevationRequired','ExternalStartupConflict');
 export const authorityMode = oneOf('Normal','Administrator');
@@ -24,7 +24,7 @@ export const elevationStatus = shape({operationId:guid,revision:decimal,state:on
 export const issue = shape({code: reason, detail: nullable(text()), scriptId: nullable(guid)});
 export const identity = shape({pid: integer, creationFileTime: decimal, executablePath: text(), scriptPath: text(), userSid: text(256), sessionId: integer, scriptHash: text(128), interpreterHash: text(128)});
 export const processSnapshot = shape({identity, origin: oneOf('None','Manager','External','Recovered'), interpreterVersion: text(256), startedAt: text(128), paused: nullable(bool), suspended: nullable(bool), windowVerified: bool},{controlUnavailableReason:nullable(oneOf('AccessDenied','ManualElevationRequired'))});
-export const hotkey = shape({chord:text(2048),normalizedChord:text(2048),origin:oneOf('Parsed','Manual','Unanalysed'),context:nullable(text()),sourcePath:nullable(text()),line:nullable(integer),isRemap:bool,possibleConflict:bool});
+export const hotkey = shape({chord:text(2048),normalizedChord:text(2048),origin:oneOf('Parsed','Manual','Unanalysed'),context:nullable(text()),sourcePath:nullable(text()),line:nullable(integer),isRemap:bool,possibleConflict:bool},{declaredGesture:nullable(oneOf('DoubleClick'))});
 export const script = shape({id:guid,path:text(),friendlyName:text(4096),description:text(),collectionId:nullable(guid),runAtLogin:nullable(bool),runAsAdministrator:bool,launchBlocked:bool,status:oneOf('Stopped','Running','Unknown','Multiple','Missing','Blocked'),process:nullable(processSnapshot),hotkeys:array(hotkey),coverage:oneOf('Partial','Unanalysable'),issues:array(issue)},{headerDescription:nullable(text(4000))});
 export const placement = shape({x:integer,y:integer,width:integer,height:integer,maximized:bool,dpi:finite});
 export const settings = shape({interpreterPath:nullable(text()),editorPath:nullable(text()),editorArguments:array(text(4096),128),launchManagerAtLogin:bool,showWindowAtLogin:bool,theme:oneOf('System','Light','Dark'),closeBehavior:oneOf('HideToTray','Exit'),window:placement});
@@ -34,6 +34,9 @@ export const query = shape({search:text(4096),status:oneOf('All','Running','Stop
 export const selection = shape({scriptId:guid,query,stateRevision:decimal});
 export const operationPlan = shape({correlationId:guid,scriptId:guid,operation,stateRevision:decimal,queryVersion:decimal,expectedIdentity:nullable(identity),allowed:bool,requiresConfirmation:bool,reason,selection});
 export const operationResult = shape({outcome,code:reason,detail:nullable(text()),correlationId:nullable(guid)},{succeeded:bool});
+export const scriptFileIdentity = shape({path:text(),fileId:text(512),hash:text(128)});
+export const recyclePlan = shape({operationId:guid,scriptId:guid,path:text(),file:nullable(scriptFileIdentity),expectedIdentity:nullable(identity),selection,allowed:bool,reason});
+export const recycleAuthorization = shape({result:operationResult,file:nullable(scriptFileIdentity),stopped:bool});
 export const catalogResult = shape({result:operationResult,added:array(guid),duplicateCount:integer,issues:array(issue)});
 export const metadata = shape({friendlyName:text(4096),description:text(),collectionId:nullable(guid),runAtLogin:nullable(bool),runAsAdministrator:bool,launchBlocked:bool,manualHotkeys:array(text(2048),512)});
 export const activityQuery = shape({},{scriptId:nullable(guid),outcome:nullable(outcome),search:text(4096)});

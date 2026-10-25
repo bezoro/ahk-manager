@@ -4,6 +4,7 @@ import { DocumentRegular } from '@fluentui/react-icons';
 import type { ScriptSnapshot } from '../../shared/contracts.js';
 import { fileName, rowWindow, type RowPreference } from '../model.js';
 import { status, text } from '../resources/pt-BR.js';
+import { ReadableHotkey } from './Hotkeys.js';
 
 interface Props { rows: ScriptSnapshot[]; selectedId: string | null; onSelect(id: string): void; onContext(id: string, x: number, y: number): void; queryVersion: string; preferencesDisabled: boolean; pendingPreference: { scriptId: string; field: RowPreference } | null; onPreference(id: string, field: RowPreference, value: boolean): void }
 export function ScriptList({ rows, selectedId, onSelect, onContext, queryVersion, preferencesDisabled, pendingPreference, onPreference }: Props): React.ReactElement {
@@ -28,13 +29,13 @@ export function ScriptList({ rows, selectedId, onSelect, onContext, queryVersion
   };
   return <div className="script-viewport" ref={viewport} onScroll={event => setScroll(event.currentTarget.scrollTop)}>
     <table className="script-table" ref={grid} tabIndex={0} role="grid" aria-label={text.scripts} aria-rowcount={rows.length + 1} aria-colcount={5} aria-activedescendant={selectedId && rendered.some(row => row.id === selectedId) ? 'script-' + selectedId : undefined} onKeyDown={navigate}>
-      <colgroup><col style={{ width: '38%' }} /><col style={{ width: '15%' }} /><col style={{ width: '15%' }} /><col style={{ width: '16%' }} /><col style={{ width: '16%' }} /></colgroup>
+      <colgroup><col style={{ width: '34%' }} /><col style={{ width: '14%' }} /><col style={{ width: '22%' }} /><col style={{ width: '15%' }} /><col style={{ width: '15%' }} /></colgroup>
       <thead><tr className="table-head"><th scope="col">{text.name}</th><th scope="col">{text.status}</th><th scope="col">{text.mainHotkey}</th><th scope="col">{text.startupColumn}</th><th scope="col">{text.administratorColumn}</th></tr></thead>
       <tbody><tr className="virtual-spacer" aria-hidden="true"><td colSpan={5} style={{ height: range.start * 68 }} /></tr>
         {rendered.map((script, index) => <tr key={script.id} id={'script-' + script.id} aria-selected={selectedId === script.id} aria-rowindex={range.start + index + 2} className={'script-row ' + (selectedId === script.id ? 'selected' : '')} onContextMenu={event => { event.preventDefault(); onContext(script.id, event.clientX, event.clientY); }}>
           <td><button className="row-select name-cell" aria-pressed={selectedId === script.id} onClick={() => onSelect(script.id)}><DocumentRegular /><span><strong title={script.friendlyName}>{script.friendlyName}</strong><small title={script.path}>{fileName(script.path)}</small></span></button></td>
           <td><span className={'status-text status-' + script.status.toLowerCase()}><i />{status(script.status)}</span></td>
-          <td className="row-hotkey">{script.hotkeys[0] ? <kbd title={script.hotkeys.map(key => key.chord).join(', ')}>{script.hotkeys[0].chord}</kbd> : <span className="muted">—</span>}</td>
+          <td className="row-hotkey">{script.hotkeys[0] ? <ReadableHotkey hotkey={script.hotkeys[0]} compact /> : <span className="muted">—</span>}</td>
           {preference(script, 'runAtLogin')}{preference(script, 'runAsAdministrator')}
         </tr>)}
         <tr className="virtual-spacer" aria-hidden="true"><td colSpan={5} style={{ height: Math.max(0, rows.length - range.end) * 68 }} /></tr>

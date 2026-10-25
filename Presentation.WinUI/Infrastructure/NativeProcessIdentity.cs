@@ -44,6 +44,14 @@ public static class ScriptPaths
         if (input.Length > 64 * 1024 * 1024) throw new IOException("File exceeds fingerprint limit.");
         return Convert.ToHexString(SHA256.HashData(input)).ToLowerInvariant();
     }
+    public static ScriptFileIdentity FileIdentity(string path)
+    {
+        string canonical = Canonical(path);
+        using var stream = new FileStream(canonical, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream.Length > 64 * 1024 * 1024 || !ProcessNative.GetFileInformationByHandle(stream.SafeFileHandle, out var stamp) || stamp.Links != 1) throw new IOException("Uncertain file identity.");
+        string id = $"{stamp.Volume}:{stamp.IndexHigh}:{stamp.IndexLow}:{stamp.Creation}:{stamp.Write}:{stamp.SizeHigh}:{stamp.SizeLow}";
+        return new(canonical, id, Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant());
+    }
     public static string[] SplitCommand(string command)
     {
         if (string.IsNullOrWhiteSpace(command) || command.Length > 32768 || command.Contains('\0') || char.IsWhiteSpace(command[0])) return [];

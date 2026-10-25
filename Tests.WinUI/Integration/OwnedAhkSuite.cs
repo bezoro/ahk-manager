@@ -29,7 +29,7 @@ internal static class OwnedAhkSuite
             SetTimer(() => 0, 1000)
             """);
         using var owner=new FixtureOwner(directory,Interpreter,[script,veto]);
-        var observation=new FixtureProcessObservation(directory,[script,veto]);
+        var observation=new FixtureProcessObservation(directory,[script,veto],Interpreter);
         await using var manager=new ProcessManager(owner,documentedControlsProven:true,observationSource:observation);
         ProcessIdentity? active=null,vetoActive=null;
         try
