@@ -1,4 +1,16 @@
-# AHK Manager 1.1.0
+# AHK Manager 1.2, atualizações e histórico
+
+A página **Atualizações** avisa quando há uma versão disponível, mostra o progresso do download e oferece **Atualizar** ou **Voltar para esta versão** no histórico. O Manager consulta o GitHub ao abrir e a cada 15 minutos. Cada mudança na `main` que passa pela CI produz uma versão numerada e um instalador permanente nas Releases. Branches e pull requests não são oferecidos como atualizações.
+
+A atualização é sempre solicitada pelo usuário. O `electron-updater` baixa e verifica o instalador; o aplicador aguarda o encerramento normal do Manager, preserva uma cópia da instalação e só então aplica a versão escolhida. Os scripts AHK continuam em execução. Perfis, scripts e preferências de início com Windows são preservados. Uma falha confirmada na instalação restaura a cópia anterior; uma operação de resultado incerto fica bloqueada para não repetir efeitos.
+
+Com o repositório público, as atualizações funcionam sem login ou token. Se o repositório estiver privado ou o GitHub limitar as consultas, há um acesso opcional em **Atualizações > Acesso avançado ao GitHub**. O Windows protege essa credencial; ela não vai para o renderer, logs ou pacote. Os instaladores já preservados permitem voltar de versão mesmo sem conexão. O histórico publicado continua no GitHub.
+
+O primeiro uso do atualizador exige instalar uma versão 1.2. Versões até 1.1 recusam atualização no mesmo local: saia do Manager, desinstale preservando o perfil e instale a 1.2. Se houver tarefa administrativa ativa, desative o início com Windows antes dessa primeira desinstalação e confirme novamente sua preferência depois. Nas atualizações seguintes, o aplicativo faz a troca pelo botão.
+
+Consulte [UPDATES.md](UPDATES.md) para publicação, assinatura e recuperação. O instalador da CI de pull request usa a versão 1.2.1; versões de `main` usam `1.2.<número da execução>`.
+
+## Comportamento de inicialização introduzido na 1.1
 
 O Manager inicia com Windows e como administrador por padrão. As duas preferências são independentes e configuráveis. Na primeira abertura, a confirmação do Windows permite concluir o modo administrativo. O início elevado usa uma tarefa agendada por usuário; o modo padrão usa uma entrada de login do usuário. Se uma alteração não puder ser aplicada, a interface informa que a configuração está pendente e permite tentar novamente.
 

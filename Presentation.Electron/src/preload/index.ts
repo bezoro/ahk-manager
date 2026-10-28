@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { AdministrationUiGuard, AhkManagerApi, HostState, ThemeState } from '../shared/contracts.js';
 import { activity, array, authorityMode, bool, catalogResult, guid, importPreview, nullable, object, oneOf, operationResult, shape, snapshot, text, requireValid, type Validator } from '../shared/validation.js';
+import { updateState } from '../shared/update-validation.js';
 
 const hostState=shape({snapshot:nullable(snapshot),connection:oneOf('starting','ready','failed','closing'),error:nullable(text()),busy:bool,authorityMode:nullable(authorityMode),administrationPending:bool});
 const uiGuard=shape({dirtyDrafts:bool,dialogOpen:bool,pendingWork:bool});
@@ -35,6 +36,11 @@ function subscribe<T>(channel:string,listener:(value:T)=>void,validate:(value:un
   return ()=>ipcRenderer.removeListener(channel,handler);
 }
 const api:AhkManagerApi={
+  getUpdateState:()=>checked('getUpdateState',{},updateState),
+  checkUpdates:()=>checked('checkUpdates',{},updateState),
+  installUpdate:id=>checked('installUpdate',{id},updateState),
+  setUpdateToken:token=>checked('setUpdateToken',{token},updateState),
+  onUpdates:listener=>subscribe('manager:updates',listener,updateState),
   requestAdministration:()=>checked('requestAdministration',{},operationResult),
   onAdministrationPreflight:provider=>{
     preflightProvider=provider;

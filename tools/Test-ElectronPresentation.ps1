@@ -188,7 +188,7 @@ try {
         Save-Capture "$theme-zoom-200-missing-file"
     }
 
-    # Preferences remain open for these final two captures, after all scenarios.
+    # Preferences remain open for these two captures, after the script scenarios.
     Set-Presentation 'light'
     $null = Send-HarnessCommand @{ action = 'overview' }
     $null = Send-HarnessCommand @{ action = 'preferences' }
@@ -197,6 +197,25 @@ try {
     $null = Send-HarnessCommand @{ action = 'theme'; value = 'dark' }
     Start-Sleep -Milliseconds 300
     Save-Capture 'dark-preferences'
+
+
+    # Update history is independent of the production backend. Exercise the
+    # normal page and cached rollback recovery in both themes and smaller views.
+    foreach ($theme in @('light', 'dark')) {
+        Set-Presentation $theme
+        Invoke-Assertions 'updates' 'updates'
+        Save-Capture "$theme-updates-1240"
+        Invoke-Assertions 'updates' 'updates' @{ recovery = $true }
+        Save-Capture "$theme-updates-recovery-1240"
+
+        Set-Presentation $theme 740 820
+        Invoke-Assertions 'updates' 'updates'
+        Save-Capture "$theme-updates-narrow-740"
+
+        Set-Presentation $theme 1240 820 2
+        Invoke-Assertions 'updates' 'updates' @{ recovery = $true }
+        Save-Capture "$theme-updates-zoom-200"
+    }
 }
 catch { $script:failures.Add($_.Exception.Message); Write-Trace $_.Exception.Message }
 finally {

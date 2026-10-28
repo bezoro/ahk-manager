@@ -5,6 +5,7 @@ import path from 'node:path';
 import { APP_URL,assetFromUrl,CSP } from '../../src/main/security.js';
 import type { HostState,ManagerSnapshot,ThemeState,OperationResult } from '../../src/shared/contracts.js';
 import { snapshot,scriptId } from './fixtures.js';
+import { emptyUpdateState, type UpdateState } from '../../src/shared/updates.js';
 import { requireValid,shape,snapshot as validateSnapshot,nullable,text,bool,oneOf,authorityMode } from '../../src/shared/validation.js';
 const arg=(name:string)=>{const index=process.argv.indexOf(name);if(index<0)throw new Error(`Missing ${name}`);return process.argv[index+1]!;};
 const output=path.resolve(arg('--output')),frontend=path.resolve(arg('--frontend'));
@@ -26,6 +27,7 @@ const fixtureSnapshot:ManagerSnapshot={...snapshot(),revision:'1',collections:[{
   {...example,id:'77777777-7777-7777-7777-777777777777',friendlyName:'Modo de concentração',path:'C:\\FixtureIsolada\\Foco.ahk',hotkeys:[{chord:'Ctrl + Alt + F',normalizedChord:'^!F',origin:'Manual',context:null,sourcePath:null,line:null,isRemap:false,possibleConflict:true}]},
 ],issues:[{code:'PartialAnalysis',detail:'FIXTURE ISOLADA — dados de teste; nenhum script real.',scriptId:null}],activity:[{id:'88888888-8888-8888-8888-888888888888',timestamp:new Date().toISOString(),scriptId,operation:'Start',outcome:'Confirmed',code:'None',detail:'Fixture de apresentação; nenhum processo foi iniciado.'}],runningCount:1,problemCount:2};
 let state:HostState={snapshot:fixtureSnapshot,connection:'ready',error:null,busy:false,authorityMode:'Normal',administrationPending:false};
+let updates:UpdateState={...emptyUpdateState(),currentVersion:'1.1.0'};
 const currentTheme=():ThemeState=>({dark:nativeTheme.shouldUseDarkColors,accent:`#${systemPreferences.getAccentColor().slice(0,6)}`,highContrast:nativeTheme.shouldUseHighContrastColors,reducedMotion:!systemPreferences.getAnimationSettings().shouldRenderRichAnimation,material});
 const write=(name:string,value:unknown)=>{const file=path.join(output,name);fs.writeFileSync(file+'.tmp',JSON.stringify(value,null,2));fs.renameSync(file+'.tmp',file);};
 function report(){write('state.json',{pid:process.pid,hwnd:window.getNativeWindowHandle().readBigUInt64LE().toString(),bounds:window.getBounds(),contentBounds:window.getContentBounds(),visible:window.isVisible(),focused:window.isFocused(),fixture:true,theme:currentTheme(),versions:process.versions,backend:null});}
@@ -49,11 +51,16 @@ app.whenReady().then(async()=>{
     if(method==='resetResponses'){if(waiting.size)throw new Error('Unresolved fixture response');responses.clear();return;}
     if(method==='openPreferences'){window.webContents.send('fixture:preferences');return;}
     if(method==='setState'){requireValid(args[0],shape({snapshot:nullable(validateSnapshot),connection:oneOf('starting','ready','failed','closing'),error:nullable(text()),busy:bool,authorityMode:nullable(authorityMode),administrationPending:bool}),'fixture state');state=structuredClone(args[0]) as HostState;emitState();return;}
+    if(method==='setUpdates'){updates=structuredClone(args[0]) as UpdateState;window.webContents.send('fixture:updates',updates);return;}
     if(method==='setTheme'){const value=args[0] as ThemeState;window.webContents.send('fixture:theme',value);return;}
-    calls.push({method,args});
+    calls.push({method,args:method==='setUpdateToken'?[args[0]===null?null:'[redacted]']:args});
     const response=responses.get(method);
     if(response){if(response.pending)return new Promise((resolve,reject)=>waiting.set(method,{resolve,reject}));if(response.error)throw new Error(response.error);return response.value;}
     if(method==='getState')return state;if(method==='getTheme')return currentTheme();
+    if(method==='getUpdateState')return updates;
+    if(method==='checkUpdates'){updates={...updates,phase:'idle',lastCheckedAt:new Date().toISOString()};window.webContents.send('fixture:updates',updates);return updates;}
+    if(method==='installUpdate')return {...updates,phase:'installing'};
+    if(method==='setUpdateToken'){updates={...updates,accessConfigured:args[0]!==null};window.webContents.send('fixture:updates',updates);return updates;}
     if(method==='refresh'||method==='retryBackend'){emitState();return;}
     if(method==='updateSelection'||method==='copyText')return;
     if(method==='getActivity')return state.snapshot?.activity??[];
@@ -84,6 +91,7 @@ app.whenReady().then(async()=>{
     else if(command.action==='startInTray'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.runStartInTrayScenario()');write('assertions-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='checkPrimary'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.checkPrimaryLabel()');write('primary-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='deleteScopes'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.runDeleteSelectionScopes()');write('assertions-'+command.id+'.json',{assertions,fixture:true});}
+    else if(command.action==='updates'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.previewUpdates('+Boolean(command.recovery)+')');write('updates-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='preferences'){if(scenarios)await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.previewPreferences()');else window.webContents.send('fixture:preferences');report();}
     else if(command.action==='close'){nativeTheme.themeSource='system';write('closed.json',{themeRestored:nativeTheme.themeSource,fixture:true});app.quit();}
     else throw new Error('Unknown fixture command');

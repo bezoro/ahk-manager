@@ -1,3 +1,4 @@
+import type { UpdateState } from './updates.js';
 /** Lossless decimal strings are used for every .NET Int64 field. */
 export type Decimal = string;
 export type AuthorityMode = 'Normal' | 'Administrator';
@@ -37,6 +38,11 @@ export interface HostState { snapshot: ManagerSnapshot | null; connection: 'star
 export type AppState = HostState;
 export interface ThemeState { dark: boolean; highContrast: boolean; reducedMotion: boolean; accent: string; material: 'mica' | 'solid' }
 export interface AhkManagerApi {
+  getUpdateState(): Promise<UpdateState>;
+  checkUpdates(): Promise<UpdateState>;
+  installUpdate(id: string): Promise<UpdateState>;
+  setUpdateToken(token: string | null): Promise<UpdateState>;
+  onUpdates(listener: (state: UpdateState) => void): () => void;
   getState(): Promise<HostState>;
   onState(listener: (state: HostState) => void): () => void;
   refresh(): Promise<void>;
