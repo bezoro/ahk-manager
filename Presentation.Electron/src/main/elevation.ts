@@ -46,7 +46,7 @@ export class ElevationCoordinator {
   constructor(private readonly boundary:ElevationBoundary){}
   get active():boolean{return this.running||this.ticket!==null;}
   get processing():boolean{return this.running;}
-  async request(explicitCli=false,continuationId?:string):Promise<OperationResult> {
+  async request(explicitCli=false,continuationId?:string,resumeLogin=false):Promise<OperationResult> {
     if(this.running)return result('CancelledBeforeDispatch','PendingOperation');
     this.running=true;
     try{
@@ -63,7 +63,7 @@ export class ElevationCoordinator {
         }catch{this.boundary.quiesce(false);return result('Failed','StorageFailure');}
         this.ticket={id,revision:'0',commitSent:false,commitDeadline:null,acknowledged:false};
         let status:ElevationStatus|null=null;
-        try{status=await this.boundary.request(continuationId?'beginStartupContinuation':'beginAdministration',continuationId?{operationId:id,continuationId}:{operationId:id});}catch{/* A sent mutation is never replayed. */}
+        try{status=await this.boundary.request(continuationId?'beginStartupContinuation':'beginAdministration',continuationId?{operationId:id,continuationId}:resumeLogin?{operationId:id,resumeLogin:true}:{operationId:id});}catch{/* A sent mutation is never replayed. */}
         return await this.observe(status);
       }
       if(this.ticket.acknowledged){await this.boundary.quitAfterAcknowledgement();return result('Confirmed','None');}

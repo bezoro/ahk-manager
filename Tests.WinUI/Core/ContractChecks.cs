@@ -18,7 +18,8 @@ public static partial class CoreSuite
         FixtureRoot = System.IO.Path.GetFullPath(fixtureRoot ?? throw new ArgumentException("Dispatcher must provide an isolated core fixture root."));
         Directory.CreateDirectory(FixtureRoot);
         checks = 0;
-        Check(!ManagerSnapshot.Empty.Settings.LaunchManagerAtLogin, "login defaults off");
+        Check(ManagerSnapshot.Empty.Settings.LaunchManagerAtLogin, "new profiles enable Windows login by default");
+        Check(ManagerSnapshot.Empty.Settings.LaunchManagerAsAdministrator, "new profiles request administrator startup by default");
         Check(!ManagerSnapshot.Empty.Settings.ShowWindowAtLogin, "login window defaults off");
         Check(ManagerSnapshot.Empty.RunningCount == 0, "empty state has no fabricated processes");
         await RunStorageAsync();

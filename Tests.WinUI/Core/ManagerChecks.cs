@@ -128,7 +128,8 @@ public static partial class CoreSuite
         var startup = new UserStartupService(registration, Path.Combine(root, "AHK Manager.exe"));
         await using var manager = new ManagerService(Path.Combine(root, "data"), fixtureOwner, boundary, startup);
         await manager.LoadAsync();
-        Check(!manager.Snapshot.Settings.LaunchManagerAtLogin && registration.Writes == 0, "loading performs no startup registration");
+        Check(manager.Snapshot.Settings.LaunchManagerAtLogin && manager.Snapshot.Settings.LaunchManagerAsAdministrator && registration.Writes == 0, "loading exposes requested defaults without performing startup registration");
+        await UseNormalStartupFixtureAsync(manager);
         var added = await manager.AddFilesAsync(new[] { script, script.ToUpperInvariant(), Path.Combine(root, "missing.ahk") });
         Check(added.Added.Length == 1 && added.DuplicateCount == 1 && added.Result.Outcome == Outcome.Partial, "canonical add is bounded partial and case-insensitive deduplicated");
         Guid id = added.Added[0];
@@ -212,7 +213,7 @@ public static partial class CoreSuite
             using var cancellation = new CancellationTokenSource();
             string dataRoot = Path.Combine(root, "data");
             await using var service = new ManagerService(dataRoot, owner, processes, startup, Path.Combine(root, "legacy-absent"));
-            await service.LoadAsync(); var added = await service.AddFilesAsync([path]);
+            await service.LoadAsync(); await UseNormalStartupFixtureAsync(service); var added = await service.AddFilesAsync([path]);
             await service.SaveMetadataAsync(added.Added.Single(), new("Fixture", "", null, true, false, false, []), true);
             if (scenario == "registration") registration.Entry = null;
             if (scenario == "authority") owner.Held = false;
@@ -250,7 +251,7 @@ public static partial class CoreSuite
             var owner = new FakeOwner(root); var boundary = new FakeProcesses(owner); var registration = new FakeStartup();
             var startup = new UserStartupService(registration, Path.Combine(root, "Manager.exe")); string data = Path.Combine(root, "data");
             await using var service = new ManagerService(data, owner, boundary, startup, Path.Combine(root, "legacy-absent"));
-            await service.LoadAsync(); await service.AddFilesAsync([first, second, admin]);
+            await service.LoadAsync(); await UseNormalStartupFixtureAsync(service); await service.AddFilesAsync([first, second, admin]);
             foreach (var row in service.Snapshot.Scripts) await service.SaveMetadataAsync(row.Id, new(row.FriendlyName, "", null, true, row.Path == admin, false, []), true);
             if (scenario == "partial-before-offer") boundary.AfterStart = () => boundary.Current = boundary.Current with { Complete = false };
             else boundary.Current = new([], false, [new(ReasonCode.ObservationIncomplete)]);
@@ -359,7 +360,7 @@ public static partial class CoreSuite
             var owner = new FakeOwner(root); var boundary = new FakeProcesses(owner) { Administrator = scenario == "administrator" };
             var registration = new FakeStartup(); var startup = new UserStartupService(registration, Path.Combine(root, "Manager.exe"));
             await using var service = new ManagerService(Path.Combine(root, "data"), owner, boundary, startup, Path.Combine(root, "legacy-absent"));
-            await service.LoadAsync(); await service.AddFilesAsync([first, second]);
+            await service.LoadAsync(); await UseNormalStartupFixtureAsync(service); await service.AddFilesAsync([first, second]);
             var ids = service.Snapshot.Scripts.Select(s => s.Id).ToArray();
             await service.SaveMetadataAsync(ids[0], new("Primeiro", "", null, true, scenario is "administrator" or "standard", false, []), true);
             await service.SaveMetadataAsync(ids[1], new("Segundo", "", null, true, false, false, []));
@@ -401,7 +402,7 @@ public static partial class CoreSuite
         string root = Path.Combine(FixtureRoot, "inactive-startup"), path = Path.Combine(root, "fixture.ahk"), data = Path.Combine(root, "data");
         Directory.CreateDirectory(root); Directory.CreateDirectory(data); await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2\n");
         Guid id = Guid.NewGuid(); var store = new SettingsStore(Path.Combine(data, "settings.json")); var original = await store.LoadAsync();
-        Check((await store.SaveAsync(original.Document with { Scripts = [new() { Id = id, Path = path, FriendlyName = "Fixture", RunAtLogin = true }], Settings = new() { InterpreterPath = interpreter, LaunchManagerAtLogin = false } })).Succeeded, "seed existing true row startup while global startup inactive");
+        Check((await store.SaveAsync(original.Document with { Scripts = [new() { Id = id, Path = path, FriendlyName = "Fixture", RunAtLogin = true }], Settings = new() { InterpreterPath = interpreter, LaunchManagerAtLogin = false, LaunchManagerAsAdministrator = false } })).Succeeded, "seed existing true row startup while global startup inactive");
         var owner = new FakeOwner(root); var processes = new FakeProcesses(owner); var registration = new FakeStartup();
         await using var manager = new ManagerService(data, owner, processes, new UserStartupService(registration, Path.Combine(root, "Manager.exe")), Path.Combine(root, "legacy-absent")); await manager.LoadAsync();
         Check((await manager.SaveMetadataAsync(id, new("Fixture", "", null, true, true, false, []))).Succeeded, "changing administrator preference preserves existing inactive startup intent");
@@ -435,6 +436,16 @@ public static partial class CoreSuite
         }
         Check(processes.Starts == 0 && processes.Controls == 0 && registration.Writes == 0, "header refresh/save/load never starts AHK or writes real/fake startup");
     }
+    // These fixtures exercise the normal HKCU registration path. Administrative
+    // registration and the new profile defaults have separate contract checks.
+    static async Task UseNormalStartupFixtureAsync(ManagerService manager)
+    {
+        Check((await manager.SaveSettingsAsync(manager.Snapshot.Settings with
+        {
+            LaunchManagerAtLogin = false,
+            LaunchManagerAsAdministrator = false
+        })).Succeeded, "normal-startup fixture explicitly disables new administrative login defaults");
+    }
     static SelectionContext Select(ManagerService manager, Guid id) => new(id, new(Version: 7), manager.Snapshot.Revision);
 
     static async Task FileActionsAsync(string interpreter)
@@ -446,7 +457,7 @@ public static partial class CoreSuite
             string path = Path.Combine(folder, "inert.ahk"); await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2.0\nF13::return\n");
             var owner = new FakeOwner(folder); var processes = new FakeProcesses(owner); var startup = new FakeStartup();
             var manager = new ManagerService(Path.Combine(folder, "data"), owner, processes, new UserStartupService(startup, Path.Combine(folder, "Manager.exe")));
-            await manager.LoadAsync(); await manager.AddFilesAsync([path]);
+            await manager.LoadAsync(); await UseNormalStartupFixtureAsync(manager); await manager.AddFilesAsync([path]);
             return (manager, processes, startup, path);
         }
         var locate = await Create("locate");

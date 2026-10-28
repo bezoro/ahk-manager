@@ -1,3 +1,17 @@
+# AHK Manager 1.1.0
+
+O Manager inicia com Windows e como administrador por padrão. As duas preferências são independentes e configuráveis. Na primeira abertura, a confirmação do Windows permite concluir o modo administrativo. O início elevado usa uma tarefa agendada por usuário; o modo padrão usa uma entrada de login do usuário. Se uma alteração não puder ser aplicada, a interface informa que a configuração está pendente e permite tentar novamente.
+
+Scripts marcados para iniciar com Windows são executados no login. Cada script mantém sua preferência administrativa; scripts normais continuam com privilégio padrão mesmo quando o Manager está elevado. Iniciar, parar e reiniciar verificam a identidade do processo. Novos processos e encerramentos externos atualizam o estado automaticamente.
+
+Editar procura o VS Code instalado, preservando a seleção de outro editor e seus argumentos. Sem VS Code, utiliza a associação segura Editar ou um editor de texto. Um Manager elevado abre o editor com o privilégio padrão do usuário.
+
+As preferências de inicialização aparecem primeiro. As ações principais ficam juntas, ações secundárias estão em um menu e a recuperação de pendências funciona mesmo com a lista vazia. Registros de continuação inválidos podem ser preservados em quarentena após uma recuperação explícita, sem repetir execuções.
+
+A CI do Windows verifica backend, contratos, WMI, tipos e cenários de interface, captura temas claro/escuro, janelas estreitas e zoom de 200%, e compila o instalador. Logs, capturas e instalador ficam disponíveis nos artefatos da execução. Consulte [SAFE-TESTS.md](SAFE-TESTS.md) para o escopo e [VALIDATION.md](VALIDATION.md) para o histórico de versões anteriores.
+
+Os registros abaixo descrevem versões anteriores, inclusive políticas e instalações que mudaram na 1.1.0.
+
 ## Versão 1.0.4 — recuperação de arquivos e atalhos legíveis
 
 Arquivos ausentes mostram **Localizar script…** e **Remover da lista** no painel. Localizar preserva o registro e suas preferências; remover da lista preserva o arquivo. Para arquivos existentes, **Excluir arquivo…** solicita confirmação e usa a Lixeira do Windows. Se o script estiver em execução, a mensagem explica que ele será parado primeiro. A exclusão só prossegue após o encerramento comprovado; recusa de saída, identidade incerta ou mudança de arquivo interrompem a operação.

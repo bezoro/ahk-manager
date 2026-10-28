@@ -84,7 +84,7 @@ app.whenReady().then(async()=>{
     else if(command.action==='startInTray'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.runStartInTrayScenario()');write('assertions-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='checkPrimary'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.checkPrimaryLabel()');write('primary-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='deleteScopes'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.runDeleteSelectionScopes()');write('assertions-'+command.id+'.json',{assertions,fixture:true});}
-    else if(command.action==='preferences'){window.webContents.send('fixture:preferences');report();}
+    else if(command.action==='preferences'){if(scenarios)await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.previewPreferences()');else window.webContents.send('fixture:preferences');report();}
     else if(command.action==='close'){nativeTheme.themeSource='system';write('closed.json',{themeRestored:nativeTheme.themeSource,fixture:true});app.quit();}
     else throw new Error('Unknown fixture command');
     write('command-'+command.id+'.done.json',{action:command.action});

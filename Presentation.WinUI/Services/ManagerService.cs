@@ -139,7 +139,7 @@ public sealed partial class ManagerService : IManagerService
         if (!journal.Ready) global = global.Add(new(ReasonCode.PendingOperation, "O histórico de execuções não pôde ser lido. As ações de execução estão indisponíveis."));
         else foreach (var request in journal.Records.Where(OperationJournal.IsPending).Take(8)) global = global.Add(new(ReasonCode.PendingOperation, PendingRequestDetail(request)));
         if (startupRecoveryPending) global = global.Add(new(ReasonCode.PendingOperation, "Não foi possível confirmar a continuação do início dos scripts. Novos inícios estão bloqueados para evitar duplicação."));
-        var registration = startup.RegistrationStatus(document.Settings.LaunchManagerAtLogin);
+        var registration = startup.RegistrationStatus(document.Settings.LaunchManagerAtLogin, document.Settings.LaunchManagerAsAdministrator);
         if (registration != ReasonCode.None) global = global.Add(new(registration));
         ImmutableArray<ActivitySnapshot> recent;
         try { recent = await activity.ReadAsync(new(), ct).ConfigureAwait(false); }
@@ -257,7 +257,9 @@ public sealed partial class ManagerService : IManagerService
         var saved = await Commit(next, scriptId, cancellationToken).ConfigureAwait(false);
         if (saved.Succeeded && startupConsent && metadata.RunAtLogin == true)
         {
-            var registered = await startup.SetEnabledAsync(true, true, CancellationToken.None).ConfigureAwait(false);
+            var registered = document.Settings.LaunchManagerAsAdministrator && !processes.IsAdministrator
+                ? new OperationResult(Outcome.Failed, ReasonCode.ManualElevationRequired, "A preferência foi salva. Reabra o Manager como administrador para concluir o início com Windows.")
+                : await startup.SetEnabledAsync(true, true, document.Settings.LaunchManagerAsAdministrator, CancellationToken.None).ConfigureAwait(false);
             await Publish(false, CancellationToken.None).ConfigureAwait(false);
             if (!registered.Succeeded) return registered with { Outcome = Outcome.Partial };
         }
@@ -553,8 +555,10 @@ public sealed partial class ManagerService : IManagerService
 
     public Task<OperationResult> SaveSettingsAsync(ManagerSettings settings, bool startupConsent = false, CancellationToken cancellationToken = default) => ResultAction(async () =>
     {
-        bool registrationChange = settings.LaunchManagerAtLogin != document.Settings.LaunchManagerAtLogin;
-        if (registrationChange && (!owner.Held || !owner.Trusted)) return new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable);
+        bool registrationChange = settings.LaunchManagerAtLogin != document.Settings.LaunchManagerAtLogin
+            || settings.LaunchManagerAtLogin && settings.LaunchManagerAsAdministrator != document.Settings.LaunchManagerAsAdministrator;
+        bool registrationNeeded = registrationChange || startup.RegistrationStatus(settings.LaunchManagerAtLogin, settings.LaunchManagerAsAdministrator) != ReasonCode.None;
+        if (registrationNeeded && (!owner.Held || !owner.Trusted)) return new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable);
         if (registrationChange && settings.LaunchManagerAtLogin && !startupConsent) return new(Outcome.Failed, ReasonCode.StartupConsentRequired);
         if (settings.InterpreterPath is { Length: > 0 } path)
         {
@@ -562,8 +566,12 @@ public sealed partial class ManagerService : IManagerService
             catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is System.ComponentModel.Win32Exception) { return new(Outcome.Failed, ReasonCode.UnsupportedInterpreter, ex.Message); }
         }
         var saved = await Commit(document with { Settings = settings }, null, cancellationToken).ConfigureAwait(false);
-        if (!saved.Succeeded || !registrationChange) return saved;
-        var registered = await startup.SetEnabledAsync(settings.LaunchManagerAtLogin, startupConsent, CancellationToken.None).ConfigureAwait(false);
+        if (!saved.Succeeded || !registrationNeeded) return saved;
+        // A saved enabled preference is durable intent. Reconcile the actual Windows
+        // registration on a later save too, including after a previous partial result.
+        var registered = settings.LaunchManagerAtLogin && settings.LaunchManagerAsAdministrator && !processes.IsAdministrator
+            ? new OperationResult(Outcome.Failed, ReasonCode.ManualElevationRequired, "As preferências foram salvas. Confirme a permissão do Windows para concluir o início automático como administrador.")
+            : await startup.SetEnabledAsync(settings.LaunchManagerAtLogin, startupConsent || document.Settings.LaunchManagerAtLogin, settings.LaunchManagerAsAdministrator, CancellationToken.None).ConfigureAwait(false);
         await Log(null, null, registered, CancellationToken.None).ConfigureAwait(false); await Publish(false, CancellationToken.None).ConfigureAwait(false);
         return registered.Succeeded ? saved : registered with { Outcome = Outcome.Partial };
     }, cancellationToken);
@@ -579,7 +587,7 @@ public sealed partial class ManagerService : IManagerService
             await Publish(false, CancellationToken.None).ConfigureAwait(false);
             return explained;
         }
-        var registration = document.Settings.LaunchManagerAtLogin ? startup.RegistrationStatus(true) : ReasonCode.StartupInactive;
+        var registration = document.Settings.LaunchManagerAtLogin ? startup.RegistrationStatus(true, document.Settings.LaunchManagerAsAdministrator) : ReasonCode.StartupInactive;
         if (registration != ReasonCode.None) return await Abort("conferir a configuração de início", new(Outcome.Failed, registration)).ConfigureAwait(false);
         if (!owner.Held || !owner.Trusted || owner.LoginKey.Length == 0) return await Abort("obter permissão para gerenciar os scripts", new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable)).ConfigureAwait(false);
         if (document.LastLoginKey == owner.LoginKey) return new(Outcome.Confirmed, ReasonCode.StartupAlreadyProcessed);

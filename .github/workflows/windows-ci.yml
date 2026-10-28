@@ -148,10 +148,22 @@ jobs:
           ./tools/Test-ElectronPresentation.ps1 -FrontendRoot "$env:CI_OUTPUT/frontend" -HarnessRoot "$env:CI_OUTPUT/presentation-harness" -OutputRoot "$env:CI_OUTPUT/presentation"
 
       - name: Publish production backend
+        id: production-backend
         if: ${{ !cancelled() && steps.backend-dependencies.outcome == 'success' }}
         run: |
           dotnet publish Backend/AhkManager.Backend.csproj -c Release -r win-x64 --self-contained true --no-restore -o "$env:CI_OUTPUT/backend-publish"
           if ($LASTEXITCODE -ne 0) { throw 'Backend publish failed.' }
+
+      - name: Build Windows installer
+        if: ${{ !cancelled() && steps.frontend-build.outcome == 'success' && steps.production-backend.outcome == 'success' && steps.electron-runtime.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          $env:AHK_FRONTEND_DIST = Join-Path $env:CI_OUTPUT 'frontend'
+          $env:AHK_BACKEND_DIST = Join-Path $env:CI_OUTPUT 'backend-publish'
+          $env:AHK_PACKAGE_OUT = Join-Path $env:CI_OUTPUT 'installer'
+          npm.cmd run package
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer build failed.' }
+          Get-ChildItem -LiteralPath $env:AHK_PACKAGE_OUT -Filter '*Setup-x64.exe' | Get-FileHash -Algorithm SHA256 | Format-List | Out-File (Join-Path $env:AHK_PACKAGE_OUT 'SHA256.txt')
 
       - name: Upload test evidence
         if: always()
@@ -177,5 +189,16 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/presentation/*.json
             ${{ runner.temp }}/ahk-manager-ci/presentation/*.log
             ${{ runner.temp }}/ahk-manager-ci/presentation/*.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Windows installer
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-installer
+          path: |
+            ${{ runner.temp }}/ahk-manager-ci/installer/*Setup-x64.exe
+            ${{ runner.temp }}/ahk-manager-ci/installer/SHA256.txt
           if-no-files-found: warn
           retention-days: 14

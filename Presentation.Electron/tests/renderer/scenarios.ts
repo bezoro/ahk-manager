@@ -8,10 +8,10 @@ async function until(predicate: () => boolean, label: string): Promise<void> { c
 function assert(value: unknown, label: string): asserts value { if (!value) throw new Error(label); }
 function button(label: string, root: ParentNode = document): HTMLButtonElement { const found = [...root.querySelectorAll<HTMLButtonElement>('button')].find(node => node.textContent?.trim() === label || node.getAttribute('aria-label') === label); assert(found, 'Missing button: ' + label); return found; }
 function input(label: string): HTMLInputElement { const node = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`); assert(node, 'Missing input: ' + label); return node; }
-function edit(node: HTMLInputElement | HTMLTextAreaElement, value: string): void { const prototype = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }
+function edit(node: HTMLInputElement | HTMLTextAreaElement, value: string): void { const details = node.closest<HTMLDetailsElement>('details'); if (details) details.open = true; const prototype = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }
 function selectScript(id: string): void { const row = document.getElementById('script-' + id); const button = row?.querySelector<HTMLButtonElement>('.row-select'); assert(button, 'Missing selection button: ' + id); button.click(); }
 function script(id: string, patch: Partial<ScriptSnapshot> = {}): ScriptSnapshot { return { id, friendlyName: 'Script ' + id, path: `C:\\FIXTURE ISOLADA\\${id}.ahk`, description: '', collectionId: '33333333-3333-3333-3333-333333333333', runAtLogin: false, runAsAdministrator: false, launchBlocked: false, status: 'Stopped', process: null, hotkeys: [], coverage: 'Partial', issues: [], ...patch }; }
-function state(): HostState { const snapshot: ManagerSnapshot = { revision: '9007199254741001', scripts: [script('11111111-1111-1111-1111-111111111111', { friendlyName: 'Editor de teste', hotkeys: [{ chord: '^j', normalizedChord: '^j', origin: 'Manual', context: null, sourcePath: null, line: null, isRemap: false, possibleConflict: false }] }), script('22222222-2222-2222-2222-222222222222', { friendlyName: 'Navegador de teste', collectionId: null })], collections: [{ id: '33333333-3333-3333-3333-333333333333', name: 'Trabalho de teste' }], settings: { interpreterPath: null, editorPath: null, editorArguments: [], launchManagerAtLogin: false, showWindowAtLogin: false,startInTray:false, theme: 'System', closeBehavior: 'HideToTray', window: { x: 0, y: 0, width: 1240, height: 820, maximized: false, dpi: 96 } }, activity: [], issues: [{ code: 'PartialAnalysis', detail: 'FIXTURE ISOLADA — sem scripts, perfis ou efeitos reais.', scriptId: null }], readOnly: false, effectsAvailable: true, observedAt: '2026-10-23T00:00:00Z' }; return { connection: 'ready', snapshot, error: null, busy: false, authorityMode: 'Normal', administrationPending: false }; }
+function state(): HostState { const snapshot: ManagerSnapshot = { revision: '9007199254741001', scripts: [script('11111111-1111-1111-1111-111111111111', { friendlyName: 'Editor de teste', hotkeys: [{ chord: '^j', normalizedChord: '^j', origin: 'Manual', context: null, sourcePath: null, line: null, isRemap: false, possibleConflict: false }] }), script('22222222-2222-2222-2222-222222222222', { friendlyName: 'Navegador de teste', collectionId: null })], collections: [{ id: '33333333-3333-3333-3333-333333333333', name: 'Trabalho de teste' }], settings: { interpreterPath: null, editorPath: null, editorArguments: [], launchManagerAtLogin: false, launchManagerAsAdministrator: false, showWindowAtLogin: false,startInTray:false, theme: 'System', closeBehavior: 'HideToTray', window: { x: 0, y: 0, width: 1240, height: 820, maximized: false, dpi: 96 } }, activity: [], issues: [{ code: 'PartialAnalysis', detail: 'FIXTURE ISOLADA — sem scripts, perfis ou efeitos reais.', scriptId: null }], readOnly: false, effectsAvailable: true, observedAt: '2026-10-23T00:00:00Z' }; return { connection: 'ready', snapshot, error: null, busy: false, authorityMode: 'Normal', administrationPending: false }; }
 async function untilCall(method: string): Promise<void> { for (let attempt = 0; attempt < 100; attempt++) { if ((await window.fixtureHarness.calls()).some(call => call.method === method)) return; await new Promise(resolve => setTimeout(resolve, 20)); } throw new Error('No fixture call: ' + method); }
 const light: ThemeState = { dark: false, highContrast: false, reducedMotion: false, accent: '#627c47', material: 'solid' };
 
@@ -21,6 +21,60 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   const previousDialog = document.querySelector('[role="dialog"]'); if (previousDialog) button('Cancelar', previousDialog).click(); await window.fixtureHarness.resetResponses(); button('Scripts').click(); const oldSearch = document.querySelector<HTMLInputElement>('input[aria-label="Pesquisar scripts"]'); if (oldSearch) edit(oldSearch, '');
   const host = state(); await window.fixtureHarness.setState(host); await window.fixtureHarness.setTheme(light); await until(() => !!document.getElementById('script-11111111-1111-1111-1111-111111111111'), 'Renderer did not show fixture rows');
   await check('actual snapshot labels, startup heading and accessible list options', async () => { assert(document.querySelector('h1')?.textContent === 'Scripts', 'Page heading'); assert(document.querySelector('.table-head')?.textContent?.includes('Iniciar com Windows'), 'Explicit startup heading'); assert(document.querySelectorAll('tbody tr.script-row').length === 2, 'Real fixture rows'); assert(document.querySelector('.native-title>span')?.textContent === 'AHK Manager', 'Native caption drag surface'); });
+  await check('global pending recovery remains visible and dispatches once with an empty or filtered catalog', async () => {
+    for (const empty of [true, false]) {
+      const current = { ...host, snapshot: { ...host.snapshot!, scripts: empty ? [] : host.snapshot!.scripts, effectsAvailable: false, issues: [{ code: 'PendingOperation', detail: 'Fixture de continuação interrompida.', scriptId: null }] } };
+      await window.fixtureHarness.setState(current); await tick();
+      if (!empty) { edit(input(text.search), 'nenhum resultado de fixture'); await tick(); }
+      assert(document.querySelectorAll('.script-row').length === 0, 'Recovery fixture must have no visible row');
+      const recover = button(text.recover, document.querySelector('.library-notice')!);
+      assert(!recover.disabled && !recover.closest('details'), 'Global recovery depends on selection or collapsed details');
+      await window.fixtureHarness.clearCalls(); recover.click(); await untilCall('recoverPending'); await tick();
+      const calls = await window.fixtureHarness.calls();
+      assert(calls.filter(call => call.method === 'recoverPending').length === 1 && !calls.some(call => call.method === 'operate'), 'Recovery used a selected script or repeated dispatch');
+      if (!empty) { edit(input(text.search), ''); await tick(); }
+    }
+    await window.fixtureHarness.setState(host); await tick();
+  });
+  await check('startup and administrator preferences remain independent drafts through cancel, failure and confirmed save', async () => {
+    const initial = { ...host, snapshot: { ...host.snapshot!, settings: { ...host.snapshot!.settings, launchManagerAtLogin: true, launchManagerAsAdministrator: true } } };
+    await window.fixtureHarness.setState(initial); await tick(); await window.fixtureHarness.resetResponses(); await window.fixtureHarness.clearCalls();
+    const openSettings = async (): Promise<HTMLElement> => { button(text.preferences).click(); await until(() => !!document.getElementById('settings-administrator'), 'Administrator preference missing'); await tick(); return document.querySelector<HTMLElement>('[role="dialog"]')!; };
+    const administrator = (): HTMLInputElement => document.getElementById('settings-administrator') as HTMLInputElement;
+    const login = (): HTMLInputElement => document.getElementById('settings-launch-at-login') as HTMLInputElement;
+    let dialog = await openSettings();
+    assert(dialog.querySelector('.preference-section h3')?.textContent === text.startup && administrator().checked && login().checked, 'Startup priority or default preferences lost');
+    assert(!(dialog.querySelector('.preference-advanced') as HTMLDetailsElement).open && dialog.querySelector('input[aria-label="' + text.editor + '"]')?.getAttribute('placeholder')?.includes('VS Code'), 'Advanced arguments or automatic editor default lost');
+    administrator().click(); await tick();
+    assert(login().checked && !(await window.fixtureHarness.calls()).some(call => call.method === 'saveSettings'), 'Administrator toggle changed login or persisted before save');
+    button(text.cancel, dialog).click(); await tick(); dialog = await openSettings();
+    assert(administrator().checked && login().checked, 'Cancelled draft persisted');
+    administrator().click(); login().click(); await tick();
+    await window.fixtureHarness.setResponse('saveSettings', { value: { outcome: 'Failed', code: 'StorageFailure', detail: 'Fixture de falha ao salvar.', correlationId: null } });
+    button(text.save, dialog).click(); await until(() => !!dialog.querySelector('.notice'), 'Save failure missing');
+    assert(!administrator().checked && !login().checked, 'Failure discarded startup draft');
+    await window.fixtureHarness.setResponse('saveSettings', { value: { outcome: 'Confirmed', code: 'None', detail: null, correlationId: null } });
+    button(text.save, dialog).click(); await until(() => !document.querySelector('[role="dialog"]'), 'Confirmed startup save did not close');
+    const saved = (await window.fixtureHarness.calls()).filter(call => call.method === 'saveSettings').at(-1)!.args[0] as ManagerSnapshot['settings'];
+    assert(!saved.launchManagerAtLogin && !saved.launchManagerAsAdministrator && saved.startInTray === initial.snapshot.settings.startInTray, 'Saved startup flags were coupled or missing');
+    await window.fixtureHarness.setState({ ...initial, snapshot: { ...initial.snapshot, settings: saved } }); await tick(); dialog = await openSettings();
+    assert(!administrator().checked && !login().checked, 'Reopened persisted preferences differ');
+    button(text.cancel, dialog).click(); await tick(); await window.fixtureHarness.resetResponses(); await window.fixtureHarness.setState(host); await tick();
+  });
+  await check('saving administrator preference waits for the closed dialog before requesting Windows approval', async () => {
+    await window.fixtureHarness.setState(host); await tick(); await window.fixtureHarness.resetResponses(); await window.fixtureHarness.clearCalls();
+    button(text.preferences).click(); await until(() => !!document.getElementById('settings-administrator'), 'Administrator preference missing');
+    (document.getElementById('settings-administrator') as HTMLInputElement).click(); await tick();
+    assert(!(await window.fixtureHarness.calls()).some(call => call.method === 'requestAdministration'), 'Toggling preference requested UAC');
+    await window.fixtureHarness.setResponse('saveSettings', { value: { outcome: 'Partial', code: 'ManualElevationRequired', detail: 'Intenção salva; configurar início elevado.', correlationId: null } });
+    await window.fixtureHarness.setResponse('requestAdministration', { value: { outcome: 'CancelledBeforeDispatch', code: 'Cancelled', detail: null, correlationId: null } });
+    button(text.save, document.querySelector('[role="dialog"]')!).click(); await untilCall('requestAdministration'); await tick();
+    assert(!document.querySelector('[role="dialog"]') && window.fixtureHarness.readGuard()?.dialogOpen === false && window.fixtureHarness.readGuard()?.pendingWork === false, 'Save requested UAC with stale dialog or pending-work guard');
+    const calls = await window.fixtureHarness.calls();
+    assert(calls.filter(call => call.method === 'saveSettings').length === 1 && calls.filter(call => call.method === 'requestAdministration').length === 1, 'Save/elevation dispatch repeated');
+    assert(document.querySelector('.main-column>.notice')?.textContent?.includes(outcome('CancelledBeforeDispatch')), 'Windows cancellation was hidden');
+    await window.fixtureHarness.resetResponses(); await window.fixtureHarness.setState(host); await tick();
+  });
   await check('readable hotkeys agree across list Inspector page and raw/readable search with accessible details',async()=>{
     const keys=['!^#+u','~LButton Up','F13'].map((chord,index)=>({chord,normalizedChord:chord,origin:'Parsed' as const,context:'fixture context',sourcePath:'C:\\FIXTURE ISOLADA\\generic.ahk',line:index+1,isRemap:false,possibleConflict:index===0,declaredGesture:index===1?'DoubleClick' as const:null}));
     const current={...host,snapshot:{...host.snapshot!,scripts:[{...host.snapshot!.scripts[0]!,hotkeys:keys},host.snapshot!.scripts[1]!]}};
@@ -89,6 +143,21 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   await check('native-theme accessibility settings and layout stay bounded in current viewport', async () => {
     await window.fixtureHarness.setTheme({ ...light, highContrast: true, reducedMotion: true }); await tick(); const root = document.querySelector('.app-root')!; assert(root.getAttribute('data-contrast') === 'true' && root.getAttribute('data-reduced-motion') === 'true', 'Accessibility settings not applied'); assert(document.documentElement.scrollWidth <= innerWidth, 'Document horizontal overflow'); assert(document.querySelector('.main-column')!.scrollWidth <= document.querySelector('.main-column')!.clientWidth + 1, 'Main column horizontal overflow'); await window.fixtureHarness.setTheme(light);
   });
+  await check('filter labels fit their controls and primary script actions remain in one group at this viewport', async () => {
+    await window.fixtureHarness.setState(host); await tick(); selectScript(host.snapshot!.scripts[0]!.id); await tick();
+    const canvas = document.createElement('canvas'); const context = canvas.getContext('2d'); assert(context, 'Text measurement unavailable');
+    for (const select of document.querySelectorAll<HTMLSelectElement>('.script-filters select')) {
+      const style = getComputedStyle(select); context.font = style.font;
+      const label = select.selectedOptions[0]?.textContent ?? '';
+      assert(context.measureText(label).width + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) <= select.clientWidth + 1, 'Selected filter label is clipped: ' + label);
+    }
+    const actions = [...document.querySelectorAll<HTMLButtonElement>('.primary-script-actions button')];
+    assert(actions.length === 3 && Math.max(...actions.map(node => node.getBoundingClientRect().top)) - Math.min(...actions.map(node => node.getBoundingClientRect().top)) < 1, 'Primary process controls wrapped into separate lines');
+    assert(actions.every(node => node.scrollWidth <= node.clientWidth + 1), 'Primary process label clipped');
+    const more = button(text.moreScriptActions, document.querySelector('.inspector')!); more.click(); await tick();
+    assert(document.querySelector('[role="menu"]')?.textContent?.includes(operation('TogglePause')) && document.querySelector('[role="menu"]')?.textContent?.includes(operation('ToggleSuspend')), 'Secondary controls missing from menu');
+    more.click(); await tick();
+  });
   const activeDialog = (): HTMLElement => { const node = document.querySelector<HTMLElement>('[role="dialog"]'); assert(node, 'Active dialog missing'); assert(!node.closest('[aria-hidden="true"]'), 'Dialog hidden from accessibility tree'); return node; };
   const failure = { outcome: 'Failed', code: 'PersistenceFailed', detail: 'FIXTURE diagnostic detail', correlationId: null };
   const open = async (kind: string): Promise<void> => {
@@ -119,11 +188,11 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   }
   await check('picker, startup feedback and late completions respect preferences sessions', async () => {
     await open('preferences'); let dialog = activeDialog(); const draft = dialog.querySelector<HTMLTextAreaElement>('#settings-editor-arguments')!; edit(draft, 'FIXTURE preserved'); await tick();
-    await window.fixtureHarness.setResponse('pickInterpreter', { error: 'FIXTURE picker failure' }); button(text.choose, dialog).click(); await until(() => dialog.querySelector('.notice pre')?.textContent?.includes('FIXTURE picker failure') === true, 'Picker error hidden'); assert(draft.value === 'FIXTURE preserved', 'Picker reset draft');
-    await window.fixtureHarness.setResponse('pickInterpreter', { value: null }); button(text.choose, dialog).click(); await until(() => !dialog.querySelector('.notice') && !button(text.choose, dialog).matches(':disabled'), 'Null picker reported failure');
+    await window.fixtureHarness.setResponse('pickInterpreter', { error: 'FIXTURE picker failure' }); button(text.choose, dialog.querySelector('[aria-labelledby="settings-interpreter-title"]')!).click(); await until(() => dialog.querySelector('.notice pre')?.textContent?.includes('FIXTURE picker failure') === true, 'Picker error hidden'); assert(draft.value === 'FIXTURE preserved', 'Picker reset draft');
+    await window.fixtureHarness.setResponse('pickInterpreter', { value: null }); button(text.choose, dialog.querySelector('[aria-labelledby="settings-interpreter-title"]')!).click(); await until(() => !dialog.querySelector('.notice') && !button(text.choose, dialog.querySelector('[aria-labelledby="settings-interpreter-title"]')!).matches(':disabled'), 'Null picker reported failure');
     await window.fixtureHarness.setResponse('transferStartup', { value: { ...failure, outcome: 'Partial' } }); button(text.transferStartup, dialog).click(); await until(() => dialog.querySelector('.notice strong')?.textContent === outcome('Partial'), 'Transfer result hidden');
     for (const response of [{ value: 'C:\\FIXTURE\\late.exe' }, { error: 'FIXTURE late picker rejection' }]) {
-      await window.fixtureHarness.clearCalls(); await window.fixtureHarness.setResponse('pickInterpreter', { pending: true }); button(text.choose, dialog).click(); await untilCall('pickInterpreter');
+      await window.fixtureHarness.clearCalls(); await window.fixtureHarness.setResponse('pickInterpreter', { pending: true }); button(text.choose, dialog.querySelector('[aria-labelledby="settings-interpreter-title"]')!).click(); await untilCall('pickInterpreter');
       button(text.cancel, dialog).click(); await tick(); await window.fixtureHarness.openPreferences(); await tick(); dialog = activeDialog();
       await window.fixtureHarness.resolveResponse('pickInterpreter', response); await tick(); assert(!dialog.querySelector('.notice'), 'Late completion leaked to reopened dialog'); assert(dialog.querySelector<HTMLInputElement>('input[aria-label="' + text.interpreter + '"]')?.value === '', 'Late picker populated reopened draft');
     }
@@ -321,7 +390,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     await window.fixtureHarness.setState({ ...withHeader, snapshot: { ...withHeader.snapshot!, scripts: [{ ...withHeader.snapshot!.scripts[0]!, headerDescription: null }, withHeader.snapshot!.scripts[1]!] } }); await tick();
     assert(panel.querySelector('.description')?.textContent === 'Manual persistida' && manual.value === 'Manual em edição', 'Header removal did not restore snapshot manual fallback independently');
     assert(panel.querySelector('.description-guidance')?.textContent?.includes(text.addDescriptionHint) && panel.querySelector('.description-guidance pre')?.textContent === text.descriptionHeaderExample, 'Absent header lacks localized syntax guidance');
-    assert(!!(panel.querySelector('.description')!.compareDocumentPosition(panel.querySelector('.description-guidance')!) & Node.DOCUMENT_POSITION_FOLLOWING), 'Manual fallback must precede guidance');
+    assert(panel.querySelector('.description-guidance')?.closest('.metadata-expander') === metadata && !(panel.querySelector('.description-guidance') as HTMLDetailsElement).open, 'Header guidance must be collapsed inside editable information');
     await window.fixtureHarness.setState({ ...withHeader, snapshot: { ...withHeader.snapshot!, scripts: [{ ...withHeader.snapshot!.scripts[0]!, description: '', headerDescription: null }, withHeader.snapshot!.scripts[1]!] } }); await tick();
     assert(!panel.querySelector('.description') && panel.querySelector('.description-guidance')?.textContent?.includes(text.descriptionRefreshHint) && manual.value === 'Manual em edição', 'Completely empty description must show guidance alone without replacing draft');
     assert(!(await window.fixtureHarness.calls()).some(call => call.method === 'saveMetadata'), 'Derived refresh persisted without explicit save');
@@ -436,4 +505,16 @@ export async function runStartInTrayScenario(): Promise<AssertionRecord[]> {
     button(text.cancel,document.querySelector('[role="dialog"]')!).click();await tick();await window.fixtureHarness.resetResponses();await window.fixtureHarness.setState(host);await tick();
     return [{name:'start in tray checkbox preserves cancel, failure, save and login preferences',passed:true}];
   } catch(error) { return [{name:'start in tray checkbox preserves cancel, failure, save and login preferences',passed:false,detail:String(error)}]; }
+}
+
+export async function previewPreferences(): Promise<AssertionRecord[]> {
+  const previous = document.querySelector('[role="dialog"]'); if (previous) button(text.cancel, previous).click();
+  await window.fixtureHarness.resetResponses();
+  const host = state(); host.snapshot!.settings = { ...host.snapshot!.settings, launchManagerAtLogin: true, launchManagerAsAdministrator: true };
+  await window.fixtureHarness.setState(host); await tick(); await window.fixtureHarness.openPreferences(); await tick();
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  assert(dialog.querySelector('.preference-section h3')?.textContent === text.startup, 'Startup preferences not first');
+  assert((document.getElementById('settings-administrator') as HTMLInputElement).checked, 'Default administrator preference absent');
+  const content = dialog.querySelector<HTMLElement>('.fui-DialogContent'); if (content) content.scrollTop = 0;
+  return [{ name: 'preferences preview shows startup defaults and automatic VS Code editor', passed: true }];
 }

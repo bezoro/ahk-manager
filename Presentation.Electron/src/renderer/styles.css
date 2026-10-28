@@ -21,3 +21,28 @@
 .file-actions { flex-wrap: wrap; gap: 8px; }
 .missing-file-notice { border: 1px solid var(--colorNeutralStroke1); border-radius: 6px; padding: 12px; }
 @media(max-width:600px){.app-root{--rail-width:96px}.main-column{padding-inline:8px}.page-heading{flex-wrap:wrap}.heading-actions{flex-wrap:wrap;justify-content:flex-start;max-width:100%}.heading-actions>button{white-space:normal}.script-filters{grid-template-columns:minmax(0,1fr)}.script-table{min-width:420px}.inspector{min-width:0}.file-actions .action-wrap{max-width:100%}.file-actions button{white-space:normal;max-width:100%}}
+
+/* Keep everyday script controls together and reserve advanced actions for the menu. */
+.primary-script-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:14px}
+.primary-script-actions .action-wrap{display:flex;min-width:0}
+.primary-script-actions button{width:100%;display:flex;flex-direction:column;justify-content:center;gap:4px;min-height:54px;padding:7px 4px!important;font-size:12px!important;line-height:16px}
+.primary-script-actions button .fui-Button__icon{font-size:18px;width:18px;height:18px;margin:0}
+.inspector .secondary-actions{justify-content:flex-end;margin-top:4px}
+.inspector .secondary-actions button{font-size:12px!important}
+.inspector .description-guidance{padding:10px 0;border-bottom:1px solid var(--colorNeutralStroke2);margin-bottom:6px}
+.description-guidance summary,.preference-advanced summary{font-size:12px;line-height:20px;font-weight:500;cursor:default}
+.description-guidance p,.description-guidance pre{margin-top:8px}
+.administration-action{margin-right:0}
+.script-filters{grid-template-columns:minmax(0,1fr) 160px 118px}
+.script-filters select{width:100%;padding-right:28px}
+.preferences-dialog{width:660px;max-width:calc(100vw - 40px)!important}
+.preferences-dialog .preference-section+.preference-section{border-top:1px solid var(--colorNeutralStroke2);padding-top:18px}
+.preferences-dialog .preference-section{gap:7px}
+.preferences-dialog .preference-section>h3{font-size:14px;margin-top:0}
+.startup-preferences>.muted{margin-left:28px}
+.preference-advanced{margin-top:5px}
+.preference-advanced[open]{display:flex;flex-direction:column;gap:8px}
+.preference-advanced label,.preference-advanced button{margin-top:9px}
+.preference-advanced textarea{width:100%}
+@media(max-width:740px){.script-filters{grid-template-columns:minmax(0,1fr) 160px 118px}.preferences-dialog{width:calc(100vw - 32px)}}
+@media(max-width:600px){.script-filters{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.script-filters>span:first-child{grid-column:1/-1}.script-filters select{min-width:0}.native-title{padding-right:145px;gap:6px}.authority-badge{margin-left:4px}.administration-action{max-width:132px;white-space:normal;line-height:14px!important}.primary-script-actions button{min-height:50px}.preferences-dialog{max-width:calc(100vw - 24px)!important}.picker-row{grid-template-columns:minmax(0,1fr) auto}.picker-row>span{grid-column:1/-1}.picker-row>button:last-child{grid-column:auto}.startup-preferences>.muted{margin-left:0}}

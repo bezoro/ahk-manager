@@ -6,7 +6,7 @@ import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
-import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupResult } from './lifecycle.js';
+import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupWithContinuation } from './lifecycle.js';
 import { AdministrationPreflight, ElevationCoordinator } from './elevation.js';
 import { createDiagnostics, type PageDiagnostics } from './diagnostics.js';
 import {hostText as t} from '../shared/host-pt-BR.js';
@@ -180,7 +180,23 @@ async function start():Promise<void> {
   if(saved){const dip=screen.screenToDipRect(window,{x:saved.x,y:saved.y,width:saved.width,height:saved.height});window.setBounds(restorePlacement({...saved,...dip,dpi:96},screen.getAllDisplays()));lifecycle.deferMaximizedRestore(saved.maximized);if(window.isVisible())show();}
   ready=true;
   if(initialAdministration==='invalid')dialog.showErrorBox(t.title,t.administrationCliInvalid);
-  if(administrativeCliPending){administrativeCliPending=false;show();void requestAdministration(true);}
+  const wantsAdministrator=controller.state.snapshot?.settings.launchManagerAsAdministrator===true;
+  const canInitialize=!initialAdoption.descriptor&&!adoptionPending&&controller.state.connection==='ready'&&controller.state.snapshot?.readOnly===false&&controller.state.snapshot.effectsAvailable;
+  let setupDeferred=false;
+  if(administrativeCliPending||canInitialize&&wantsAdministrator&&controller.state.authorityMode==='Normal'){
+    administrativeCliPending=false;show();
+    const result=await requestAdministration(true,lifecycle.loginRequested);
+    if(result.outcome==='Confirmed'){
+      if(quitting||quitComplete)return;
+    }else{
+      setupDeferred=true;
+      if(window)await dialog.showMessageBox(window,{type:'warning',title:t.administrationTitle,message:t.administrationSetupDeferred,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+    }
+  }
+  if(canInitialize&&!setupDeferred&&backend?.ready){
+    const result=await backend.request<OperationResult>('initializeStartup',{});
+    if(result.outcome!=='Confirmed'&&window){show();await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.startupSetupIncomplete,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}
+  }
   await runLogin();
   if(lifecycle.shouldShowAtStartup(controller.state.snapshot?.settings,trayRegistered,controller.state.connection!=='ready'||controller.state.snapshot?.readOnly===true,controller.state.snapshot?.issues))show();
   if(window.isVisible())diagnostics?.initialReady();
@@ -217,8 +233,7 @@ async function startBackend():Promise<void> {
 }
 async function reportLoginResult(result:OperationResult):Promise<void> {
   try{continuationOffer=backend?.ready?await backend.request<StartupContinuationOffer|null>('startupContinuation',{}):null;}catch{continuationOffer=null;}updateTray();
-  if(continuationOffer?.canResume){show();await requestStartupContinuation();return;}
-  await reportStartupResult(result,{show,warn:async value=>{if(window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:value.detail??t.loginFailure(value.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}});
+  await reportStartupWithContinuation(result,continuationOffer?.canResume===true,requestStartupContinuation,{show,warn:async value=>{if(window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:value.detail??t.loginFailure(value.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}});
 }
 async function checkStartupAdoption():Promise<void> {
   if(!adoptionPending||!backend?.ready||!controller||quitting)return;
@@ -228,29 +243,30 @@ async function checkStartupAdoption():Promise<void> {
     if(window)await dialog.showMessageBox(window,{type:result.outcome==='Confirmed'?'info':'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
   }catch{show();dialog.showErrorBox(t.loginResultTitle,t.administrationPending);}
 }
-async function requestStartupContinuation():Promise<void> {
-  if(adoptionPending||administration?.active||!backend?.ready||!controller||quitting)return;
+async function requestStartupContinuation():Promise<boolean> {
+  if(adoptionPending||administration?.active||!backend?.ready||!controller||quitting)return false;
   continuationOffer=await backend.request<StartupContinuationOffer|null>('startupContinuation',{});updateTray();
-  if(!continuationOffer?.canResume||!window)return;
+  if(!continuationOffer?.canResume||!window)return false;
   show();
   const choice=await dialog.showMessageBox(window,{type:'warning',title:t.continuationTitle,message:t.continuationTitle,detail:t.continuationDetail(continuationOffer.scriptNames),buttons:[t.continuationContinue,t.continuationLater],defaultId:1,cancelId:1,noLink:true});
-  if(choice.response!==0)return;
+  if(choice.response!==0)return false;
   const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));
   administrationLease=documentLease;
   const result=await administration?.request(true,continuationOffer.operationId);
   if(result&&result.outcome!=='Confirmed'&&window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+  return result?.outcome==='Confirmed';
 }
 async function runLogin():Promise<void> {
   if(initialAdoption.descriptor!==null||adoptionPending||administration?.active||stopExit.active||quitting||!backend?.ready||!controller||!lifecycle.takeLogin())return;
   try{await reportLoginResult(await controller.runLogin());}catch(error){controller.setConnection('failed',safeError(error));show();dialog.showErrorBox(t.loginResultTitle,safeError(error));}
 }
-async function requestAdministration(explicitCli=false){
+async function requestAdministration(explicitCli=false,resumeLogin=false){
   if(adoptionPending)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
   if(administration?.processing)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
   if(controller?.state.authorityMode==='Administrator'){show();return {outcome:'Confirmed' as const,code:'None',detail:null,correlationId:null};}
   if(explicitCli){const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));}
   administrationLease=documentLease;
-  return administration?.request(explicitCli)??{outcome:'CancelledBeforeDispatch' as const,code:'CapabilityUnverified',detail:null,correlationId:null};
+  return administration?.request(explicitCli,undefined,resumeLogin)??{outcome:'CancelledBeforeDispatch' as const,code:'CapabilityUnverified',detail:null,correlationId:null};
 }
 function createTray():void {
   try{

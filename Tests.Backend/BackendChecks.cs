@@ -21,6 +21,10 @@ internal static class BackendChecks
     {
         ObservationInventory(); OwnedAhkChecks.ScopeChecks(root, Check); await ElevationChecks.RunAsync(Check); await Framing(); await HostBoundaries(); await QueueAndDeadlines(); await Tokens(root); await Migration(root); Startup(root); StartupCommandChecks.Run(root, Check); await HeaderSnapshotAsync(root);
         await SettingsPreferenceChecks.RunAsync(root, Check);
+        await StartupRegistrationChecks.RunAsync(root, Check);
+        await StartupRecoveryChecks.RunAsync(root, Check);
+        await RuntimeServiceChecks.RunAsync(root, Check);
+        await StartupSettingsChecks.RunAsync(root, Check);
         await StartupContinuationChecks.RunAsync(root, Check);
         await StartupVisibilityFixturesAsync(root);
         Console.WriteLine("BACKEND checks=" + count);

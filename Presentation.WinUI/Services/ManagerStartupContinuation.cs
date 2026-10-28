@@ -17,6 +17,7 @@ public sealed partial class ManagerService
     AcceptedStartupContinuation? acceptedStartup;
     StartupContinuationTicket? preparedStartup;
     bool startupRecoveryPending, startupResumeActive;
+    Issue? startupRecoveryIssue;
     StartupContinuationStore Continuations => new(DataRoot);
     // Window placement is saved while draining the host for UAC. Bind every other
     // profile field, including script flags and LastLoginKey, across that save.
@@ -175,7 +176,14 @@ public sealed partial class ManagerService
     async Task LoadStartupRecovery()
     {
         try { startupRecoveryPending = !(await Continuations.PendingAsync().ConfigureAwait(false)).IsEmpty; }
-        catch (Exception ex) when (SafeJsonFiles.Known(ex)) { startupRecoveryPending = true; storageIssues = storageIssues.Add(new(ReasonCode.PendingOperation, "Não foi possível confirmar a continuação do início dos scripts. Novos inícios estão bloqueados para evitar duplicação.")); }
+        catch (Exception ex) when (SafeJsonFiles.Known(ex)) { RememberStartupRecoveryFailure(ex); }
+    }
+    void RememberStartupRecoveryFailure(Exception ex)
+    {
+        startupRecoveryPending = true;
+        if (startupRecoveryIssue is not null) storageIssues = storageIssues.Remove(startupRecoveryIssue);
+        startupRecoveryIssue = new(ReasonCode.PendingOperation, "Não foi possível confirmar os registros de continuação. Novas execuções estão bloqueadas. Use Recuperar pendências para conferir os processos e preservar os registros inválidos, sem repetir execuções.\n" + ex.Message);
+        storageIssues = storageIssues.Add(startupRecoveryIssue);
     }
     async Task SettleExpiredStartupContinuationsCore()
     {
@@ -191,14 +199,33 @@ public sealed partial class ManagerService
             }
             startupRecoveryPending = (await Continuations.PendingAsync().ConfigureAwait(false)).Any(record => preparedStartup is null || record.Phase != StartupContinuationPhase.Prepared || record.TicketHash != StartupContinuationStore.Hash(preparedStartup));
         }
-        catch (Exception ex) when (SafeJsonFiles.Known(ex)) { startupRecoveryPending = true; }
+        catch (Exception ex) when (SafeJsonFiles.Known(ex)) { RememberStartupRecoveryFailure(ex); }
     }
     async Task<bool> RecoverStartupContinuationCore()
     {
-        if (!observed.Complete || journal.Records.Any(OperationJournal.IsPending)) return false;
-        foreach (var record in await Continuations.PendingAsync().ConfigureAwait(false))
-            await Continuations.WriteAsync(record with { Phase = StartupContinuationPhase.Recovered, Result = new(Outcome.Partial, ReasonCode.LaunchUncertain, "A solicitação anterior foi encerrada após conferir os processos. Nenhuma execução foi repetida.") }, record).ConfigureAwait(false);
-        startupRecoveryPending = false;
-        return true;
+        if (startupResumeActive || acceptedStartup is not null || !owner.Held || !owner.Trusted || !journal.Ready || !observed.Complete || journal.Records.Any(OperationJournal.IsPending)) return false;
+        try
+        {
+            var preserved = await Continuations.QuarantineInvalidAsync().ConfigureAwait(false);
+            // Snapshot and validate every remaining record before changing any of
+            // them. Corruption must not produce a partially recovered inventory.
+            var pending = await Continuations.PendingAsync().ConfigureAwait(false);
+            foreach (var record in pending)
+                await Continuations.WriteAsync(record with { Phase = StartupContinuationPhase.Recovered, Result = new(Outcome.Partial, ReasonCode.LaunchUncertain, "A solicitação anterior foi encerrada após conferir os processos. Nenhuma execução foi repetida.") }, record).ConfigureAwait(false);
+            preparedStartup = null;
+            acceptedStartup = null;
+            startupRecoveryPending = !(await Continuations.PendingAsync().ConfigureAwait(false)).IsEmpty;
+            if (startupRecoveryPending) return false;
+            if (startupRecoveryIssue is not null) { storageIssues = storageIssues.Remove(startupRecoveryIssue); startupRecoveryIssue = null; }
+            if (!preserved.IsEmpty)
+                await Log(null, ScriptOperation.Recover, new(Outcome.Confirmed, Detail: $"Recuperação explícita: {preserved.Length} registro(s) inválido(s) preservado(s) em {Path.GetDirectoryName(preserved[0])}. Nenhum script foi iniciado ou repetido."), CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (SafeJsonFiles.Known(ex))
+        {
+            RememberStartupRecoveryFailure(ex);
+            await Log(null, ScriptOperation.Recover, new(Outcome.Failed, ReasonCode.StorageFailure, startupRecoveryIssue!.Detail), CancellationToken.None).ConfigureAwait(false);
+            return false;
+        }
     }
 }
