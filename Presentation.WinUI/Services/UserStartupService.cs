@@ -36,16 +36,19 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter
     public Task<StartupInspection> InspectAsync(CancellationToken ct) => Task.Run(() =>
     {
         var paths = ImmutableArray.CreateBuilder<string>(); var issues = ImmutableArray.CreateBuilder<Issue>(); bool complete = true;
+        string origin = "Entradas de início do Windows";
         try
         {
             using var search = new ManagementObjectSearcher("SELECT Command FROM Win32_StartupCommand"); search.Options.Timeout = TimeSpan.FromSeconds(5);
             using var rows = search.Get();
             foreach (ManagementObject row in rows) using (row) { ct.ThrowIfCancellationRequested(); if (row["Command"] is string command) Inspect(command); }
+            origin = "Pastas de inicialização do Windows";
             foreach (var directory in new[] { Environment.GetFolderPath(Environment.SpecialFolder.Startup), Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup) })
             {
                 if (!Directory.Exists(directory)) continue;
                 foreach (var file in Directory.EnumerateFiles(directory, "*.ahk")) { ct.ThrowIfCancellationRequested(); paths.Add(ScriptPaths.Canonical(file)); }
             }
+            origin = "Tarefas agendadas do Windows";
             using var scheduled = new ManagementObjectSearcher(new ManagementScope(@"\\.\root\Microsoft\Windows\TaskScheduler"), new ObjectQuery("SELECT Actions FROM MSFT_ScheduledTask"));
             scheduled.Options.Timeout = TimeSpan.FromSeconds(5);
             using var tasks = scheduled.Get();
@@ -56,26 +59,48 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter
                 if (task["Actions"] is not Array actions) continue;
                 foreach (var value in actions)
                 {
-                    if (value is not ManagementBaseObject action) { complete = false; continue; }
+                    if (value is not ManagementBaseObject action) { complete = false; AddIssue("Uma ação agendada não pôde ser interpretada. Revise as ações de início automático."); continue; }
                     using (action)
                     {
-                        if (action.Properties["Execute"]?.Value is not string execute) continue;
-                        string arguments = action.Properties["Arguments"]?.Value as string ?? "";
+                        if (ReadActionProperty(action, "Execute") is not string execute) continue;
+                        string arguments = ReadActionProperty(action, "Arguments") ?? "";
                         Inspect(ScriptPaths.QuoteArgument(execute) + " " + arguments);
                     }
                 }
             }
         }
         catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is ManagementException or System.Runtime.InteropServices.COMException or InvalidOperationException)
-        { complete = false; issues.Add(new(ReasonCode.ExternalStartupConflict, ex.Message)); }
+        {
+            complete = false;
+            string reason = ex switch
+            {
+                UnauthorizedAccessException => "acesso negado",
+                ManagementException management => $"consulta WMI: {management.ErrorCode}",
+                System.Runtime.InteropServices.COMException native => $"erro do Windows: 0x{native.ErrorCode:X8}",
+                IOException => "falha de leitura",
+                _ => "dados indisponíveis ou inválidos"
+            };
+            AddIssue($"Não foi possível concluir a consulta ({reason}). Confira o acesso a essa origem e tente novamente.");
+        }
         return new StartupInspection(complete, paths.Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray(), issues.ToImmutable());
         void Inspect(string command)
         {
             var inspected = InspectCommand(command);
             complete &= inspected.Complete;
             paths.AddRange(inspected.ScriptPaths);
+            foreach (var issue in inspected.Issues) AddIssue(issue.Detail ?? "Uma configuração de início não pôde ser interpretada.");
         }
+        void AddIssue(string detail) { if (issues.Count < 8) issues.Add(new(ReasonCode.ExternalStartupConflict, $"{origin}: {detail}")); }
     }, ct);
+
+    internal static string? ReadActionProperty(ManagementBaseObject action, string name)
+    {
+        // WMI may return a PropertyData wrapper whose Value throws NotFound for
+        // an absent property. COM-handler actions do not expose Execute/Arguments.
+        foreach (PropertyData property in action.Properties)
+            if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) return property.Value as string;
+        return null;
+    }
 
     internal static StartupInspection InspectCommand(string command)
     {
@@ -91,11 +116,12 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter
             start = end;
         }
         if (!related) return new(true, [], []);
-        if (command.Contains('%')) return new(false, [], []);
+        if (command.Contains('%')) return Unresolved();
         var args = ScriptPaths.SplitCommand(command);
         if (args.Length == 1 && args[0].EndsWith(".ahk", StringComparison.OrdinalIgnoreCase)) return new(true, [ScriptPaths.Canonical(args[0])], []);
         var script = args.Length > 0 ? ScriptPaths.ScriptFromCommand(command, args[0]) : null;
-        return script is null ? new(false, [], []) : new(true, [script], []);
+        return script is null ? Unresolved() : new(true, [script], []);
+        static StartupInspection Unresolved() => new(false, [], [new(ReasonCode.ExternalStartupConflict, "Uma entrada relacionada ao AutoHotkey não tem um caminho de script verificável. Revise a entrada e use caminhos explícitos para evitar duplicação.")]);
     }
 }
 

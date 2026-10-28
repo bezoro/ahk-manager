@@ -1,10 +1,31 @@
 using Bezoro.AhkManager.WinUI.Infrastructure;
 using Bezoro.AhkManager.WinUI.Services;
+using System.Management;
 
 namespace Tests.Backend;
 
 internal static class StartupCommandChecks
 {
+    internal static async Task ReadOnlyWindowsInspectionAsync(string root)
+    {
+        using var handlerClass = new ManagementClass(@"\\.\root\Microsoft\Windows\TaskScheduler:MSFT_TaskComHandlerAction");
+        using var handler = handlerClass.CreateInstance()!;
+        if (RegistryStartupAdapter.ReadActionProperty(handler, "Execute") is not null || RegistryStartupAdapter.ReadActionProperty(handler, "Arguments") is not null) throw new InvalidOperationException("COM handler must not expose executable action fields.");
+        Console.WriteLine("PASS COM-handler missing Execute/Arguments ignored without NotFound");
+        using var executableClass = new ManagementClass(@"\\.\root\Microsoft\Windows\TaskScheduler:MSFT_TaskExecAction");
+        using var executable = executableClass.CreateInstance()!;
+        executable["Execute"] = @"C:\fixture\AutoHotkey64.exe"; executable["Arguments"] = "fixture.ahk";
+        if (RegistryStartupAdapter.ReadActionProperty(executable, "Execute") != @"C:\fixture\AutoHotkey64.exe" || RegistryStartupAdapter.ReadActionProperty(executable, "Arguments") != "fixture.ahk") throw new InvalidOperationException("Executable action fields were changed.");
+        executable["Arguments"] = null;
+        if (RegistryStartupAdapter.ReadActionProperty(executable, "Arguments") is not null) throw new InvalidOperationException("Null optional arguments changed.");
+        Console.WriteLine("PASS executable action fields and optional null arguments preserved");
+        Run(root, (value, name) => { if (!value) throw new InvalidOperationException(name); Console.WriteLine("PASS " + name); });
+        var result = await new RegistryStartupAdapter().InspectAsync(CancellationToken.None);
+        string summary = $"Complete={result.Complete}; Scripts={result.ScriptPaths.Length}; Issues={string.Join(" | ", result.Issues.Select(issue => issue.Detail))}";
+        await File.WriteAllTextAsync(Path.Combine(root, "readonly-inspection.txt"), summary);
+        Console.WriteLine(summary);
+        if (!result.Complete) throw new InvalidOperationException("Read-only Windows startup inspection did not complete.");
+    }
     public static void Run(string root, Action<bool, string> check)
     {
         string own = new UserStartupService(new FakeStartup(), @"V:\Repos\Bezoro.AhkManager\publish\Bezoro.AhkManager.exe").Command;
