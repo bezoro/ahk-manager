@@ -10,6 +10,7 @@ internal sealed record UpdatePlan(int SchemaVersion, Guid OperationId, int Paren
 internal sealed record UpdateReceipt(int SchemaVersion, int UpdateProtocol, string Version, string Sha256, long? Bytes = null);
 internal sealed record UpdateReady(int SchemaVersion, Guid OperationId, int ParentPid, DateTimeOffset ParentStartedAtUtc);
 internal sealed record UpdateCancel(int SchemaVersion, Guid OperationId);
+internal sealed record UpdateCommit(int SchemaVersion, Guid OperationId, int ParentPid, DateTimeOffset ParentStartedAtUtc);
 internal sealed record UpdateOutcome(int SchemaVersion, Guid OperationId, string Outcome, string Detail, string Version,
     int? InstallerExitCode, int? FallbackExitCode, DateTimeOffset CompletedAtUtc,
     string? BackupDirectory = null, string? FailedInstallationDirectory = null);
@@ -65,6 +66,10 @@ internal static class UpdateProtocol
             if (!NumericVersion(fallback.Version) || !Hash(fallback.InstallerSha256) || SameVersion(fallback.Version, plan.Version)) throw new InvalidDataException("Invalid fallback identity.");
             _ = UpdatePaths.Local(fallback.InstallerPath);
         }
+    }
+    internal static void ValidateCommit(UpdatePlan plan, UpdateCommit commit)
+    {
+        if (commit.SchemaVersion != 1 || commit.OperationId != plan.OperationId || commit.ParentPid != plan.ParentPid || commit.ParentStartedAtUtc.Offset != TimeSpan.Zero || commit.ParentStartedAtUtc != plan.ParentStartedAtUtc) throw new InvalidDataException("Shutdown commit does not identify this operation and Manager session.");
     }
     internal static bool Known(Exception exception) => exception is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or JsonException or System.Security.SecurityException or TimeoutException;
 }

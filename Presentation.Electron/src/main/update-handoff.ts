@@ -1,12 +1,38 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { CachedInstaller, UpdateStore } from './update-store.js';
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
-export interface PreparedUpdate { cancel(): Promise<void> }
+export interface PreparedUpdate { commit(): Promise<void>; cancel(): Promise<void> }
 const incomplete = 'Uma atualização anterior ainda não foi confirmada. Os registros e as cópias foram preservados. Aguarde a conclusão antes de tentar novamente.';
+
+/** A completed backend shutdown publishes one immutable authorization, before the parent exits. */
+export function preparedUpdateControl(store: UpdateStore, operationId: string, parentStartedAtUtc: string): PreparedUpdate {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(operationId) || !Number.isFinite(Date.parse(parentStartedAtUtc))) throw new Error('Identidade da atualização inválida.');
+  const directory = path.join(store.root, 'operations', operationId);
+  return {
+    async commit(): Promise<void> {
+      await store.safeDirectory(directory);
+      try { await fs.lstat(path.join(directory, 'cancel.json')); throw new Error('A preparação da atualização foi cancelada.'); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      const bytes = JSON.stringify({ schemaVersion: 1, operationId, parentPid: process.pid, parentStartedAtUtc });
+      const temporary = path.join(directory, `commit-${randomUUID()}.tmp`);
+      const file = await fs.open(temporary, 'wx', 0o600);
+      try { await file.writeFile(bytes, 'utf8'); await file.sync(); } finally { await file.close(); }
+      // link() publishes complete bytes without replacing an earlier receipt.
+      // Remove the temporary link before quitting: the native reader requires
+      // a single link and also requires this exact parent to exit with code 0.
+      await fs.link(temporary, path.join(directory, 'commit.json'));
+      await fs.unlink(temporary);
+    },
+    async cancel(): Promise<void> {
+      try { await store.writeNew(path.join(directory, 'cancel.json'), JSON.stringify({ schemaVersion: 1, operationId })); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    },
+  };
+}
 
 export async function updateRecoveryStatus(store: UpdateStore): Promise<string | null> {
   const root = path.join(store.root, 'operations');
@@ -63,10 +89,7 @@ export async function prepareUpdate(store: UpdateStore, operationId: string, tar
   const planPath = path.join(directory, 'plan.json');
   await store.writeNew(planPath, bytes);
   let child: ChildProcess | null = null;
-  const cancel = async (): Promise<void> => {
-    try { await store.writeNew(path.join(directory, 'cancel.json'), JSON.stringify({ schemaVersion: 1, operationId })); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-  };
+  const control = preparedUpdateControl(store, operationId, parentStartedAtUtc);
   try {
     child = spawn(host, ['--plan', planPath, '--sha256', createHash('sha256').update(bytes).digest('hex')], { detached: true, windowsHide: true, stdio: 'ignore', shell: false });
     await new Promise<void>((resolve, reject) => { child!.once('error', reject); child!.once('spawn', resolve); });
@@ -79,10 +102,10 @@ export async function prepareUpdate(store: UpdateStore, operationId: string, tar
         const ready = JSON.parse(await fs.readFile(readyPath, 'utf8')) as Record<string, unknown>;
         if (ready.schemaVersion !== 1 || ready.operationId !== operationId || ready.parentPid !== process.pid || Date.parse(String(ready.parentStartedAtUtc)) !== Date.parse(parentStartedAtUtc)) throw new Error('A confirmação do aplicador não corresponde a esta sessão.');
         child.unref();
-        return { cancel };
+        return control;
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
       await delay(100);
     }
     throw new Error('O aplicador não confirmou a preparação no prazo. A instalação foi preservada.');
-  } catch (error) { await cancel(); child?.unref(); throw error; }
+  } catch (error) { try { await control.cancel(); } finally { child?.unref(); } throw error; }
 }

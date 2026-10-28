@@ -12,7 +12,7 @@ O produto ativo é Electron com backend .NET. Os testes de TypeScript usam o run
 
 Não há argumento de produto para trocar perfil, ignorar o proprietário de efeitos, desativar o sandbox ou injetar código de teste. Integração com o executável empacotado exige nome e layout finais, parentela nativa comprovada e o novo perfil normal. A primeira execução normal é uma etapa controlada após revisão; testes isolados anteriores não dependem dela.
 
-O instalador deve ser ensaiado em destino isolado, com o Manager fechado. Inicialização real permanece desautorizada nos testes. Verificar instalação, atualização, desinstalação e preservação dos dados é diferente de apenas compilar o NSIS. Uma confirmação de shutdown só vale junto com a saída observada do backend; prazo excedido é desconhecido e não autoriza matar processos ou repetir efeitos.
+O instalador deve ser ensaiado em destino isolado, com o Manager fechado. Inicialização real permanece desautorizada nos testes. Verificar instalação, atualização, desinstalação e preservação dos dados é diferente de apenas compilar o NSIS. Uma confirmação de shutdown só vale junto com a saída observada do backend; o aplicador também exige um recibo da mesma operação e sessão e a saída normal do Manager. Prazo excedido é desconhecido e não autoriza matar processos ou repetir efeitos.
 
 O seletor atual `Tests.Backend.exe --inventory-scoped-readonly --root <pasta-absoluta-inexistente>` consulta uma vez o inventário delimitado do ensaio, com prazo de 30 segundos. Cria apenas seus arquivos inertes de diagnóstico e não inicia, encerra ou exclui scripts. O JSON contém contadores e códigos fixos, sem caminhos ou argumentos de scripts externos.
 

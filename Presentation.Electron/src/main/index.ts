@@ -19,7 +19,7 @@ import { UpdateStore, type CachedInstaller } from './update-store.js';
 import { GitHubUpdateClient, compareVersions } from './github-updates.js';
 import { downloadRelease, verifyCachedInstallerSignature } from './electron-update-download.js';
 import { prepareUpdate, updateRecoveryStatus, type PreparedUpdate } from './update-handoff.js';
-import { shutdownForUpdate } from './update-shutdown.js';
+import { shutdownAndCommitUpdate } from './update-shutdown.js';
 
 protocol.registerSchemesAsPrivileged([{scheme:'ahk-manager',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.setName(t.title);
@@ -178,7 +178,7 @@ async function applyUpdate(operationId:string,target:CachedInstaller):Promise<vo
     if(!created||!Number.isFinite(created))throw new Error('Não foi possível confirmar a sessão do Manager para atualizar.');
     prepared=await prepareUpdate(updateStore,operationId,target,path.dirname(app.getPath('exe')),new Date(created).toISOString());
     shutdownStarted=true;
-    await shutdownForUpdate({
+    await shutdownAndCommitUpdate({
       drain:async()=>{await controller?.drain();},backendPresent:()=>backend!==null,backendExited:()=>backend?.exited??true,
       persistPlacement:async()=>{await controller?.savePlacement(true);},shutdownBackend:async()=>{
         if(!backend)return;
@@ -186,13 +186,16 @@ async function applyUpdate(operationId:string,target:CachedInstaller):Promise<vo
         try{await closing;}finally{if(updateShutdownInFlight===closing)updateShutdownInFlight=null;}
       },
       reportPlacementFailure:()=>{},
-    },SHUTDOWN_DEADLINE_MS);
-    if(backend&&!backend.exited)throw new Error('O backend ainda não encerrou. A atualização foi cancelada.');
+    },SHUTDOWN_DEADLINE_MS,()=>prepared!.commit());
     quitting=true;tray?.destroy();quitComplete=true;app.quit();
   } catch(error) {
-    await prepared?.cancel();
-    controller?.setAdministrationPending(false);updateApplying=false;
-    if(shutdownStarted&&backend)controller?.setConnection('failed','A atualização foi cancelada sem confirmação do encerramento. Aguarde e reconecte o backend antes de continuar.');
+    let cancellationError:unknown;
+    try{await prepared?.cancel();}catch(cancelError){cancellationError=cancelError;}
+    finally{
+      updateApplying=false;controller?.setAdministrationPending(false);
+      if(shutdownStarted&&backend)controller?.setConnection('failed','A atualização foi cancelada sem confirmação do encerramento. Aguarde e reconecte o backend antes de continuar.');
+    }
+    if(cancellationError)throw new Error(safeError(error)+' Não foi possível registrar o cancelamento da atualização.',{cause:cancellationError});
     throw error;
   }
 }

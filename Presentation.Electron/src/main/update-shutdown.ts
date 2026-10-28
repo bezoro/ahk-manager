@@ -17,3 +17,9 @@ export async function shutdownForUpdate(boundary: ShutdownBoundary, milliseconds
     throw error;
   } finally { active = false; }
 }
+
+/** The commit callback is unreachable until the bounded shutdown is confirmed. */
+export async function shutdownAndCommitUpdate(boundary: ShutdownBoundary, milliseconds: number, commit: () => Promise<void>, schedule?: (fn: () => void, milliseconds: number) => () => void): Promise<void> {
+  await shutdownForUpdate(boundary, milliseconds, schedule);
+  await commit();
+}

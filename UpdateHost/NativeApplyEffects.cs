@@ -15,27 +15,8 @@ internal sealed class NativeApplyEffects(UpdatePlan plan, string operationDirect
         // Local() rejects quotes, NUL, CR/LF and all other control characters.
         return new ProcessStartInfo(installer) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(installer)!, WindowStyle = ProcessWindowStyle.Hidden, Arguments = "/S --updated /D=" + installDirectory };
     }
-    public void CheckCancellation()
-    {
-        string path = Path.Combine(operationDirectory, "cancel.json");
-        if (!File.Exists(path)) return;
-        // A malformed cancellation is a refusal, never a reason to keep applying.
-        using var file = FileLease.Open(path, 1024);
-        var cancel = UpdateProtocol.Read<UpdateCancel>(file.Read(1024));
-        if (cancel.SchemaVersion != 1 || cancel.OperationId != plan.OperationId) throw new InvalidDataException("Cancellation identity changed.");
-        throw new OperationCanceledException();
-    }
-    public async Task<bool> WaitForParentExit()
-    {
-        var clock = Stopwatch.StartNew();
-        while (!parent.Exited)
-        {
-            CheckCancellation();
-            if (clock.Elapsed >= TimeSpan.FromSeconds(60)) return false;
-            await Task.Delay(100).ConfigureAwait(false);
-        }
-        CheckCancellation(); return true;
-    }
+    public void CheckCancellation() => UpdateShutdownGate.CheckCancellation(operationDirectory, plan.OperationId);
+    public Task<bool> WaitForParentExit() => UpdateShutdownGate.Wait(plan, operationDirectory, () => parent.Exited, () => parent.ExitCode, TimeSpan.FromSeconds(60));
     public async Task<BackupState> Backup()
     {
         log?.Invoke("Preparing a complete read-locked installation snapshot.");
