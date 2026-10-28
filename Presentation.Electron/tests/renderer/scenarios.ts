@@ -11,7 +11,7 @@ function input(label: string): HTMLInputElement { const node = document.querySel
 function edit(node: HTMLInputElement | HTMLTextAreaElement, value: string): void { const prototype = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }
 function selectScript(id: string): void { const row = document.getElementById('script-' + id); const button = row?.querySelector<HTMLButtonElement>('.row-select'); assert(button, 'Missing selection button: ' + id); button.click(); }
 function script(id: string, patch: Partial<ScriptSnapshot> = {}): ScriptSnapshot { return { id, friendlyName: 'Script ' + id, path: `C:\\FIXTURE ISOLADA\\${id}.ahk`, description: '', collectionId: '33333333-3333-3333-3333-333333333333', runAtLogin: false, runAsAdministrator: false, launchBlocked: false, status: 'Stopped', process: null, hotkeys: [], coverage: 'Partial', issues: [], ...patch }; }
-function state(): HostState { const snapshot: ManagerSnapshot = { revision: '9007199254741001', scripts: [script('11111111-1111-1111-1111-111111111111', { friendlyName: 'Editor de teste', hotkeys: [{ chord: '^j', normalizedChord: '^j', origin: 'Manual', context: null, sourcePath: null, line: null, isRemap: false, possibleConflict: false }] }), script('22222222-2222-2222-2222-222222222222', { friendlyName: 'Navegador de teste', collectionId: null })], collections: [{ id: '33333333-3333-3333-3333-333333333333', name: 'Trabalho de teste' }], settings: { interpreterPath: null, editorPath: null, editorArguments: [], launchManagerAtLogin: false, showWindowAtLogin: false, theme: 'System', closeBehavior: 'HideToTray', window: { x: 0, y: 0, width: 1240, height: 820, maximized: false, dpi: 96 } }, activity: [], issues: [{ code: 'PartialAnalysis', detail: 'FIXTURE ISOLADA — sem scripts, perfis ou efeitos reais.', scriptId: null }], readOnly: false, effectsAvailable: true, observedAt: '2026-10-23T00:00:00Z' }; return { connection: 'ready', snapshot, error: null, busy: false, authorityMode: 'Normal', administrationPending: false }; }
+function state(): HostState { const snapshot: ManagerSnapshot = { revision: '9007199254741001', scripts: [script('11111111-1111-1111-1111-111111111111', { friendlyName: 'Editor de teste', hotkeys: [{ chord: '^j', normalizedChord: '^j', origin: 'Manual', context: null, sourcePath: null, line: null, isRemap: false, possibleConflict: false }] }), script('22222222-2222-2222-2222-222222222222', { friendlyName: 'Navegador de teste', collectionId: null })], collections: [{ id: '33333333-3333-3333-3333-333333333333', name: 'Trabalho de teste' }], settings: { interpreterPath: null, editorPath: null, editorArguments: [], launchManagerAtLogin: false, showWindowAtLogin: false,startInTray:false, theme: 'System', closeBehavior: 'HideToTray', window: { x: 0, y: 0, width: 1240, height: 820, maximized: false, dpi: 96 } }, activity: [], issues: [{ code: 'PartialAnalysis', detail: 'FIXTURE ISOLADA — sem scripts, perfis ou efeitos reais.', scriptId: null }], readOnly: false, effectsAvailable: true, observedAt: '2026-10-23T00:00:00Z' }; return { connection: 'ready', snapshot, error: null, busy: false, authorityMode: 'Normal', administrationPending: false }; }
 async function untilCall(method: string): Promise<void> { for (let attempt = 0; attempt < 100; attempt++) { if ((await window.fixtureHarness.calls()).some(call => call.method === method)) return; await new Promise(resolve => setTimeout(resolve, 20)); } throw new Error('No fixture call: ' + method); }
 const light: ThemeState = { dark: false, highContrast: false, reducedMotion: false, accent: '#627c47', material: 'solid' };
 
@@ -73,6 +73,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   await check('preferences use true system option and preserve draft until explicit save', async () => {
     await window.fixtureHarness.clearCalls(); button('Preferências').click(); await until(() => !!document.getElementById('settings-theme'), 'Preferences missing'); const theme = document.getElementById('settings-theme') as HTMLSelectElement; assert([...theme.options].some(option => option.value === 'System' && option.text === 'Seguir o sistema'), 'Automatic system option absent'); theme.value = 'Dark'; theme.dispatchEvent(new Event('change', { bubbles: true })); await tick(); assert(!(await window.fixtureHarness.calls()).some(call => call.method === 'saveSettings'), 'Draft applied without save'); button('Cancelar', document.querySelector('[role="dialog"]')!).click(); await tick();
   });
+  results.push(...await runStartInTrayScenario());
   await check('activity retains two-script association and local friendly-name search', async () => {
     await window.fixtureHarness.setState({ ...host, snapshot: { ...host.snapshot!, revision: '9007199254741006', activity: host.snapshot!.scripts.map(item => ({ id: item.id, timestamp: '2026-10-23T00:00:00Z', scriptId: item.id, operation: 'Start', outcome: 'Confirmed', code: 'None', detail: 'FIXTURE ISOLADA' })) } }); button('Atividade').click(); await until(() => document.querySelectorAll('.activity-list article').length === 2, 'Activity fixture records missing'); edit(input('Pesquisar'), 'Navegador de teste'); await tick(); assert(document.querySelectorAll('.activity-list article').length === 1, 'Friendly-name activity filter failed'); assert(document.querySelector('.activity-list article')?.textContent?.includes('Navegador de teste'), 'Script association missing'); button('Scripts').click(); await tick();
   });
@@ -393,4 +394,33 @@ export async function runDeleteSelectionScopes():Promise<AssertionRecord[]> {
     finally{if(waiting)await window.fixtureHarness.resolveResponse('deleteScriptFile',{value:{outcome:'Partial',code:'Cancelled',detail:'fixture cleanup',correlationId:null}});await window.fixtureHarness.setState(host);await tick();filter('All');edit(input('Pesquisar scripts'),'');await tick();}
   }
   return results;
+}
+
+export async function runStartInTrayScenario(): Promise<AssertionRecord[]> {
+  const host=state();
+  try {
+    const initial={...host,snapshot:{...host.snapshot!,settings:{...host.snapshot!.settings,showWindowAtLogin:true}}};
+    await window.fixtureHarness.setState(initial);await tick();await window.fixtureHarness.clearCalls();
+    const openPreferences=async()=>{button(text.preferences).click();await until(()=>!!document.getElementById('settings-start-in-tray'),'Tray preference missing');await tick();};
+    const tray=()=>document.getElementById('settings-start-in-tray') as HTMLInputElement;
+    const login=()=>document.getElementById('settings-show-at-login') as HTMLInputElement;
+    await openPreferences();assert(!tray().checked,'Tray startup default changed');
+    assert(document.querySelector('label[for="settings-start-in-tray"]')?.textContent==='Iniciar na bandeja','Checkbox label differs');
+    tray().click();await tick();assert(tray().checked&&login().checked&&login().disabled,'Login visibility precedence or retained value missing');
+    assert(!(await window.fixtureHarness.calls()).some(call=>call.method==='saveSettings'),'Draft applied before save');
+    button(text.cancel,document.querySelector('[role="dialog"]')!).click();await tick();await openPreferences();
+    assert(!tray().checked&&!login().disabled,'Cancel changed preference');tray().click();await tick();
+    await window.fixtureHarness.setResponse('saveSettings',{value:{outcome:'Failed',code:'StorageFailure',detail:'FIXTURE save failure',correlationId:null}});
+    button(text.save,document.querySelector('[role="dialog"]')!).click();await until(()=>!!document.querySelector('[role="dialog"] .notice'),'Save failure absent');
+    assert(tray().checked&&login().checked&&login().disabled,'Save failure lost draft');
+    const calls=(await window.fixtureHarness.calls()).filter(call=>call.method==='saveSettings');
+    const saved=calls[0]!.args[0] as ManagerSnapshot['settings'];
+    assert(saved.startInTray&&!saved.launchManagerAtLogin&&saved.showWindowAtLogin,'Save altered independent startup settings');
+    await window.fixtureHarness.setResponse('saveSettings',{value:{outcome:'Confirmed',code:'None',detail:null,correlationId:null}});
+    button(text.save,document.querySelector('[role="dialog"]')!).click();await until(()=>!document.querySelector('[role="dialog"]'),'Confirmed save did not close');
+    await window.fixtureHarness.setState({...initial,snapshot:{...initial.snapshot,settings:saved}});await tick();await openPreferences();
+    assert(tray().checked,'Reopened saved preference differs');tray().click();await tick();assert(!login().disabled&&login().checked,'Disabling tray startup discarded login preference');
+    button(text.cancel,document.querySelector('[role="dialog"]')!).click();await tick();await window.fixtureHarness.resetResponses();await window.fixtureHarness.setState(host);await tick();
+    return [{name:'start in tray checkbox preserves cancel, failure, save and login preferences',passed:true}];
+  } catch(error) { return [{name:'start in tray checkbox preserves cancel, failure, save and login preferences',passed:false,detail:String(error)}]; }
 }

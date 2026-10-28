@@ -6,7 +6,7 @@ import {hostText as t} from '../shared/host-pt-BR.js';
 import { recyclePlan, recycleAuthorization } from '../shared/validation.js';
 import { TextDecoder } from 'node:util';
 import type { AuthorityMode, ManagerSnapshot, OperationPlan, OperationResult } from '../shared/contracts.js';
-import { array, activity, authorityMode, elevationStatus, bool, catalogResult, guid, importPreview, integer, issue, nullable, object, oneOf, operationPlan, operationResult, parseStrictJson, reason, requireValid, shape, snapshot, text, type Validator } from '../shared/validation.js';
+import { array, activity, authorityMode, elevationStatus, startupContinuationOffer, bool, catalogResult, guid, importPreview, integer, issue, nullable, object, oneOf, operationPlan, operationResult, parseStrictJson, reason, requireValid, shape, snapshot, text, type Validator } from '../shared/validation.js';
 
 export const MAX_FRAME = 8 * 1024 * 1024;
 export const MAX_PENDING = 32;
@@ -16,6 +16,7 @@ const migration = shape({previewId:guid,sourceRoot:text(),sourceFingerprint:text
 const results: Record<string, Validator> = {
   relink:operationResult,prepareRecycle:recyclePlan,authorizeRecycle:recycleAuthorization,completeRecycle:operationResult,
   beginAdministration:elevationStatus,administrationStatus:elevationStatus,commitAdministration:elevationStatus,cancelAdministration:elevationStatus,
+  beginStartupContinuation:elevationStatus,startupContinuation:startupContinuationOffer,adoptStartupContinuation:operationResult,startupAdoptionStatus:operationResult,
   hello:shape({protocolVersion:v=>v===1,profileRoot:text(),hostExecutable:text()}),
   load:snapshot,snapshot,refresh:snapshot,addFiles:catalogResult,addFolder:catalogResult,
   remove:operationResult,saveMetadata:operationResult,saveCollection:operationResult,removeCollection:operationResult,
@@ -30,7 +31,7 @@ export class UnknownAfterDispatchError extends Error {
   constructor(readonly action:string,readonly requestId:string) { super(t.dispatchedUnknown(action,requestId)); }
 }
 interface Pending { action:string; resolve:(v:unknown)=>void; reject:(e:Error)=>void; timer:ReturnType<typeof setTimeout> }
-export interface BackendOptions { executable:string; hostExecutable:string; createChild?:typeof spawn; timeoutMs?:number; session?:string }
+export interface BackendOptions { executable:string; hostExecutable:string; createChild?:typeof spawn; timeoutMs?:number; session?:string; startupAdoption?:string }
 export class BackendClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private pending = new Map<string,Pending>();
@@ -52,7 +53,7 @@ export class BackendClient extends EventEmitter {
   async start():Promise<void> {
     if(this.child)throw new Error('Backend session already started');
     const spawnChild = this.options.createChild ?? spawn;
-    try{this.child = spawnChild(this.options.executable,['--parent-pid',String(process.pid),'--session',this.session],{shell:false,windowsHide:true,detached:false,stdio:['pipe','pipe','pipe'],cwd:path.dirname(this.options.executable)}) as ChildProcessWithoutNullStreams;}
+    try{this.child = spawnChild(this.options.executable,['--parent-pid',String(process.pid),'--session',this.session,...(this.options.startupAdoption?['--startup-adoption',this.options.startupAdoption]:[])],{shell:false,windowsHide:true,detached:false,stdio:['pipe','pipe','pipe'],cwd:path.dirname(this.options.executable)}) as ChildProcessWithoutNullStreams;}
     catch(error){this.exited=true;this.fail(error instanceof Error?error:new Error('Backend spawn failed'));throw error;}
     this.child.once('spawn',()=>{this.spawnConfirmed=true;});
     this.exitPromise = new Promise(resolve=>{
@@ -94,7 +95,7 @@ export class BackendClient extends EventEmitter {
       const timer=setTimeout(()=>{
         this.pending.delete(id);this.expired.set(id,action);
         const error=new UnknownAfterDispatchError(action,id);reject(error);
-        if(!['beginAdministration','administrationStatus','commitAdministration','cancelAdministration'].includes(action))this.fail(error);
+        if(!['beginAdministration','administrationStatus','commitAdministration','cancelAdministration','beginStartupContinuation','adoptStartupContinuation','startupAdoptionStatus'].includes(action))this.fail(error);
         else if(this.expired.size>256)this.fail(new Error('Expired response limit exceeded'));
       },timeoutMs);
       this.pending.set(id,{action,resolve:resolve as (v:unknown)=>void,reject,timer});

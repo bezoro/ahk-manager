@@ -7,12 +7,13 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Bezoro.AhkManager.WinUI.Infrastructure;
 using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.WinUI.Services;
 using Microsoft.Win32.SafeHandles;
 
 namespace Bezoro.AhkManager.Backend;
 
 public sealed record ElevationFrame(string Kind, Guid OperationId, string Nonce, string? ReceiptHash = null, string? FileIdentity = null);
-public sealed record ElevationReceipt(int Version, Guid OperationId, Guid ReceiptId, string Nonce, ProcessStamp NormalBackend, ProcessStamp NormalHost, ProcessStamp Bootstrap, string BackendHash, string HostHash, string ArchiveHash, string ProfileRoot, string ChromiumRoot, DateTimeOffset ExpiresAt);
+public sealed record ElevationReceipt(int Version, Guid OperationId, Guid ReceiptId, string Nonce, ProcessStamp NormalBackend, ProcessStamp NormalHost, ProcessStamp Bootstrap, string BackendHash, string HostHash, string ArchiveHash, string ProfileRoot, string ChromiumRoot, DateTimeOffset ExpiresAt, StartupContinuationTicket? StartupContinuation = null);
 
 // State is retained for the lifetime of the normal backend. Mutating ticket calls never replay
 // a launch, even after a transport timeout. No profile or domain owner is opened by bootstrap.
@@ -26,6 +27,8 @@ internal sealed class ManagerElevation : IDisposable
     readonly Func<ManagerElevation, CancellationToken, Task>? commitBoundary;
     readonly Action? prepareBoundary;
     readonly Func<Process?>? dispatchBoundary;
+    readonly Func<StartupContinuationTicket, Task<bool>>? commitStartup;
+    StartupContinuationTicket? startupContinuation;
     Guid operationId, receiptId;
     long revision;
     ElevationState state;
@@ -43,9 +46,9 @@ internal sealed class ManagerElevation : IDisposable
     TaskCompletionSource ack = NewSignal();
     Task? launchTask;
     static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
-    internal ManagerElevation(ParentProof parent, Func<bool> quiescent)
+    internal ManagerElevation(ParentProof parent, Func<bool> quiescent, Func<StartupContinuationTicket, Task<bool>>? commitStartup = null)
     {
-        this.parent = parent; this.quiescent = quiescent;
+        this.parent = parent; this.quiescent = quiescent; this.commitStartup = commitStartup;
         backend = ScriptPaths.Canonical(Environment.ProcessPath!, false);
         host = ScriptPaths.Canonical(parent.ParentExecutable, false);
         archive = Path.Combine(Path.GetDirectoryName(host)!, "resources", "app.asar");
@@ -101,6 +104,7 @@ internal sealed class ManagerElevation : IDisposable
                 cancelled = committed = dispatchStarted = false; receiptId = Guid.Empty; receiptHash = receiptIdentity = "";
                 ready = NewSignal(); ack = NewSignal();
             }
+            if (startingStartupId != id) startupContinuation = null;
             operationId = id;
             if (parent.AuthorityMode != AuthorityMode.Normal || !quiescent()) { Set(ElevationState.Failed, ReasonCode.PendingOperation, true); return Current(); }
             nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
@@ -108,6 +112,19 @@ internal sealed class ManagerElevation : IDisposable
             // Task.Run is essential: ShellExecute's UAC wait must not block Begin's response.
             launchTask = Task.Run(beginBoundary is null ? RunNormalAsync : () => beginBoundary(this));
             return Current();
+        }
+    }
+    Guid startingStartupId;
+    internal ElevationStatus BeginStartup(Guid id, StartupContinuationTicket ticket)
+    {
+        lock (sync)
+        {
+            if (history.TryGetValue(id, out var previous)) return previous;
+            if (operationId == id) return Current();
+            if (operationId != Guid.Empty && !canResume) throw new ProtocolException("PendingOperation");
+            startupContinuation = ticket;
+            startingStartupId = id;
+            try { return Begin(id); } finally { startingStartupId = Guid.Empty; }
         }
     }
     public async Task<ElevationStatus> Status(Guid id, long afterRevision, CancellationToken ct)
@@ -133,14 +150,15 @@ internal sealed class ManagerElevation : IDisposable
             using var self = new NativeProcessIdentity(Environment.ProcessId);
             using var normalHost = new NativeProcessIdentity(parent.ParentPid);
             if (!self.TryRead(out var own) || !normalHost.TryRead(out var hostStamp) || own.Created != parent.ChildCreated || hostStamp.Created != parent.ParentCreated || files is null || !files.Valid()) throw new ProtocolException("IdentityChanged");
-            var receipt = new ElevationReceipt(1, operationId, receiptId, nonce, own, hostStamp, candidateStamp, files.BackendHash, files.HostHash, files.ArchiveHash, profile, ChromiumRoot, DateTimeOffset.UtcNow.AddSeconds(120));
+            if (startupContinuation is { } startup && (commitStartup is null || !await commitStartup(startup).ConfigureAwait(false))) throw new ProtocolException("IdentityChanged");
+            var receipt = new ElevationReceipt(1, operationId, receiptId, nonce, own, hostStamp, candidateStamp, files.BackendHash, files.HostHash, files.ArchiveHash, profile, ChromiumRoot, DateTimeOffset.UtcNow.AddSeconds(120), startupContinuation);
             string directory = CoordinationPath(nonce);
             ElevationNative.CreatePrivateDirectory(directory, own.Sid);
             string path = Path.Combine(directory, "commit.json");
+            byte[] receiptBytes = JsonSerializer.SerializeToUtf8Bytes(receipt, Protocol.Json.ElevationReceipt);
             using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
-            { JsonSerializer.Serialize(output, receipt, Protocol.Json.ElevationReceipt); output.Flush(true); }
-            using var input = new FileStream(ScriptPaths.Canonical(path, false), FileMode.Open, FileAccess.Read, FileShare.Read);
-            receiptHash = Convert.ToHexString(SHA256.HashData(input)).ToLowerInvariant(); receiptIdentity = FileIdentity(input);
+            { output.Write(receiptBytes); output.Flush(true); }
+            using var input = PinReceipt(path, receiptBytes, out receiptHash, out receiptIdentity);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromSeconds(15));
             await Send(pipe!, new("Commit", id, nonce, receiptHash, receiptIdentity), deadline.Token).ConfigureAwait(false);
             await ack.Task.WaitAsync(TimeSpan.FromSeconds(15), ct).ConfigureAwait(false);
@@ -229,6 +247,17 @@ internal sealed class ManagerElevation : IDisposable
     internal static bool Known(Exception ex) => ex is IOException or UnauthorizedAccessException or Win32Exception or InvalidOperationException or OperationCanceledException or JsonException or TimeoutException or ArgumentException;
     internal static ProcessIdentity ToIdentity(ProcessStamp stamp) => new(stamp.Pid, stamp.Created, stamp.Executable, "", stamp.Sid, stamp.Session);
     internal static string CoordinationPath(string nonce) => Path.Combine(Path.GetTempPath(), "Bezoro.AhkManager.Administration." + nonce);
+    internal static FileStream PinReceipt(string path, byte[] expected, out string hash, out string identity)
+    {
+        hash = Convert.ToHexString(SHA256.HashData(expected)).ToLowerInvariant(); identity = "";
+        var input = new FileStream(ScriptPaths.Canonical(path, false), FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            if (input.Length > StartupContinuationStore.MaximumBytes || Convert.ToHexString(SHA256.HashData(input)).ToLowerInvariant() != hash) throw new ProtocolException("IdentityChanged");
+            identity = FileIdentity(input); return input;
+        }
+        catch { input.Dispose(); throw; }
+    }
     internal static string FileIdentity(FileStream file)
     {
         if (!ProcessNative.GetFileInformationByHandle(file.SafeFileHandle, out var stamp) || stamp.Links != 1) throw new ProtocolException("IdentityChanged");
@@ -268,10 +297,12 @@ internal sealed class ManagerElevation : IDisposable
         if (commit.Kind != "Commit" || commit.OperationId != operation || commit.Nonce != nonce || commit.ReceiptHash is not { Length: 64 } || commit.FileIdentity is null || !normal.Matches(ToIdentity(normalStamp)) || !host.Matches(ToIdentity(hostStamp))) throw new ProtocolException("NotAuthenticated");
         string directory = ScriptPaths.LocalPath(CoordinationPath(nonce)), path = ScriptPaths.Canonical(Path.Combine(directory, "commit.json"), false);
         using var receiptLease = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (receiptLease.Length > 4096 || FileIdentity(receiptLease) != commit.FileIdentity || Convert.ToHexString(SHA256.HashData(receiptLease)).ToLowerInvariant() != commit.ReceiptHash) throw new ProtocolException("IdentityChanged");
+        if (receiptLease.Length > StartupContinuationStore.MaximumBytes || FileIdentity(receiptLease) != commit.FileIdentity || Convert.ToHexString(SHA256.HashData(receiptLease)).ToLowerInvariant() != commit.ReceiptHash) throw new ProtocolException("IdentityChanged");
         receiptLease.Position = 0;
         var receipt = JsonSerializer.Deserialize(receiptLease, Protocol.Json.ElevationReceipt) ?? throw new ProtocolException("InvalidRequest");
         if (receipt.Version != 1 || receipt.OperationId != operation || receipt.Nonce != nonce || receipt.ReceiptId == Guid.Empty || receipt.NormalBackend != normalStamp || receipt.NormalHost != hostStamp || receipt.Bootstrap != own || receipt.BackendHash != files.BackendHash || receipt.HostHash != files.HostHash || receipt.ArchiveHash != files.ArchiveHash || !ProfileRootsMatch(receipt.ProfileRoot, receipt.ChromiumRoot) || receipt.ExpiresAt <= DateTimeOffset.UtcNow || receipt.ExpiresAt > DateTimeOffset.UtcNow.AddSeconds(120) || !files.Valid()) throw new ProtocolException("IdentityChanged");
+        if (receipt.StartupContinuation is { } continuation && (continuation.OperationId == Guid.Empty || continuation.UserSid != own.Sid || continuation.SessionId != own.Session || !ScriptPaths.Equal(continuation.ProfileRoot, receipt.ProfileRoot) || continuation.ExpiresAt <= DateTimeOffset.UtcNow)) throw new ProtocolException("IdentityChanged");
+        using var adoption = receipt.StartupContinuation is { } continuationTicket ? new StartupAdoptionServer(continuationTicket, nonce, own, executable, hostPath, files.BackendHash) : null;
         // From here EOF/normal-parent exit is expected, including a lost Ack response.
         // Authenticated commit is pinned. Never revert to the pre-commit EOF rule.
         try { using var ackDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15)); await Send(pipe, new("CommitAck", operation, nonce, commit.ReceiptHash, commit.FileIdentity), ackDeadline.Token).ConfigureAwait(false); }
@@ -294,14 +325,29 @@ internal sealed class ManagerElevation : IDisposable
         }
         bool Launch()
         {
-            using var launched = Process.Start(new ProcessStartInfo(hostPath) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(hostPath)! });
+            using var launched = Process.Start(CommittedHostStartInfo(hostPath, adoption?.Descriptor.Encode()));
             if (launched is null || !ProcessNative.GetProcessTimes(launched.SafeHandle, out long launchedAt, out _, out _, out _)) return false;
             using var delivered = new NativeProcessIdentity(launched.Id);
-            return delivered.TryRead(out var stamp) && stamp.Created == launchedAt && ScriptPaths.Equal(stamp.Executable, hostPath) && stamp.Sid == own.Sid && stamp.Session == own.Session && delivered.TryReadSecurity(out var actual) && ParentGuard.TokenMode(actual) == AuthorityMode.Administrator;
+            bool valid = delivered.TryRead(out var stamp) && stamp.Created == launchedAt && ScriptPaths.Equal(stamp.Executable, hostPath) && stamp.Sid == own.Sid && stamp.Session == own.Session && delivered.TryReadSecurity(out var actual) && ParentGuard.TokenMode(actual) == AuthorityMode.Administrator;
+            if (valid) adoption?.HostLaunched(stamp);
+            return valid;
         }
         int result = await ActivateCommitted(WaitExit, WaitLocks, () => files.Valid() && receipt.ExpiresAt > DateTimeOffset.UtcNow, Consume, Launch).ConfigureAwait(false);
+        if (result == 0 && adoption is not null)
+        {
+            try { var continuationResult = await adoption.DeliverAsync().ConfigureAwait(false); result = continuationResult.Outcome == Outcome.Unknown ? 75 : 0; }
+            catch (Exception ex) when (Known(ex)) { result = 75; }
+        }
         if (result != 0 && normal.Exited && host.Exited) ElevationNative.RecoveryError();
         return result;
+    }
+    internal static ProcessStartInfo CommittedHostStartInfo(string hostPath, string? startupAdoption = null)
+    {
+        var start = new ProcessStartInfo(hostPath) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(hostPath)! };
+        // This requests only window activation. Authority still comes from native token proof.
+        start.ArgumentList.Add("--foreground");
+        if (startupAdoption is not null) start.ArgumentList.Add("--startup-adoption=" + startupAdoption);
+        return start;
     }
     // Called only after an authenticated Commit has been validated and pinned. It does not
     // inspect a pipe or parent liveness: EOF is expected after commit, even if Ack was lost.
@@ -315,7 +361,7 @@ internal sealed class ManagerElevation : IDisposable
         }
         catch (Exception ex) when (Known(ex)) { return 75; }
     }
-    static int ActualParent(int pid)
+    internal static int ActualParent(int pid)
     {
         using var query = new ManagementObjectSearcher("SELECT ParentProcessId FROM Win32_Process WHERE ProcessId=" + pid); query.Options.Timeout = TimeSpan.FromSeconds(5);
         using var rows = query.Get(); foreach (ManagementObject row in rows) using (row) return checked((int)(uint)row["ParentProcessId"]);

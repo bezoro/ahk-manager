@@ -15,6 +15,7 @@ public enum AuthorityMode { Normal, Administrator }
 public enum ElevationState { PendingApproval, Ready, CommitPending, CommitAcked, Cancelled, Denied, Failed, Expired, Completed, Unknown }
 public sealed record ParentProof(int ParentPid, long ParentCreated, string ParentExecutable, int ChildPid, long ChildCreated, string UserSid, int SessionId, AuthorityMode AuthorityMode);
 public sealed record ElevationOperationPayload(Guid OperationId);
+public sealed record StartupElevationPayload(Guid OperationId, Guid ContinuationId);
 public sealed record ElevationStatusPayload(Guid OperationId, long AfterRevision);
 public sealed record ElevationStatus(Guid OperationId, long Revision, ElevationState State, ReasonCode? Reason, Guid? ReceiptId, bool CanResumeNormal);
 public sealed record PathsPayload(string[] Paths);

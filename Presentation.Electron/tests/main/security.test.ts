@@ -30,6 +30,8 @@ test('wire validation retains Int64 without precision loss, rejects forged neste
   assert.equal(decimal('9223372036854775808'),false);assert.equal(decimal('01'),false);assert.equal(decimal(9007199254740992),false);
   assert.equal(validatesSnapshot({...state,revision:9223372036854775807n}),false);
   assert.equal(validatesSnapshot({...state,settings:{...state.settings,startupConsent:true}}),false);
+  assert.equal(validatesSnapshot({...state,settings:{...state.settings,startInTray:true}}),true);
+  assert.equal(validatesSnapshot({...state,settings:{...state.settings,startInTray:'true'}}),false);
   assert.equal(validatesSnapshot({...state,scripts:[{...state.scripts[0],status:'Invented'}]}),false);
   for(const json of ['{"id":1,"id":2}','{"id":1,"\\u0069d":2}','{"a":{"b":1,"b":2}}'])assert.throws(()=>parseStrictJson(json));
   assert.deepEqual(parseStrictJson('{"unicode":"ação 😀","a":[{"x":true}]}'),{unicode:'ação 😀',a:[{x:true}]});

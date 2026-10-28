@@ -143,6 +143,18 @@ test('startup enabling always obtains independent native consent; cancel preserv
   assert.equal((await controller.saveMetadata(scriptId,{friendlyName:'Teste',description:'',collectionId:null,runAtLogin:true,runAsAdministrator:false,launchBlocked:false,manualHotkeys:[]},snapshot().revision)).outcome,'CancelledBeforeDispatch');
   assert.equal(requests.length,0);
 });
+
+test('start in tray saves through settings without enabling login or script startup, and retains failed-save state',async()=>{
+  let confirmations=0;const {controller,requests,authority}=setup(async()=>{confirmations++;return true;});
+  const original=snapshot().settings;
+  await controller.saveSettings({...original,startInTray:true});
+  assert.equal(confirmations,0);assert.deepEqual(requests.map(request=>request.action),['saveSettings']);
+  assert.deepEqual(requests[0]!.payload.settings,{...original,startInTray:true});
+  assert.equal(requests[0]!.payload.startupConsent,false);assert.equal(controller.state.snapshot!.scripts[0]!.runAtLogin,false);
+  authority.request=async<T>()=>({outcome:'Failed',code:'StorageFailure',detail:null,correlationId:null} as T);
+  assert.equal((await controller.saveSettings({...original,startInTray:true})).outcome,'Failed');
+  assert.equal(controller.state.snapshot!.settings.startInTray,false);
+});
 test('remove only affects catalog after native confirmation and matching revision',async()=>{
   const {controller,requests}=setup();await controller.remove(scriptId,snapshot().revision);assert.deepEqual(requests,[{action:'remove',payload:{scriptId}}]);
   assert.equal((await controller.remove(scriptId,'1')).code,'StaleSelection');assert.equal(requests.length,1);

@@ -4,7 +4,7 @@ using Bezoro.AhkManager.WinUI.Models;
 
 namespace Bezoro.AhkManager.WinUI.Services;
 
-public sealed class ManagerService : IManagerService
+public sealed partial class ManagerService : IManagerService
 {
     readonly SemaphoreSlim lane = new(1, 1);
     readonly SettingsStore store;
@@ -78,20 +78,21 @@ public sealed class ManagerService : IManagerService
             var result = await store.LoadAsync(cancellationToken).ConfigureAwait(false); document = result.Document; storageIssues = result.Issues;
             try { await journal.LoadAsync(cancellationToken).ConfigureAwait(false); }
             catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is InvalidOperationException) { storageIssues = storageIssues.Add(new(ReasonCode.PendingOperation, ex.Message)); }
+            await LoadStartupRecovery().ConfigureAwait(false);
             if (document.Settings.InterpreterPath is null)
             {
                 var candidates = await new AutoHotkeyDiscovery().DiscoverAsync(cancellationToken).ConfigureAwait(false);
                 if (candidates.Length > 0) document = document with { Settings = document.Settings with { InterpreterPath = candidates[0].Path } };
             }
             loaded = true;
-            await ObserveCore(cancellationToken).ConfigureAwait(false); await Publish(true, cancellationToken).ConfigureAwait(false);
+            await ObserveCore(cancellationToken).ConfigureAwait(false); await ReconcileObservedCore(cancellationToken).ConfigureAwait(false); await Publish(true, cancellationToken).ConfigureAwait(false);
             return true;
         }, cancellationToken).ConfigureAwait(false);
     }
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
         if (!loaded) { await LoadAsync(cancellationToken).ConfigureAwait(false); return; }
-        await Exclusive(async () => { await ObserveCore(cancellationToken).ConfigureAwait(false); await Publish(true, cancellationToken).ConfigureAwait(false); return true; }, cancellationToken).ConfigureAwait(false);
+        await Exclusive(async () => { await ObserveCore(cancellationToken).ConfigureAwait(false); await ReconcileObservedCore(cancellationToken).ConfigureAwait(false); await Publish(true, cancellationToken).ConfigureAwait(false); return true; }, cancellationToken).ConfigureAwait(false);
     }
     async void ProcessInvalidated(object? sender, EventArgs e)
     {
@@ -135,14 +136,22 @@ public sealed class ManagerService : IManagerService
         }
         var global = storageIssues.AddRange(observed.Issues);
         if (!owner.Held || !owner.Trusted) global = global.Add(new(ReasonCode.EffectOwnerUnavailable));
-        if (!journal.Ready) global = global.Add(new(ReasonCode.PendingOperation));
+        if (!journal.Ready) global = global.Add(new(ReasonCode.PendingOperation, "O histórico de execuções não pôde ser lido. As ações de execução estão indisponíveis."));
+        else foreach (var request in journal.Records.Where(OperationJournal.IsPending).Take(8)) global = global.Add(new(ReasonCode.PendingOperation, PendingRequestDetail(request)));
+        if (startupRecoveryPending) global = global.Add(new(ReasonCode.PendingOperation, "Não foi possível confirmar a continuação do início dos scripts. Novos inícios estão bloqueados para evitar duplicação."));
         var registration = startup.RegistrationStatus(document.Settings.LaunchManagerAtLogin);
         if (registration != ReasonCode.None) global = global.Add(new(registration));
         ImmutableArray<ActivitySnapshot> recent;
         try { recent = await activity.ReadAsync(new(), ct).ConfigureAwait(false); }
         catch (Exception ex) when (SafeJsonFiles.Known(ex)) { recent = []; global = global.Add(new(ReasonCode.ActivityUnavailable, ex.Message)); }
-        var next = new ManagerSnapshot(snapshot.Revision + 1, HotkeyAnalyzer.MarkConflicts(scripts.ToImmutable()), document.Collections.ToImmutableArray(), document.Settings, recent, global.Distinct().ToImmutableArray(), store.ReadOnly, owner.Held && owner.Trusted && journal.Ready && !store.ReadOnly, observedAt, processes.GetNormalLaunchUnavailableReason());
+        var next = new ManagerSnapshot(snapshot.Revision + 1, HotkeyAnalyzer.MarkConflicts(scripts.ToImmutable()), document.Collections.ToImmutableArray(), document.Settings, recent, global.Distinct().ToImmutableArray(), store.ReadOnly, owner.Held && owner.Trusted && journal.Ready && !store.ReadOnly && (!startupRecoveryPending || startupResumeActive), observedAt, processes.GetNormalLaunchUnavailableReason());
         Volatile.Write(ref snapshot, next); Changed?.Invoke(this, next);
+    }
+    string PendingRequestDetail(OperationRecord record)
+    {
+        string name = document.Scripts.FirstOrDefault(s => s.Id == record.ScriptId)?.FriendlyName ?? Path.GetFileNameWithoutExtension(record.ScriptPath);
+        string action = record.Operation switch { ScriptOperation.Start => "iniciar", ScriptOperation.Stop => "encerrar", ScriptOperation.Restart => "reiniciar", ScriptOperation.TogglePause => "alterar a pausa de", ScriptOperation.ToggleSuspend => "alterar a suspensão de", ScriptOperation.RecycleFile => "enviar à Lixeira", _ => "alterar" };
+        return $"Não foi possível confirmar o resultado de {action} {name}. O Manager não repetirá essa solicitação automaticamente.";
     }
     async Task<OperationResult> Commit(SettingsDocument next, Guid? scriptId, CancellationToken ct)
     {
@@ -400,6 +409,7 @@ public sealed class ManagerService : IManagerService
         if (operation == ScriptOperation.Recover) return ReasonCode.None;
         if (operation == ScriptOperation.RecycleFile) return ReasonCode.CapabilityUnverified;
         if (RecyclePending(script.Id, script.Path)) return ReasonCode.PendingOperation;
+        if (startupRecoveryPending && !startupResumeActive) return ReasonCode.PendingOperation;
         if (!owner.Held || !owner.Trusted) return ReasonCode.EffectOwnerUnavailable;
         if (store.ReadOnly) return ReasonCode.ReadOnlySettings;
         if (!journal.Ready || journal.Records.Any(r => OperationJournal.IsPending(r) && (r.Operation is ScriptOperation.Start or ScriptOperation.Restart || r.ScriptId == script.Id && (r.Operation == operation || r.Operation == ScriptOperation.Stop)))) return ReasonCode.PendingOperation;
@@ -459,14 +469,25 @@ public sealed class ManagerService : IManagerService
     {
         string interpreter = script.InterpreterPath ?? document.Settings.InterpreterPath ?? "";
         string scriptHash = "", interpreterHash = "";
+        async Task<(OperationResult Result, bool StopConfirmed)> Refused(OperationResult result)
+        {
+            result = result with { CorrelationId = correlation };
+            await Log(script.Id, operation, result with { Detail = $"{script.FriendlyName}: {result.Detail ?? LoginReason(result.Code)}" }, CancellationToken.None).ConfigureAwait(false);
+            return (result, false);
+        }
+        var continuationRefusal = await InvalidatePreparedStartupForStart(script.Id, operation).ConfigureAwait(false);
+        if (continuationRefusal != ReasonCode.None) return await Refused(new(Outcome.Failed, continuationRefusal)).ConfigureAwait(false);
         if (operation is ScriptOperation.Start or ScriptOperation.Restart)
         {
             try { var verified = AutoHotkeyDiscovery.Validate(interpreter); interpreter = verified.Path; interpreterHash = verified.Hash; scriptHash = ScriptPaths.Fingerprint(ScriptPaths.Canonical(script.Path)); await AutoHotkeyDiscovery.ValidateScriptVersionAsync(script.Path, verified, ct).ConfigureAwait(false); }
-            catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is System.ComponentModel.Win32Exception) { return (new(Outcome.Failed, ReasonCode.UnsupportedInterpreter, ex.Message), false); }
+            catch (OperationCanceledException) { return await Refused(new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)).ConfigureAwait(false); }
+            catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is System.ComponentModel.Win32Exception) { return await Refused(new(Outcome.Failed, ReasonCode.UnsupportedInterpreter, ex.Message)).ConfigureAwait(false); }
         }
         var record = new OperationRecord(correlation, script.Id, operation, script.Path, interpreter, scriptHash, interpreterHash, owner.Sid, owner.LoginKey, DateTimeOffset.UtcNow, Outcome.Pending, expected);
-        var reserved = await journal.PutAsync(record, ct).ConfigureAwait(false);
-        if (!reserved.Succeeded) return (reserved, false);
+        OperationResult reserved;
+        try { reserved = await journal.PutAsync(record, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return await Refused(new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)).ConfigureAwait(false); }
+        if (!reserved.Succeeded) return await Refused(reserved).ConfigureAwait(false);
         await Log(script.Id, operation, new(Outcome.Pending, CorrelationId: correlation), CancellationToken.None).ConfigureAwait(false);
         OperationResult result;
         bool oldExited = false;
@@ -548,28 +569,87 @@ public sealed class ManagerService : IManagerService
     }, cancellationToken);
     public Task<OperationResult> RunLoginAsync(CancellationToken cancellationToken = default) => ResultAction(async () =>
     {
-        if (!document.Settings.LaunchManagerAtLogin || startup.RegistrationStatus(true) != ReasonCode.None) return new(Outcome.Failed, ReasonCode.StartupInactive);
-        if (!owner.Held || !owner.Trusted || owner.LoginKey.Length == 0) return new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable);
+        async Task<OperationResult> Abort(string stage, OperationResult result, ImmutableArray<Issue> issues = default)
+        {
+            string detail = $"Início com Windows interrompido ao {stage}. {LoginReason(result.Code)}";
+            if (!issues.IsDefaultOrEmpty)
+                detail += "\n" + string.Join("\n", issues.Take(8).Select(issue => issue.Detail is { Length: > 0 } reason ? reason[..Math.Min(reason.Length, 240)] : LoginReason(issue.Code)));
+            var explained = result with { Detail = detail };
+            await Log(null, ScriptOperation.Start, explained, CancellationToken.None).ConfigureAwait(false);
+            await Publish(false, CancellationToken.None).ConfigureAwait(false);
+            return explained;
+        }
+        var registration = document.Settings.LaunchManagerAtLogin ? startup.RegistrationStatus(true) : ReasonCode.StartupInactive;
+        if (registration != ReasonCode.None) return await Abort("conferir a configuração de início", new(Outcome.Failed, registration)).ConfigureAwait(false);
+        if (!owner.Held || !owner.Trusted || owner.LoginKey.Length == 0) return await Abort("obter permissão para gerenciar os scripts", new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable)).ConfigureAwait(false);
         if (document.LastLoginKey == owner.LoginKey) return new(Outcome.Confirmed, ReasonCode.StartupAlreadyProcessed);
-        var inspection = await startup.InspectAsync(cancellationToken).ConfigureAwait(false);
-        if (!inspection.Complete) return new(Outcome.Failed, ReasonCode.ExternalStartupConflict);
-        var reserve = await Commit(document with { LastLoginKey = owner.LoginKey }, null, cancellationToken).ConfigureAwait(false);
-        if (!reserve.Succeeded) return reserve;
-        bool partial = false;
+        StartupInspection inspection;
+        try { inspection = await startup.InspectAsync(cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return await Abort("conferir outras configurações de início", new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)).ConfigureAwait(false); }
+        if (!inspection.Complete) return await Abort("conferir outras configurações de início", new(Outcome.Failed, ReasonCode.ExternalStartupConflict), inspection.Issues).ConfigureAwait(false);
+        OperationResult reserve;
+        try { reserve = await Commit(document with { LastLoginKey = owner.LoginKey }, null, cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return await Abort("salvar o controle desta sessão", new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)).ConfigureAwait(false); }
+        if (!reserve.Succeeded) return await Abort("salvar o controle desta sessão", reserve).ConfigureAwait(false);
+        int started = 0, running = 0, failed = 0; var details = new List<string>();
+        var continuationCandidates = new List<ScriptRecord>();
+        void Failure(ScriptRecord script, ReasonCode reason)
+        {
+            failed++;
+            if (details.Count < 24) details.Add($"{script.FriendlyName}: {LoginReason(reason)}");
+        }
         foreach (var script in document.Scripts.Where(s => s.RunAtLogin == true).ToArray())
         {
-            if (cancellationToken.IsCancellationRequested) { partial = true; break; }
+            if (cancellationToken.IsCancellationRequested)
+            {
+                Failure(script, ReasonCode.Cancelled);
+                await Log(script.Id, ScriptOperation.Start, new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled, $"{script.FriendlyName}: {LoginReason(ReasonCode.Cancelled)}"), CancellationToken.None).ConfigureAwait(false);
+                continue;
+            }
             await ObserveCore(CancellationToken.None).ConfigureAwait(false);
-            var reason = script.RunAsAdministrator ? ReasonCode.ManualElevationRequired : inspection.ScriptPaths.Any(p => ScriptPaths.Equal(p, script.Path)) ? ReasonCode.ExternalStartupConflict : Policy(script, ScriptOperation.Start, null);
-            if (reason == ReasonCode.AlreadyRunning) continue;
-            if (reason != ReasonCode.None) { partial = true; await Log(script.Id, ScriptOperation.Start, new(Outcome.Failed, reason), CancellationToken.None).ConfigureAwait(false); continue; }
+            var reason = cancellationToken.IsCancellationRequested ? ReasonCode.Cancelled : script.RunAsAdministrator && !processes.IsAdministrator ? ReasonCode.ManualElevationRequired : inspection.ScriptPaths.Any(p => ScriptPaths.Equal(p, script.Path)) ? ReasonCode.ExternalStartupConflict : Policy(script, ScriptOperation.Start, null);
+            if (reason == ReasonCode.AlreadyRunning) { running++; continue; }
+            if (reason != ReasonCode.None)
+            {
+                if (reason == ReasonCode.ObservationIncomplete && !script.RunAsAdministrator) continuationCandidates.Add(script);
+                Failure(script, reason); await Log(script.Id, ScriptOperation.Start, new(reason == ReasonCode.Cancelled ? Outcome.CancelledBeforeDispatch : Outcome.Failed, reason, $"{script.FriendlyName}: {LoginReason(reason)}"), CancellationToken.None).ConfigureAwait(false); continue;
+            }
             var execution = await ExecuteProcess(script, ScriptOperation.Start, null, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
-            partial |= !execution.Result.Succeeded;
-            if (cancellationToken.IsCancellationRequested) break;
+            if (execution.Result.Succeeded) started++; else Failure(script, execution.Result.Code);
         }
+        string detail = $"Iniciados: {started}. Já em execução: {running}. Não iniciados ou não confirmados: {failed}.";
+        if (details.Count > 0) detail += "\n\n" + string.Join("\n", details);
+        if (failed > details.Count) detail += "\nConsulte a atividade para os demais resultados.";
+        if (continuationCandidates.Count > 0 && !processes.IsAdministrator && !journal.Records.Any(OperationJournal.IsPending))
+        {
+            try { await PrepareStartupContinuationCore(continuationCandidates).ConfigureAwait(false); detail += "\n\nÉ possível solicitar permissão ao Windows para verificar os processos e continuar somente os scripts normais que ainda não foram iniciados."; }
+            catch (Exception ex) when (SafeJsonFiles.Known(ex)) { detail += "\nNão foi possível continuar a inicialização com segurança."; }
+        }
+        var summary = new OperationResult(failed > 0 ? Outcome.Partial : Outcome.Confirmed, Detail: detail);
+        await Log(null, ScriptOperation.Start, summary, CancellationToken.None).ConfigureAwait(false);
         await Publish(false, CancellationToken.None).ConfigureAwait(false);
-        return new(partial ? Outcome.Partial : Outcome.Confirmed);
+        return summary;
     }, cancellationToken);
+    static string LoginReason(ReasonCode reason) => reason switch
+    {
+        ReasonCode.ManualElevationRequired => "Início automático administrativo ignorado: o Manager está sem acesso de administrador. A execução manual ainda pode solicitar permissão ao Windows.",
+        ReasonCode.ObservationIncomplete => "O inventário de processos está incompleto; não é seguro iniciar outra instância.",
+        ReasonCode.PendingOperation => "Não iniciado: uma solicitação anterior ainda não teve o resultado confirmado. O Manager não repetirá a execução automaticamente.",
+        ReasonCode.LaunchUncertain => "O resultado da execução é incerto. Um novo início está bloqueado para evitar duplicação.",
+        ReasonCode.AccessDenied => "O Windows negou acesso ao arquivo ou ao processo.",
+        ReasonCode.MissingFile => "O arquivo não foi encontrado.",
+        ReasonCode.UnsupportedInterpreter => "O interpretador selecionado ou a versão exigida pelo script não é compatível.",
+        ReasonCode.ExternalStartupConflict => "Outra configuração de início automático pode duplicar este script.",
+        ReasonCode.LegacyGuard => "Uma proteção do catálogo ou o bloqueio de novas execuções impede o início.",
+        ReasonCode.Cancelled => "O início foi cancelado.",
+        ReasonCode.DispatchFailed => "O envio da execução falhou.",
+        ReasonCode.EffectOwnerUnavailable => "A autoridade para iniciar scripts não está disponível.",
+        ReasonCode.StartupInactive => "O início com Windows está desativado ou sem registro. Revise essa opção nas preferências.",
+        ReasonCode.StartupEntryConflict => "A entrada de início com Windows pertence a outra configuração. Revise-a nas preferências.",
+        ReasonCode.ConcurrentSettingsChange => "As configurações foram alteradas por outra instância. Atualize o estado antes de tentar novamente.",
+        ReasonCode.ReadOnlySettings or ReasonCode.StorageFailure => "Os dados precisam de recuperação antes de iniciar scripts.",
+        _ => $"Início indisponível ({reason}). Consulte a atividade."
+    };
     public Task<ImmutableArray<ActivitySnapshot>> GetActivityAsync(ActivityQuery query, CancellationToken cancellationToken = default) => Exclusive(() => activity.ReadAsync(query, cancellationToken), cancellationToken);
     public async Task<ImportPreview> PreviewImportAsync(string sourcePath, CancellationToken cancellationToken = default)
     {
@@ -604,11 +684,14 @@ public sealed class ManagerService : IManagerService
         await Publish(true, cancellationToken).ConfigureAwait(false); return restored;
     }, cancellationToken);
     public Task<OperationResult> RecoverPendingAsync(CancellationToken cancellationToken = default) => ResultAction(() => RecoverCore(cancellationToken), cancellationToken);
-    async Task<OperationResult> RecoverCore(CancellationToken ct)
+    async Task ReconcileObservedCore(CancellationToken ct)
     {
-        if (!owner.Held || !owner.Trusted) return new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable);
-        if (!journal.Ready) return new(Outcome.Failed, ReasonCode.PendingOperation);
-        await ObserveCore(ct).ConfigureAwait(false); bool unresolved = false;
+        if (!owner.Held || !owner.Trusted || !journal.Ready) return;
+        if (!await ResolveObservedPendingCore(ct).ConfigureAwait(false)) await SettleExpiredStartupContinuationsCore().ConfigureAwait(false);
+    }
+    async Task<bool> ResolveObservedPendingCore(CancellationToken ct)
+    {
+        bool unresolved = false;
         foreach (var record in journal.Records.Where(OperationJournal.IsPending).ToArray())
         {
             if (record.Operation == ScriptOperation.RecycleFile) { unresolved = true; continue; }
@@ -619,14 +702,21 @@ public sealed class ManagerService : IManagerService
             var saved = await journal.PutAsync(record with { Outcome = resolution.Value, Code = resolution == Outcome.Partial ? ReasonCode.LaunchUncertain : ReasonCode.None }, ct).ConfigureAwait(false);
             if (!saved.Succeeded) { unresolved = true; break; }
         }
+        return unresolved;
+    }
+    async Task<OperationResult> RecoverCore(CancellationToken ct)
+    {
+        if (!owner.Held || !owner.Trusted) return new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable);
+        if (!journal.Ready) return new(Outcome.Failed, ReasonCode.PendingOperation);
+        await ObserveCore(ct).ConfigureAwait(false); bool unresolved = await ResolveObservedPendingCore(ct).ConfigureAwait(false);
         var scripts = document.Scripts.ToList(); bool changed = false;
         for (int i = 0; i < scripts.Count; i++)
             if (scripts[i].LegacyGuard)
             {
                 if (await importer.GuardClearedAsync(scripts[i], ct).ConfigureAwait(false)) { scripts[i] = scripts[i] with { LegacyGuard = false }; changed = true; }
-                else unresolved = true;
             }
         if (changed) { var result = await Commit(document with { Scripts = scripts }, null, ct).ConfigureAwait(false); if (!result.Succeeded) return result; }
+        if (startupRecoveryPending && !await RecoverStartupContinuationCore().ConfigureAwait(false)) unresolved = true;
         await Publish(false, ct).ConfigureAwait(false);
         return new(unresolved ? Outcome.Unknown : Outcome.Confirmed, unresolved ? ReasonCode.PendingOperation : ReasonCode.None);
     }

@@ -31,7 +31,7 @@ test('actual source-generated NUL-file snapshot stays valid through broker subsc
   child.stdout.write(JSON.stringify(envelope('snapshot', null, state, 'snapshot')) + '\n');
   assert.deepEqual(observed, state); assert.equal(client.ready, true); await client.shutdown();
 });
-function setup(options:{proof?:Record<string,unknown>;ignore?:string;invalid?:string;exitOnEnd?:boolean;noShutdownExit?:boolean;failedSpawn?:boolean;reply?:(action:string,payload:unknown)=>unknown}={}){
+function setup(options:{proof?:Record<string,unknown>;ignore?:string;invalid?:string;exitOnEnd?:boolean;noShutdownExit?:boolean;failedSpawn?:boolean;adoption?:string;reply?:(action:string,payload:unknown)=>unknown}={}){
   const calls:any[]=[];const child=new EventEmitter() as any;child.pid=options.failedSpawn?undefined:9001;child.stdout=new PassThrough();child.stderr=new PassThrough();
   const envelope=(action:string,id:string|null,payload:unknown,kind='response')=>({version:1,kind,id,session:nonce,action,code:'Ok',payload,error:null});
   child.stdin=new Writable({write(chunk,_encoding,callback){
@@ -40,13 +40,21 @@ function setup(options:{proof?:Record<string,unknown>;ignore?:string;invalid?:st
     const payload=options.reply?.(request.action,request.payload)??(request.action==='hello'?{protocolVersion:1,profileRoot:'C:\\FixtureProfile',hostExecutable:host}:request.action==='shutdown'?{outcome:'Confirmed',code:'None',detail:null,correlationId:null,succeeded:true}:snapshot());
     setImmediate(()=>{child.stdout.write(options.invalid??JSON.stringify(envelope(request.action,request.id,payload))+'\n');if(request.action==='shutdown'&&!options.noShutdownExit){child.emit('exit',0,null);child.stdout.end();}});
   },final(callback){callback();if(options.exitOnEnd)setImmediate(()=>child.emit('exit',0,null));}});
-  const spawn=((executable:any,args:any,config:any)=>{assert.equal(executable,'C:\\App\\backend\\AhkManager.Backend.exe');assert.equal(config.shell,false);assert.equal(config.windowsHide,true);assert.equal(config.detached,false);assert.deepEqual(args,['--parent-pid',String(process.pid),'--session',nonce]);setImmediate(()=>{if(options.failedSpawn){child.emit('error',new Error('spawn ENOENT'));return;}child.emit('spawn');child.stdout.write(JSON.stringify(envelope('hello',null,{parentPid:process.pid,parentCreated:'134000000000000001',parentExecutable:host,childPid:9001,childCreated:'134000000000000002',userSid:'S-1-5-21-test',sessionId:1,authorityMode:'Normal',...options.proof},'parentProof'))+'\n');});return child;}) as any;
-  const client=new BackendClient({executable:'C:\\App\\backend\\AhkManager.Backend.exe',hostExecutable:host,session:nonce,createChild:spawn,timeoutMs:1000});
+  const spawn=((executable:any,args:any,config:any)=>{assert.equal(executable,'C:\\App\\backend\\AhkManager.Backend.exe');assert.equal(config.shell,false);assert.equal(config.windowsHide,true);assert.equal(config.detached,false);assert.deepEqual(args,['--parent-pid',String(process.pid),'--session',nonce,...(options.adoption?['--startup-adoption',options.adoption]:[])]);setImmediate(()=>{if(options.failedSpawn){child.emit('error',new Error('spawn ENOENT'));return;}child.emit('spawn');child.stdout.write(JSON.stringify(envelope('hello',null,{parentPid:process.pid,parentCreated:'134000000000000001',parentExecutable:host,childPid:9001,childCreated:'134000000000000002',userSid:'S-1-5-21-test',sessionId:1,authorityMode:'Normal',...options.proof},'parentProof'))+'\n');});return child;}) as any;
+  const client=new BackendClient({executable:'C:\\App\\backend\\AhkManager.Backend.exe',hostExecutable:host,session:nonce,createChild:spawn,timeoutMs:1000,...(options.adoption?{startupAdoption:options.adoption}:{})});
   return {client,child,calls,envelope};
 }
 test('trusted child proof and hello retain exact FILETIME and revision strings',async()=>{
   const {client,calls}=setup();await client.start();assert.equal(calls[0].payload.parentCreated,'134000000000000001');
   const state=await client.request<any>('snapshot',{});assert.equal(state.revision,'9223372036854775807');await client.shutdown();assert.equal(client.exited,true);
+});
+test('adoption descriptor is passed only as blocked startup data and late adoption results are validated without replay',async()=>{
+  const descriptor=`11111111-1111-1111-1111-111111111111|${'a'.repeat(64)}|10|100|${'b'.repeat(64)}`;
+  const f=setup({adoption:descriptor,proof:{authorityMode:'Administrator'},ignore:'adoptStartupContinuation'});await f.client.start();
+  await assert.rejects(f.client.request('adoptStartupContinuation',{},1),UnknownAfterDispatchError);assert.equal(f.client.ready,true);
+  const call=f.calls.find(call=>call.action==='adoptStartupContinuation');assert.ok(call);
+  f.child.stdout.write(JSON.stringify(f.envelope('adoptStartupContinuation',call.id,{outcome:'Partial',code:'None',detail:'Dois scripts normais verificados.',correlationId:null,succeeded:false}))+'\n');
+  assert.equal(f.calls.filter(call=>call.action==='adoptStartupContinuation').length,1);await f.client.shutdown();
 });
 test('forged parent/child proof refuses hello and effects',async()=>{
   for(const proof of [{parentPid:1},{childPid:1},{parentExecutable:'C:\\Evil.exe'}]){const {client,calls}=setup({proof});await assert.rejects(client.start(),/proof mismatch/);assert.equal(calls.length,0);}

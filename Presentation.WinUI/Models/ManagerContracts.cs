@@ -66,6 +66,7 @@ public sealed record ManagerSettings
     public ImmutableArray<string> EditorArguments { get; init; } = [];
     public bool LaunchManagerAtLogin { get; init; }
     public bool ShowWindowAtLogin { get; init; }
+    public bool StartInTray { get; init; }
     public AppThemePreference Theme { get; init; } = AppThemePreference.System;
     public CloseBehavior CloseBehavior { get; init; } = CloseBehavior.HideToTray;
     public WindowPlacement Window { get; init; } = new();

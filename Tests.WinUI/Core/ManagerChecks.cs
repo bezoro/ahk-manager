@@ -8,6 +8,78 @@ namespace Bezoro.AhkManager.WinUI.Tests.Core;
 public static partial class CoreSuite
 {
     static string InterpreterFixture = "";
+    public static async Task RunPassiveRecoveryChecksAsync(string root, Action<bool, string> check)
+    {
+        Directory.CreateDirectory(root);
+        string interpreter = (await new AutoHotkeyDiscovery().DiscoverAsync())[0].Path;
+        string script = Path.Combine(root, "external.ahk");
+        await File.WriteAllTextAsync(script, "#Requires AutoHotkey v2.0\n");
+        string data = Path.Combine(root, "data"); Directory.CreateDirectory(data);
+        var record = new ScriptRecord { Path = script, FriendlyName = "External script", RunAsAdministrator = true, LegacyGuard = true, InterpreterPath = interpreter };
+        await File.WriteAllBytesAsync(Path.Combine(data, "settings.json"), System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new SettingsDocument { Scripts = [record] }, ManagerJson.Default.SettingsDocument));
+        var owner = new FakeOwner(root); var processes = new FakeProcesses(owner);
+        processes.SetRunning(script, interpreter);
+        await using var manager = new ManagerService(data, owner, processes, new UserStartupService(new FakeStartup(), Path.Combine(root, "Manager.exe")));
+        await manager.LoadAsync();
+        check((await manager.RecoverPendingAsync()).Succeeded, "external legacy protection is not an unresolved process request");
+        check(manager.Snapshot.Scripts.Single().Status == ScriptStatus.Running && manager.Snapshot.Scripts.Single().Issues.Any(i => i.Code == ReasonCode.LegacyGuard), "external script remains observed and protected");
+        check(processes.Starts == 0 && processes.Controls == 0, "legacy inspection never dispatches effects");
+
+        string orphanData = Path.Combine(root, "orphan"); Directory.CreateDirectory(orphanData);
+        var journal = new OperationJournal(Path.Combine(orphanData, "operations.json")); await journal.LoadAsync();
+        await journal.PutAsync(new(Guid.NewGuid(), Guid.NewGuid(), ScriptOperation.Stop, Path.Combine(root, "gone.ahk"), "", "", "", owner.Sid, owner.LoginKey, DateTimeOffset.UtcNow, Outcome.Unknown, Code: ReasonCode.ExitNotObserved));
+        var orphanOwner = new FakeOwner(root); var orphanProcesses = new FakeProcesses(orphanOwner) { Current = new([], false, []) };
+        await using var orphan = new ManagerService(orphanData, orphanOwner, orphanProcesses, new UserStartupService(new FakeStartup(), Path.Combine(root, "Manager.exe")));
+        await orphan.LoadAsync(); await orphan.RefreshAsync();
+        check(orphan.Snapshot.Issues.Any(i => i.Code == ReasonCode.PendingOperation), "normal refresh retains a genuinely unobservable result");
+        orphanProcesses.Current = new([], true, []); await orphan.RefreshAsync();
+        check(!orphan.Snapshot.Issues.Any(i => i.Code == ReasonCode.PendingOperation), "normal refresh settles proven absence without a dedicated recovery action");
+        check(orphanProcesses.Starts == 0 && orphanProcesses.Controls == 0, "automatic reconciliation never replays commands");
+
+        foreach (var scenario in new[] { "expired-safe", "live-commit", "expired-entering", "expired-uncertain", "incomplete" })
+        {
+            string continuationData = Path.Combine(root, scenario); Directory.CreateDirectory(continuationData);
+            var continuationOwner = new FakeOwner(root); var continuationProcesses = new FakeProcesses(continuationOwner) { Current = new([], scenario != "incomplete", []) };
+            var item = new StartupContinuationItem(Guid.NewGuid(), "Normal script", script, interpreter, new string('0', 64), new string('0', 64));
+            var ticket = new StartupContinuationTicket(1, Guid.NewGuid(), continuationData, new string('0', 64), continuationOwner.Sid, 1, continuationOwner.LoginKey, DateTimeOffset.UtcNow.AddMinutes(scenario == "live-commit" ? 5 : -1), [item]);
+            var state = scenario == "expired-entering" ? StartupContinuationItemState.EnteringExecution : scenario == "expired-uncertain" ? StartupContinuationItemState.Uncertain : StartupContinuationItemState.NotDispatched;
+            var continuationStore = new StartupContinuationStore(continuationData);
+            await continuationStore.WriteAsync(new(ticket, StartupContinuationStore.Hash(ticket), StartupContinuationPhase.Committed, [state]), null);
+            await using var continuationManager = new ManagerService(continuationData, continuationOwner, continuationProcesses, new UserStartupService(new FakeStartup(), Path.Combine(root, "Manager.exe")));
+            await continuationManager.LoadAsync(); await continuationManager.RefreshAsync();
+            bool safelyExpired = scenario == "expired-safe";
+            check((await continuationStore.ReadAsync(ticket.OperationId))!.Phase == (safelyExpired ? StartupContinuationPhase.Recovered : StartupContinuationPhase.Committed)
+                && continuationManager.Snapshot.EffectsAvailable == safelyExpired,
+                "automatic continuation expiry respects proof and uncertainty: " + scenario);
+            check(continuationProcesses.Starts == 0 && continuationProcesses.Controls == 0, "continuation maintenance never dispatches: " + scenario);
+        }
+    }
+    public static async Task RunOrphanPendingChecksAsync(string root, Action<bool, string> check)
+    {
+        Directory.CreateDirectory(root);
+        var owner = new FakeOwner(root);
+        var processes = new FakeProcesses(owner) { Current = new([], false, []) };
+        string data = Path.Combine(root, "data"); Directory.CreateDirectory(data);
+        var journal = new OperationJournal(Path.Combine(data, "operations.json"));
+        await journal.LoadAsync();
+        var record = new OperationRecord(Guid.NewGuid(), Guid.NewGuid(), ScriptOperation.Stop,
+            Path.Combine(root, "removed-test.ahk"), "", "", "", owner.Sid, owner.LoginKey,
+            DateTimeOffset.UtcNow, Outcome.Unknown, Code: ReasonCode.ExitNotObserved);
+        check((await journal.PutAsync(record)).Succeeded, "orphan fixture preserves unresolved stop");
+        await using var manager = new ManagerService(data, owner, processes,
+            new UserStartupService(new FakeStartup(), Path.Combine(root, "Manager.exe")), Path.Combine(root, "legacy-absent"));
+        await manager.LoadAsync();
+        check(manager.Snapshot.Scripts.IsEmpty && manager.Snapshot.Issues.Any(i => i.Code == ReasonCode.PendingOperation),
+            "orphan pending stop exposes global recovery without catalog row");
+        check((await manager.RecoverPendingAsync()).Outcome == Outcome.Unknown
+            && manager.Snapshot.Issues.Any(i => i.Code == ReasonCode.PendingOperation),
+            "incomplete observation keeps orphan recovery visible and unresolved");
+        processes.Current = new([], true, []);
+        check((await manager.RecoverPendingAsync()).Succeeded
+            && !manager.Snapshot.Issues.Any(i => i.Code == ReasonCode.PendingOperation),
+            "proved absence clears orphan notice through explicit recovery");
+        check(processes.Starts == 0 && processes.Controls == 0, "orphan recovery never repeats process operations");
+    }
     public static async Task RunAdministratorRestartChecksAsync(string root, Action<bool, string> check)
     {
         string interpreter = (await new AutoHotkeyDiscovery().DiscoverAsync())[0].Path;
@@ -38,6 +110,11 @@ public static partial class CoreSuite
         Check(interpreters.Length > 0, "environment has a validated real v2 executable for read-only version fixtures");
         string interpreter = interpreters[0].Path;
         InterpreterFixture = interpreter;
+        await RunPassiveRecoveryChecksAsync(Path.Combine(FixtureRoot, "passive-recovery"), Check);
+        await RunOrphanPendingChecksAsync(Path.Combine(FixtureRoot, "orphan-pending"), Check);
+        await LoginDiagnosticsAsync();
+        await LoginStartupAsync(interpreter);
+        await LoginContinuationAsync(interpreter);
         await FileActionsAsync(interpreter);
         await HeaderDescriptionsAsync(interpreter);
         await PreserveInactiveStartupAsync(interpreter);
@@ -121,6 +198,203 @@ public static partial class CoreSuite
         var wrong = AutoHotkeyDiscovery.Validate(interpreter);
         Check(wrong.Version.StartsWith('2'), "interpreter product metadata establishes actual v2");
         Console.WriteLine("FIXTURE " + root);
+    }
+    static async Task LoginDiagnosticsAsync()
+    {
+        var failures = new List<string>();
+        void Verify(bool value, string name) { Console.WriteLine((value ? "PASS " : "FAIL ") + name); if (!value) failures.Add(name); }
+        foreach (string scenario in new[] { "registration", "authority", "inspection", "reservation", "cancel-inspection", "cancel-after-inspection" })
+        {
+            string root = Path.Combine(FixtureRoot, "login-diagnostic-" + scenario); Directory.CreateDirectory(root);
+            string path = Path.Combine(root, "fixture.ahk"); await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2\n");
+            var owner = new FakeOwner(root); var processes = new FakeProcesses(owner); var registration = new FakeStartup();
+            var startup = new UserStartupService(registration, Path.Combine(root, "Manager.exe"));
+            using var cancellation = new CancellationTokenSource();
+            string dataRoot = Path.Combine(root, "data");
+            await using var service = new ManagerService(dataRoot, owner, processes, startup, Path.Combine(root, "legacy-absent"));
+            await service.LoadAsync(); var added = await service.AddFilesAsync([path]);
+            await service.SaveMetadataAsync(added.Added.Single(), new("Fixture", "", null, true, false, false, []), true);
+            if (scenario == "registration") registration.Entry = null;
+            if (scenario == "authority") owner.Held = false;
+            if (scenario == "inspection") registration.Inspection = new(false, [], [new(ReasonCode.ExternalStartupConflict, "Tarefas agendadas: consulta indisponível. " + new string('x', 5000))]);
+            if (scenario == "cancel-inspection") registration.CancelInspection = true;
+            if (scenario == "cancel-after-inspection") registration.AfterInspection = cancellation.Cancel;
+            if (scenario == "reservation")
+            {
+                var external = new SettingsStore(Path.Combine(dataRoot, "settings.json")); var loaded = await external.LoadAsync();
+                await external.SaveAsync(loaded.Document with { Settings = loaded.Document.Settings with { ShowWindowAtLogin = true } });
+            }
+            var result = await service.RunLoginAsync(cancellation.Token);
+            var records = (await service.GetActivityAsync(new())).Where(a => a.ScriptId is null && a.Operation == ScriptOperation.Start).ToArray();
+            Verify(!result.Succeeded && processes.Starts == 0 && records.Length == 1 && records[0].Code == result.Code && records[0].Detail == result.Detail && result.Detail?.Contains("Início com Windows", StringComparison.Ordinal) == true, "login diagnostic " + scenario + " persists one explanatory abort without dispatch");
+            if (scenario == "inspection") Verify(result.Detail?.Contains("Tarefas agendadas", StringComparison.Ordinal) == true && result.Detail.Length <= 2400, "login diagnostic inspection carries bounded origin and reason");
+            var persisted = await new SettingsStore(Path.Combine(dataRoot, "settings.json")).LoadAsync();
+            Verify(persisted.Document.LastLoginKey.Length == 0, "login diagnostic " + scenario + " never reserves a refused attempt");
+            await using var reopened = new ManagerService(dataRoot, new FakeOwner(root), processes, startup, Path.Combine(root, "legacy-absent"));
+            await reopened.LoadAsync();
+            Verify(reopened.Snapshot.Activity.Count(a => a.ScriptId is null && a.Operation == ScriptOperation.Start && a.Detail == result.Detail) == 1, "login diagnostic " + scenario + " survives reopening");
+        }
+        var unsupported = RegistryStartupAdapter.InspectCommand("AutoHotkey.exe %PRIVATE_SCRIPT%");
+        Verify(!unsupported.Complete && unsupported.Issues.Length == 1 && unsupported.Issues[0].Detail?.Contains("PRIVATE_SCRIPT", StringComparison.Ordinal) == false, "startup inspection explains unresolved command without recording its contents");
+        Check(failures.Count == 0, "login diagnostic regressions: " + string.Join("; ", failures));
+    }
+    static async Task LoginContinuationAsync(string interpreter)
+    {
+        var failures = new List<string>();
+        void Verify(bool value, string name) { Console.WriteLine((value ? "PASS " : "FAIL ") + name); if (!value) failures.Add(name); }
+        foreach (string scenario in new[] { "two-normal", "failed-first", "uncertain-first", "partial-before-offer", "changed-bytes", "changed-profile", "missing-normal-token", "replay", "manual-completed", "crash-prepared", "crash-accepted", "crash-entering" })
+        {
+            string root = Path.Combine(FixtureRoot, "continuation-" + scenario); Directory.CreateDirectory(root);
+            string first = Path.Combine(root, "first.ahk"), second = Path.Combine(root, "second.ahk"), admin = Path.Combine(root, "admin.ahk");
+            foreach (var path in new[] { first, second, admin }) await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2\n");
+            var owner = new FakeOwner(root); var boundary = new FakeProcesses(owner); var registration = new FakeStartup();
+            var startup = new UserStartupService(registration, Path.Combine(root, "Manager.exe")); string data = Path.Combine(root, "data");
+            await using var service = new ManagerService(data, owner, boundary, startup, Path.Combine(root, "legacy-absent"));
+            await service.LoadAsync(); await service.AddFilesAsync([first, second, admin]);
+            foreach (var row in service.Snapshot.Scripts) await service.SaveMetadataAsync(row.Id, new(row.FriendlyName, "", null, true, row.Path == admin, false, []), true);
+            if (scenario == "partial-before-offer") boundary.AfterStart = () => boundary.Current = boundary.Current with { Complete = false };
+            else boundary.Current = new([], false, [new(ReasonCode.ObservationIncomplete)]);
+            var initial = await service.RunLoginAsync();
+            var offer = await service.GetStartupContinuationAsync();
+            Verify(initial.Outcome == Outcome.Partial && offer?.CanResume == true && offer.ScriptNames.Length == (scenario == "partial-before-offer" ? 1 : 2), "continuation " + scenario + " offers only normal items never sent to ExecuteProcess");
+            if (offer is null) continue;
+            var ticket = await service.GetPreparedStartupContinuationAsync(offer.OperationId);
+            Verify(ticket is not null && ticket.Items.All(i => i.ScriptPath != admin), "continuation " + scenario + " excludes administrative script");
+            if (ticket is null) continue;
+            int alreadyStarted = boundary.Starts; boundary.AfterStart = null; boundary.Current = new([], true, []);
+            if (scenario == "manual-completed")
+            {
+                await service.RefreshAsync();
+                var selection = Select(service, service.Snapshot.Scripts.Single(s => s.Path == first).Id);
+                var plan = await service.PrepareAsync(selection, ScriptOperation.Start);
+                Verify(plan.Allowed && (await service.PerformAsync(plan, plan.Selection, true)).Succeeded, "continuation declined offer allows a separately authorized manual start");
+                boundary.Current = new([], true, []); await service.RefreshAsync();
+                if (await service.CommitStartupContinuationAsync(ticket))
+                {
+                    boundary.Administrator = true;
+                    var accepted = await service.AcceptStartupContinuationAsync(ticket);
+                    if (accepted is not null) await service.ResumeNormalLoginAsync(accepted, CancellationToken.None);
+                }
+                Verify(boundary.Launches.Count(launch => launch.Path == first) == 1 && (await service.GetStartupContinuationAsync())?.CanResume == false, "continuation never repeats a manual start that completed after its offer");
+                continue;
+            }
+            if (scenario == "crash-prepared")
+            {
+                await service.DisposeAsync();
+                await using var reopened = new ManagerService(data, new FakeOwner(root), boundary, startup, Path.Combine(root, "legacy-absent")); await reopened.LoadAsync();
+                Verify((await reopened.GetStartupContinuationAsync())?.CanResume == false && await reopened.GetPreparedStartupContinuationAsync(ticket.OperationId) is null && !reopened.Snapshot.EffectsAvailable && boundary.Starts == alreadyStarted, "continuation persisted offer never reconstructs dispatch authority after normal-host crash");
+                continue;
+            }
+            Verify(await service.CommitStartupContinuationAsync(ticket), "continuation " + scenario + " durably commits one immutable ticket");
+            boundary.Administrator = true;
+            if (scenario == "changed-bytes") await File.AppendAllTextAsync(second, "; changed after consent\n");
+            if (scenario == "changed-profile") await service.SaveMetadataAsync(service.Snapshot.Scripts.First(s => s.Path == second).Id, new("Changed", "", null, true, true, false, []));
+            var accepts = await Task.WhenAll(service.AcceptStartupContinuationAsync(ticket), service.AcceptStartupContinuationAsync(ticket));
+            var authority = accepts.SingleOrDefault(a => a is not null);
+            if (scenario is "changed-bytes" or "changed-profile")
+            {
+                Verify(authority is null && boundary.Starts == alreadyStarted, "continuation " + scenario + " refuses changed scope before acceptance"); continue;
+            }
+            Verify(authority is not null && accepts.Count(a => a is not null) == 1, "continuation " + scenario + " accepts once under concurrent delivery");
+            if (authority is null) continue;
+            if (scenario is "crash-accepted" or "crash-entering")
+            {
+                if (scenario == "crash-entering")
+                {
+                    var store = new StartupContinuationStore(data); var record = (await store.ReadAsync(ticket.OperationId))!;
+                    await store.WriteAsync(record with { Items = record.Items.SetItem(0, StartupContinuationItemState.EnteringExecution) }, record);
+                }
+                await service.DisposeAsync();
+                await using var reopened = new ManagerService(data, new FakeOwner(root), boundary, startup, Path.Combine(root, "legacy-absent")); await reopened.LoadAsync();
+                var plan = await reopened.PrepareAsync(Select(reopened, reopened.Snapshot.Scripts.First().Id), ScriptOperation.Start);
+                Verify(!plan.Allowed && plan.Reason == ReasonCode.PendingOperation && await reopened.GetPreparedStartupContinuationAsync(ticket.OperationId) is null && boundary.Starts == alreadyStarted, "continuation " + scenario + " blocks effects and never rebuilds offer after crash");
+                Verify((await reopened.RecoverPendingAsync()).Succeeded && boundary.Starts == alreadyStarted && await reopened.AcceptStartupContinuationAsync(ticket) is null, "continuation " + scenario + " explicit recovery closes evidence without replay");
+                continue;
+            }
+            if (scenario == "failed-first") boundary.NextStart = new(Outcome.Failed, ReasonCode.AccessDenied);
+            if (scenario == "uncertain-first") boundary.UnknownStart = true;
+            if (scenario == "missing-normal-token") boundary.NormalLaunchDenied = ReasonCode.CapabilityUnverified;
+            var results = await Task.WhenAll(service.ResumeNormalLoginAsync(authority, CancellationToken.None), service.ResumeNormalLoginAsync(authority, CancellationToken.None));
+            var result = results.Single(r => r.Code != ReasonCode.PendingOperation || r.Outcome != Outcome.Failed);
+            int expected = scenario == "missing-normal-token" ? 0 : scenario is "uncertain-first" or "partial-before-offer" ? 1 : 2;
+            Verify(boundary.Starts == alreadyStarted + expected && boundary.Launches.Skip(alreadyStarted).All(l => !l.Elevated), "continuation " + scenario + " dispatches eligible normal items once with elevation false");
+            Verify(await service.AcceptStartupContinuationAsync(ticket) is null && (await service.GetStartupContinuationAsync())?.CanResume == false, "continuation " + scenario + " refuses replay and lost acknowledgement never authorizes another run");
+            if (scenario == "uncertain-first")
+            {
+                Verify(result.Outcome == Outcome.Partial && !service.Snapshot.EffectsAvailable && service.Snapshot.Activity.Any(a => a.Code == ReasonCode.PendingOperation), "continuation uncertainty blocks later script with durable reason");
+                boundary.Current = new([], true, []); await service.RefreshAsync();
+                Verify((await service.RecoverPendingAsync()).Succeeded && boundary.Starts == alreadyStarted + 1 && await service.AcceptStartupContinuationAsync(ticket) is null, "completed uncertain continuation recovers explicitly after observation without replay");
+            }
+            if (scenario == "failed-first") Verify(result.Outcome == Outcome.Partial && boundary.Launches.Last().Path == second, "continuation known first failure allows normal second script");
+        }
+        string historyRoot = Path.Combine(FixtureRoot, "continuation-history"); var history = new StartupContinuationStore(historyRoot);
+        var historyItem = new StartupContinuationItem(Guid.NewGuid(), "History", Path.Combine(historyRoot, "script.ahk"), interpreter, new string('a',64), new string('b',64));
+        var preserved = new List<Guid>();
+        for (int i = 0; i < 129; i++)
+        {
+            var past = new StartupContinuationTicket(1, Guid.NewGuid(), historyRoot, new string('c',64), "S-1-fixture", 1, "history-login", DateTimeOffset.UtcNow.AddSeconds(i), [historyItem]);
+            preserved.Add(past.OperationId); await history.WriteAsync(new(past, StartupContinuationStore.Hash(past), StartupContinuationPhase.Completed, [StartupContinuationItemState.KnownStarted]), null);
+        }
+        var current = new StartupContinuationTicket(1, Guid.NewGuid(), historyRoot, new string('c',64), "S-1-fixture", 1, "history-login", DateTimeOffset.UtcNow.AddMinutes(10), [historyItem]);
+        await history.WriteAsync(new(current, StartupContinuationStore.Hash(current), StartupContinuationPhase.Prepared, [StartupContinuationItemState.NotDispatched]), null);
+        var uncertain = current with { OperationId = Guid.NewGuid(), ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5) };
+        await history.WriteAsync(new(uncertain, StartupContinuationStore.Hash(uncertain), StartupContinuationPhase.Partial, [StartupContinuationItemState.Uncertain]), null);
+        bool found = false, pending = false;
+        try { found = (await history.FindAsync("history-login"))?.Ticket.OperationId == current.OperationId; } catch (Exception ex) when (ex is IOException or InvalidDataException) { }
+        try { pending = (await history.PendingAsync()).Select(record => record.Ticket.OperationId).ToHashSet().SetEquals([current.OperationId, uncertain.OperationId]); } catch (Exception ex) when (ex is IOException or InvalidDataException) { }
+        Verify(found && pending, "continuation 129 terminal records neither block current offer nor hide pending recovery");
+        Verify((await Task.WhenAll(preserved.Select(id => history.ReadAsync(id)))).All(record => record?.Phase == StartupContinuationPhase.Completed), "continuation history lookup preserves terminal records and their replay barriers");
+        Verify((await history.ReadAsync(uncertain.OperationId))?.Items.Single() == StartupContinuationItemState.Uncertain, "continuation history lookup preserves uncertain evidence for explicit recovery");
+        Check(failures.Count == 0, "startup continuation regressions: " + string.Join("; ", failures));
+    }
+    static async Task LoginStartupAsync(string interpreter)
+    {
+        var failures = new List<string>();
+        void Verify(bool value, string name) { Console.WriteLine((value ? "PASS " : "FAIL ") + name); if (!value) failures.Add(name); }
+        foreach (string scenario in new[] { "administrator", "standard", "failed-first", "inventory", "uncertain", "already-running", "cancel-after-first", "incompatible-first", "cancel-during-observe" })
+        {
+            string root = Path.Combine(FixtureRoot, "login-" + scenario); Directory.CreateDirectory(root);
+            string first = Path.Combine(root, "first.ahk"), second = Path.Combine(root, "second.ahk");
+            await File.WriteAllTextAsync(first, "#Requires AutoHotkey v2\n"); await File.WriteAllTextAsync(second, "#Requires AutoHotkey v2\n");
+            var owner = new FakeOwner(root); var boundary = new FakeProcesses(owner) { Administrator = scenario == "administrator" };
+            var registration = new FakeStartup(); var startup = new UserStartupService(registration, Path.Combine(root, "Manager.exe"));
+            await using var service = new ManagerService(Path.Combine(root, "data"), owner, boundary, startup, Path.Combine(root, "legacy-absent"));
+            await service.LoadAsync(); await service.AddFilesAsync([first, second]);
+            var ids = service.Snapshot.Scripts.Select(s => s.Id).ToArray();
+            await service.SaveMetadataAsync(ids[0], new("Primeiro", "", null, true, scenario is "administrator" or "standard", false, []), true);
+            await service.SaveMetadataAsync(ids[1], new("Segundo", "", null, true, false, false, []));
+            if (scenario == "failed-first") boundary.NextStart = new(Outcome.Failed, ReasonCode.AccessDenied);
+            if (scenario == "inventory") boundary.Current = new([], false, [new(ReasonCode.ObservationIncomplete)]);
+            if (scenario == "uncertain") boundary.UnknownStart = true;
+            if (scenario == "already-running") boundary.SetRunning(first, interpreter);
+            using var cancellation = new CancellationTokenSource();
+            if (scenario == "cancel-after-first") boundary.AfterStart = cancellation.Cancel;
+            if (scenario == "incompatible-first") await File.WriteAllTextAsync(first, "#Requires AutoHotkey v1\n");
+            boundary.Observations = 0;
+            if (scenario == "cancel-during-observe") boundary.AfterObserve = count => { if (count == 3) cancellation.Cancel(); };
+            var result = await service.RunLoginAsync(cancellation.Token);
+            if (scenario == "administrator") Verify(result.Succeeded && boundary.Launches.Select(p => p.Elevated).SequenceEqual([true, false]), "login administrator starts administrative and ordinary scripts with original flags");
+            else if (scenario is "standard" or "failed-first")
+            {
+                Verify(result.Outcome == Outcome.Partial && boundary.Launches.Last().Path == second && !boundary.Launches.Last().Elevated, "login " + scenario + " continues eligible ordinary second script");
+                Verify(result.Detail?.Contains("Primeiro", StringComparison.Ordinal) == true && result.Detail.Contains(scenario == "standard" ? "administrador" : "acesso", StringComparison.OrdinalIgnoreCase), "login " + scenario + " names first failure and readable reason");
+                Verify(service.Snapshot.Activity.Any(a => a.ScriptId == ids[0] && a.Code == (scenario == "standard" ? ReasonCode.ManualElevationRequired : ReasonCode.AccessDenied)), "login " + scenario + " persists per-script reason");
+            }
+            else if (scenario == "already-running") Verify(result.Succeeded && boundary.Starts == 1 && boundary.Launches.Single().Path == second && result.Detail?.Contains("Já em execução: 1", StringComparison.Ordinal) == true, "login never duplicates already-running first script while starting second");
+            else if (scenario == "cancel-after-first") Verify(result.Outcome == Outcome.Partial && boundary.Starts == 1 && result.Detail?.Contains("Segundo", StringComparison.Ordinal) == true && service.Snapshot.Activity.Any(a => a.ScriptId == ids[1] && a.Code == ReasonCode.Cancelled), "login cancellation preserves first effect and records unstarted second without replay");
+            else if (scenario == "incompatible-first")
+            {
+                Verify(result.Outcome == Outcome.Partial && boundary.Starts == 1 && boundary.Launches.Single().Path == second, "login incompatible first never dispatches and later ordinary script starts");
+                var records = service.Snapshot.Activity.Where(a => a.ScriptId == ids[0] && a.Operation == ScriptOperation.Start && a.Code == ReasonCode.UnsupportedInterpreter).ToArray();
+                Verify(records.Length == 1 && records[0].Detail?.Contains("Primeiro", StringComparison.Ordinal) == true, "login incompatible preflight failure is persisted once with script name");
+            }
+            else if (scenario == "cancel-during-observe") Verify(result.Outcome == Outcome.Partial && boundary.Starts == 1 && result.Detail?.Contains("Segundo", StringComparison.Ordinal) == true && service.Snapshot.Activity.Count(a => a.ScriptId == ids[1] && a.Operation == ScriptOperation.Start && a.Code == ReasonCode.Cancelled) == 1, "login cancellation during second observation reports partial prior effect and persists second cancellation once");
+            else Verify(boundary.Starts == (scenario == "uncertain" ? 1 : 0) && result.Outcome == Outcome.Partial && result.Detail?.Contains(scenario == "uncertain" ? "não repetirá" : "inventário", StringComparison.OrdinalIgnoreCase) == true, "login " + scenario + " preserves shared safety barrier with visible reason");
+            int starts = boundary.Starts;
+            Verify(service.Snapshot.Activity.Count(a => a.ScriptId is null && a.Operation == ScriptOperation.Start && a.Detail == result.Detail) == 1, "login " + scenario + " persists one batch summary");
+            Verify((await service.RunLoginAsync()).Code == ReasonCode.StartupAlreadyProcessed && boundary.Starts == starts, "login " + scenario + " is durably dispatched once");
+        }
+        Check(failures.Count == 0, "login startup regressions: " + string.Join("; ", failures));
     }
     static async Task PreserveInactiveStartupAsync(string interpreter)
     {
@@ -295,21 +569,36 @@ public static partial class CoreSuite
     sealed class FakeStartup : IUserStartupAdapter
     {
         public string? Entry; public int Writes;
+        public StartupInspection Inspection = new(true, [], []);
+        public bool CancelInspection;
+        public Action? AfterInspection;
         public string? ReadEntry() => Entry;
         public bool CompareExchangeEntry(string? expected, string? replacement) { if (Entry != expected) return false; Entry = replacement; Writes++; return true; }
-        public Task<StartupInspection> InspectAsync(CancellationToken ct) => Task.FromResult(new StartupInspection(true, [], []));
+        public Task<StartupInspection> InspectAsync(CancellationToken ct)
+        {
+            if (CancelInspection) return Task.FromException<StartupInspection>(new OperationCanceledException(ct));
+            AfterInspection?.Invoke();
+            return Task.FromResult(Inspection);
+        }
     }
     sealed class FakeProcesses(FakeOwner owner) : IProcessManager
     {
         public int Starts, Controls; public bool UnknownStart, UnknownWithIdentity, Administrator, LastElevated;
+        public OperationResult? NextStart;
+        public ReasonCode? NormalLaunchDenied;
+        public List<(string Path, bool Elevated)> Launches = [];
         public bool IsAdministrator => Administrator;
+        public ReasonCode? GetNormalLaunchUnavailableReason() => NormalLaunchDenied;
         public OperationResult NextControl = new(Outcome.Confirmed);
         // Test-only deterministic fault injection after the fake has confirmed a Stop.
         public Action? AfterControl;
+        public Action? AfterStart;
+        public int Observations;
+        public Action<int>? AfterObserve;
         public ObservedProcesses Current = new([], true, []);
         public event EventHandler? Invalidated { add { } remove { } }
         public bool Supports(ScriptOperation operation) => true;
-        public Task<ObservedProcesses> ObserveAsync(IReadOnlyCollection<string> known, CancellationToken ct = default) => Task.FromResult(Current);
+        public Task<ObservedProcesses> ObserveAsync(IReadOnlyCollection<string> known, CancellationToken ct = default) { AfterObserve?.Invoke(++Observations); return Task.FromResult(Current); }
         public void SetRunning(string script, string interpreter)
         {
             var identity = new ProcessIdentity(7100 + Starts, DateTime.UtcNow.ToFileTimeUtc(), interpreter, script, owner.Sid, 1, ScriptPaths.Fingerprint(script), ScriptPaths.Fingerprint(interpreter));
@@ -317,7 +606,10 @@ public static partial class CoreSuite
         }
         public Task<LaunchResult> StartAsync(string interpreter, string script, bool elevated, CancellationToken ct = default)
         {
-            Starts++; LastElevated = elevated; SetRunning(script, interpreter);
+            Starts++; LastElevated = elevated; Launches.Add((script, elevated));
+            if (NextStart is { } failure) { NextStart = null; return Task.FromResult(new LaunchResult(failure, null)); }
+            SetRunning(script, interpreter);
+            AfterStart?.Invoke();
             return Task.FromResult(new LaunchResult(new(UnknownStart ? Outcome.Unknown : Outcome.Confirmed, UnknownStart ? ReasonCode.LaunchUncertain : ReasonCode.None), UnknownStart && !UnknownWithIdentity ? null : Current.Processes.Single()));
         }
         public Task<OperationResult> ControlAsync(ProcessIdentity expected, ScriptOperation operation, CancellationToken ct = default)

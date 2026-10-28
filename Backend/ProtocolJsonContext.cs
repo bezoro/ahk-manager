@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.WinUI.Services;
 
 namespace Bezoro.AhkManager.Backend;
 
@@ -12,10 +13,13 @@ namespace Bezoro.AhkManager.Backend;
 [JsonSerializable(typeof(HelloResult))]
 [JsonSerializable(typeof(ParentProof))]
 [JsonSerializable(typeof(ElevationOperationPayload))]
+[JsonSerializable(typeof(StartupElevationPayload))]
 [JsonSerializable(typeof(ElevationStatusPayload))]
 [JsonSerializable(typeof(ElevationStatus))]
 [JsonSerializable(typeof(ElevationFrame))]
 [JsonSerializable(typeof(ElevationReceipt))]
+[JsonSerializable(typeof(StartupAdoptionFrame))]
+[JsonSerializable(typeof(StartupContinuationOffer))]
 [JsonSerializable(typeof(PathsPayload))]
 [JsonSerializable(typeof(PathPayload))]
 [JsonSerializable(typeof(ScriptPayload))]

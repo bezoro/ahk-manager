@@ -19,6 +19,8 @@
     <Compile Include="../Presentation.WinUI/Services/SettingsStore.cs" Link="Core/Services/SettingsStore.cs" />
     <Compile Include="../Presentation.WinUI/Services/LegacyImportService.cs" Link="Core/Services/LegacyImportService.cs" />
     <Compile Include="../Presentation.WinUI/Services/ManagerService.cs" Link="Core/Services/ManagerService.cs" />
+    <Compile Include="../Presentation.WinUI/Services/ManagerStartupContinuation.cs" Link="Core/Services/ManagerStartupContinuation.cs" />
+    <Compile Include="../Presentation.WinUI/Services/StartupContinuationStore.cs" Link="Core/Services/StartupContinuationStore.cs" />
     <Compile Include="../Presentation.WinUI/Services/OperationJournal.cs" Link="Core/Services/OperationJournal.cs" />
     <Compile Include="../Presentation.WinUI/Services/ProcessManager.cs" Link="Core/Services/ProcessManager.cs" />
     <Compile Include="../Presentation.WinUI/Services/AutoHotkeyDiscovery.cs" Link="Core/Services/AutoHotkeyDiscovery.cs" />

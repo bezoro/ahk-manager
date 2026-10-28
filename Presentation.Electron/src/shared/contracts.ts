@@ -1,6 +1,7 @@
 /** Lossless decimal strings are used for every .NET Int64 field. */
 export type Decimal = string;
 export type AuthorityMode = 'Normal' | 'Administrator';
+export interface StartupContinuationOffer {operationId:string;scriptNames:string[];canResume:boolean;reason:string}
 export type ControlUnavailableReason = 'AccessDenied' | 'ManualElevationRequired';
 export type NormalLaunchUnavailableReason = 'AccessDenied' | 'CapabilityUnverified';
 export type ElevationState = 'PendingApproval' | 'Ready' | 'CommitPending' | 'CommitAcked' | 'Cancelled' | 'Denied' | 'Failed' | 'Expired' | 'Completed' | 'Unknown';
@@ -19,7 +20,7 @@ export interface RecycleAuthorization { result:OperationResult; file:ScriptFileI
 export interface ScriptSnapshot { id: string; path: string; friendlyName: string; description: string; headerDescription?: string | null; collectionId: string | null; runAtLogin: boolean | null; runAsAdministrator: boolean; launchBlocked: boolean; status: ScriptStatus; process: ProcessSnapshot | null; hotkeys: HotkeySnapshot[]; coverage: 'Partial' | 'Unanalysable'; issues: Issue[] }
 export interface CollectionSnapshot { id: string; name: string }
 export interface WindowPlacement { x: number; y: number; width: number; height: number; maximized: boolean; dpi: number }
-export interface ManagerSettings { interpreterPath: string | null; editorPath: string | null; editorArguments: string[]; launchManagerAtLogin: boolean; showWindowAtLogin: boolean; theme: AppThemePreference; closeBehavior: 'HideToTray' | 'Exit'; window: WindowPlacement }
+export interface ManagerSettings { interpreterPath: string | null; editorPath: string | null; editorArguments: string[]; launchManagerAtLogin: boolean; showWindowAtLogin: boolean; startInTray: boolean; theme: AppThemePreference; closeBehavior: 'HideToTray' | 'Exit'; window: WindowPlacement }
 export interface ActivitySnapshot { id: string; timestamp: string; scriptId: string | null; operation: ScriptOperation | null; outcome: Outcome; code: string; detail: string | null }
 export interface ManagerSnapshot { revision: Decimal; scripts: ScriptSnapshot[]; collections: CollectionSnapshot[]; settings: ManagerSettings; activity: ActivitySnapshot[]; issues: Issue[]; readOnly: boolean; effectsAvailable: boolean; observedAt: string | null; runningCount?: number; problemCount?: number; normalLaunchUnavailableReason?: NormalLaunchUnavailableReason | null }
 export interface ScriptQuery { search: string; status: 'All' | 'Running' | 'Stopped' | 'Problems'; sort: 'Name' | 'Status' | 'Collection'; collectionId: string | null; version: Decimal }

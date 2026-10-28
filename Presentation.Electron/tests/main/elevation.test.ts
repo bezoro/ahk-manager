@@ -61,3 +61,10 @@ test('wrong operation, regressing revision, receiptless acknowledgement and expi
   }
   const stale=fixture({statuses:(_action,index)=>index===1?{state:'PendingApproval',revision:'2'}:{state:'Ready',revision:'1'}});assert.equal((await stale.coordinator.request()).code,'IdentityChanged');assert.equal(stale.quit,0);
 });
+test('continuation uses a separate elevation attempt and never falls back to generic login or replay after lost response',async()=>{
+  const continuationId='33333333-3333-3333-3333-333333333333';
+  const f=fixture({statuses:action=>action==='beginStartupContinuation'||action==='commitAdministration'?new Error('lost receipt'):{state:f.calls.some(call=>call.action==='commitAdministration')?'CommitAcked':'Ready',receiptId:f.calls.some(call=>call.action==='commitAdministration')?'22222222-2222-2222-2222-222222222222':null}});
+  assert.equal((await f.coordinator.request(true,continuationId)).outcome,'Confirmed');
+  assert.deepEqual(f.calls.map(call=>call.action),['beginStartupContinuation','administrationStatus','commitAdministration','administrationStatus']);
+  assert.equal(f.calls[0]!.payload.continuationId,continuationId);assert.notEqual(f.calls[0]!.payload.operationId,continuationId);assert.equal(f.quit,1);assert.equal(f.confirmations,0);
+});

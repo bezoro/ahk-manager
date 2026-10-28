@@ -20,7 +20,30 @@ internal static class BackendChecks
     public static async Task RunAsync(string root)
     {
         ObservationInventory(); OwnedAhkChecks.ScopeChecks(root, Check); await ElevationChecks.RunAsync(Check); await Framing(); await HostBoundaries(); await QueueAndDeadlines(); await Tokens(root); await Migration(root); Startup(root); StartupCommandChecks.Run(root, Check); await HeaderSnapshotAsync(root);
+        await SettingsPreferenceChecks.RunAsync(root, Check);
+        await StartupContinuationChecks.RunAsync(root, Check);
+        await StartupVisibilityFixturesAsync(root);
         Console.WriteLine("BACKEND checks=" + count);
+    }
+    static async Task StartupVisibilityFixturesAsync(string root)
+    {
+        string host = Path.Combine(root, "Manager.exe"); System.Diagnostics.ProcessStartInfo? delivered = null;
+        int activation = await ManagerElevation.ActivateCommitted(_ => Task.FromResult(true), _ => Task.FromResult(true), () => true, () => true,
+            () => { delivered = ManagerElevation.CommittedHostStartInfo(host); return true; });
+        Check(activation == 0 && delivered is not null && delivered.FileName == host && !delivered.UseShellExecute && delivered.WorkingDirectory == root && delivered.ArgumentList.SequenceEqual(["--foreground"]),
+            "authenticated committed host launch carries only foreground UI intent without login or privilege arguments");
+        await File.WriteAllLinesAsync(Path.Combine(root, "foreground-host-arguments.txt"), delivered!.ArgumentList);
+        string profile = Path.Combine(root, "startup-recovery"); Directory.CreateDirectory(profile);
+        var document = new SettingsDocument { Settings = new() { StartInTray = true, InterpreterPath = Path.Combine(profile, "inert.exe") } };
+        await File.WriteAllBytesAsync(Path.Combine(profile, "settings.json"), JsonSerializer.SerializeToUtf8Bytes(document, ManagerJson.Default.SettingsDocument));
+        await File.WriteAllTextAsync(Path.Combine(profile, "operations.json"), "invalid journal");
+        using var owner = new HeaderOwner(); var processes = new HeaderProcesses(); var registration = new FakeStartup();
+        await using var service = new ManagerService(profile, owner, processes, new UserStartupService(registration, Path.Combine(profile, "Manager.exe")), Path.Combine(profile, "legacy-absent"));
+        await service.LoadAsync(); var snapshot = service.Snapshot;
+        Check(snapshot.Settings.StartInTray && !snapshot.ReadOnly && !snapshot.EffectsAvailable && snapshot.Issues.Any(issue => issue.Code == ReasonCode.PendingOperation && issue.ScriptId is null),
+            "corrupt journal with valid tray settings publishes global recovery issue without settings read-only");
+        await File.WriteAllBytesAsync(Path.Combine(root, "startup-recovery-snapshot.json"), JsonSerializer.SerializeToUtf8Bytes(snapshot, Protocol.Json.ManagerSnapshot));
+        Check(processes.Effects == 0 && registration.Writes == 0, "startup recovery fixture has zero process or startup effects");
     }
     static void ObservationInventory()
     {

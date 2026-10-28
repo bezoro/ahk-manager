@@ -18,22 +18,24 @@ internal sealed class BackendSession : IBackendSession
     readonly IManagerService manager;
     readonly ProfileMigrationService migration;
     ManagerElevation? administration;
+    readonly StartupAdoption? startupAdoption;
     readonly StartupTransferService startupTransfer;
     readonly Dictionary<Guid, (OperationPlan Plan, DateTimeOffset Time)> plans = [];
     readonly Dictionary<Guid, (ImportPreview Preview, DateTimeOffset Time)> imports = [];
     bool loaded, disposed;
     Task? disposal;
     public event EventHandler<ManagerSnapshot>? Changed { add => manager.Changed += value; remove => manager.Changed -= value; }
-    public static BackendSession CreateProduction(string profileRoot, string hostExecutable, ParentProof parent)
+    public static BackendSession CreateProduction(string profileRoot, string hostExecutable, ParentProof parent, string? startupDescriptor = null)
     {
         var manager = ManagerService.CreateForTrustedStartupHost(profileRoot, hostExecutable, out var owner);
-        var session = new BackendSession(manager, profileRoot, hostExecutable, () => owner.Held && owner.Trusted, new RegistryStartupAdapter());
-        session.administration = new(parent, () => session.loaded && manager.Snapshot.EffectsAvailable && !manager.Snapshot.Scripts.Any(s => s.Issues.Any(i => i.Code == ReasonCode.PendingOperation)));
+        var session = new BackendSession(manager, profileRoot, hostExecutable, () => owner.Held && owner.Trusted, new RegistryStartupAdapter(), startupDescriptor is null ? null : new StartupAdoption(StartupAdoptionDescriptor.Parse(startupDescriptor), parent));
+        session.administration = new(parent, () => session.loaded && session.startupAdoption?.Pending != true && manager.Snapshot.EffectsAvailable && !manager.Snapshot.Scripts.Any(s => s.Issues.Any(i => i.Code == ReasonCode.PendingOperation)), manager.CommitStartupContinuationAsync);
         return session;
     }
-    internal BackendSession(IManagerService manager, string profileRoot, string hostExecutable, Func<bool> effectsAllowed, IUserStartupAdapter startup)
+    internal BackendSession(IManagerService manager, string profileRoot, string hostExecutable, Func<bool> effectsAllowed, IUserStartupAdapter startup, StartupAdoption? startupAdoption = null)
     {
         this.manager = manager;
+        this.startupAdoption = startupAdoption;
         migration = new(profileRoot, effectsAllowed);
         startupTransfer = new(startup, hostExecutable, effectsAllowed, () => manager.Snapshot);
     }
@@ -44,6 +46,25 @@ internal sealed class BackendSession : IBackendSession
     {
         if (disposed) throw new ProtocolException("ShuttingDown");
         Prune();
+        if (startupAdoption?.Pending == true && action is not ("load" or "snapshot" or "activity" or "shutdown" or "adoptStartupContinuation" or "startupAdoptionStatus")) throw new ProtocolException("PendingOperation");
+        if (action == "startupAdoptionStatus")
+        {
+            Empty(payload); if (startupAdoption is null) throw new ProtocolException("InvalidRequest");
+            return Pack(await startupAdoption.StatusAsync().WaitAsync(ct).ConfigureAwait(false), Protocol.Json.OperationResult);
+        }
+        if (action == "adoptStartupContinuation")
+        {
+            Empty(payload);
+            if (!loaded || startupAdoption is null || manager is not ManagerService adoptionManager) throw new ProtocolException("InvalidRequest");
+            return Pack(await startupAdoption.RunAsync(adoptionManager).ConfigureAwait(false), Protocol.Json.OperationResult);
+        }
+        if (action == "beginStartupContinuation")
+        {
+            var request = Read(payload, Protocol.Json.StartupElevationPayload);
+            if (!loaded || administration is null || manager is not ManagerService continuationManager) throw new ProtocolException("InvalidRequest");
+            var ticket = await continuationManager.GetPreparedStartupContinuationAsync(request.ContinuationId).ConfigureAwait(false);
+            return Pack(ticket is null ? new ElevationStatus(request.OperationId, 0, ElevationState.Failed, ReasonCode.IdentityChanged, null, true) : administration.BeginStartup(request.OperationId, ticket), Protocol.Json.ElevationStatus);
+        }
         if (action is "beginAdministration" or "administrationStatus" or "commitAdministration" or "cancelAdministration")
         {
             if (!loaded || administration is null) throw new ProtocolException("InvalidRequest");
@@ -115,7 +136,8 @@ internal sealed class BackendSession : IBackendSession
             case "saveSettings":
                 var settings = Read(payload, Protocol.Json.SettingsPayload);
                 return Pack(await manager.SaveSettingsAsync(settings.Settings ?? throw new ProtocolException("InvalidRequest"), settings.StartupConsent, ct).ConfigureAwait(false), Protocol.Json.OperationResult);
-            case "runLogin": Empty(payload); return Pack(await manager.RunLoginAsync(ct).ConfigureAwait(false), Protocol.Json.OperationResult);
+            case "runLogin": Empty(payload); return Pack(startupAdoption is not null ? new(Outcome.Confirmed, ReasonCode.StartupAlreadyProcessed) : await manager.RunLoginAsync(ct).ConfigureAwait(false), Protocol.Json.OperationResult);
+            case "startupContinuation": Empty(payload); return Pack(manager is ManagerService concrete ? await concrete.GetStartupContinuationAsync().ConfigureAwait(false) : null, Protocol.Json.StartupContinuationOffer);
             case "activity":
                 var query = Read(payload, Protocol.Json.ActivityPayload).Query;
                 if (query is null || query.Search is null || query.Search.Length > 1000 || query.Outcome.HasValue && !Enum.IsDefined(query.Outcome.Value)) throw new ProtocolException("InvalidRequest");

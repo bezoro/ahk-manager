@@ -6,13 +6,13 @@ import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
-import { administrationCli, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown } from './lifecycle.js';
+import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupResult } from './lifecycle.js';
 import { AdministrationPreflight, ElevationCoordinator } from './elevation.js';
 import { createDiagnostics, type PageDiagnostics } from './diagnostics.js';
 import {hostText as t} from '../shared/host-pt-BR.js';
 import { APP_URL, assetFromUrl, CSP, DocumentGuard, packagedBackend, type DocumentLease } from './security.js';
 import { capturePlacement, restorePlacement } from './placement.js';
-import type { AdministrationUiGuard, ElevationStatus, ManagerSnapshot, ThemeState, WindowPlacement } from '../shared/contracts.js';
+import type { AdministrationUiGuard, ElevationStatus, ManagerSnapshot, OperationResult, StartupContinuationOffer, ThemeState, WindowPlacement } from '../shared/contracts.js';
 import { activityQuery, array, assertActivityQuery, assertMetadata, assertOperation, assertSelection, assertSettings, bool, decimal, guid, metadata, nullable, oneOf, operation, requireValid, selection, shape, text } from '../shared/validation.js';
 
 protocol.registerSchemesAsPrivileged([{scheme:'ahk-manager',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
@@ -33,8 +33,11 @@ let ready=false;
 let rendererReady=false;
 let documentLease:DocumentLease|null=null;
 const initialAdministration=administrationCli(process.argv);
+const initialAdoption=startupAdoptionCli(process.argv);
+let adoptionPending=initialAdoption.descriptor!==null||initialAdoption.invalid;
+let continuationOffer:StartupContinuationOffer|null=null;
 let administrativeCliPending=initialAdministration==='request';
-const lifecycle=new LifecycleIntent(initialAdministration==='none'&&process.argv.includes('--login'));
+const lifecycle=new LifecycleIntent(!adoptionPending&&initialAdministration==='none'&&process.argv.includes('--login'),adoptionPending||initialAdministration!=='none'||process.argv.includes('--foreground'));
 const preflight=new AdministrationPreflight();
 let administration:ElevationCoordinator|null=null;
 let administrationLease:DocumentLease|null=null;
@@ -48,6 +51,8 @@ const single=app.requestSingleInstanceLock();
 if(!single)app.quit();
 else {
   app.on('second-instance',(_event,argv)=>{
+    if(adoptionPending||argv.some(value=>value==='--startup-adoption'||value.startsWith('--startup-adoption='))){show();return;}
+    if(initialAdoption.descriptor!==null&&argv.includes('--login')){show();return;}
     const administrative=administrationCli(argv);
     if(administrative!=='none'){lifecycle.requestExplicitActivation();show();if(administrative==='invalid')dialog.showErrorBox(t.title,t.administrationCliInvalid);else if(ready)void requestAdministration(true);else administrativeCliPending=true;return;}
     if(argv.includes('--login')){lifecycle.requestLogin();if(ready)void runLogin();}
@@ -76,16 +81,17 @@ function updateTheme():void {
 }
 function show():void {
   if(!window||window.isDestroyed()||quitting)return;
-  if(window.isMinimized())window.restore();window.show();window.focus();
+  lifecycle.showWindow(window);
   deliverPreferences();
 }
 function deliverPreferences():void {if(lifecycle.takePreferences(ready&&rendererReady&&!!guard?.connected))guard?.send('manager:preferences',null);}
 function showPreferences():void {if(administration?.active)return;lifecycle.requestPreferences();show();deliverPreferences();}
 function placement():WindowPlacement {
   if(!window||window.isDestroyed())return controller?.state.snapshot?.settings.window??{x:100,y:100,width:1200,height:780,maximized:false,dpi:96};
+  const maximized=window.isMaximized()||lifecycle.pendingMaximizedRestore;
   const bounds=window.isMaximized()?window.getNormalBounds():window.getBounds();
   const physical=screen.dipToScreenRect(window,bounds);
-  return {...physical,maximized:window.isMaximized(),dpi:screen.getDisplayMatching(bounds).scaleFactor*96};
+  return {...physical,maximized,dpi:screen.getDisplayMatching(bounds).scaleFactor*96};
 }
 async function confirm(title:string,detail:string):Promise<boolean> {
   if(!alive()||!window)return false;
@@ -121,6 +127,7 @@ function lockSession():void {
   target.webRequest.onBeforeRequest((details,callback)=>callback({cancel:!details.url.startsWith('ahk-manager://app/')}));
 }
 async function start():Promise<void> {
+  if(initialAdoption.invalid)throw new Error(t.adoptionInvalid);
   if(process.platform!=='win32'||!app.isPackaged)throw new Error(t.windowsPackagedRequired);
   await serveAssets();lockSession();
   const supportsMica=Number(os.release().split('.')[2]??0)>=22621;
@@ -157,7 +164,7 @@ async function start():Promise<void> {
   const native={files:pick,confirm,placement,alive,fileStamp:scriptFileStamp,trash:(target:string)=>shell.trashItem(path.win32.normalize(target))};
   controller=new ManagerController({request:()=>Promise.reject(new Error('Backend starting'))},native,state=>{guard?.send('manager:state',state);updateTheme();updateTray();});
   administration=new ElevationCoordinator({
-    eligible:()=>!quitting&&!stopExit.active&&controller?.state.connection==='ready'&&controller.state.authorityMode==='Normal'&&!controller.state.busy&&!!backend?.ready,
+    eligible:()=>!adoptionPending&&!quitting&&!stopExit.active&&controller?.state.connection==='ready'&&controller.state.authorityMode==='Normal'&&!controller.state.busy&&!!backend?.ready,
     confirm:()=>confirm(t.administrationTitle,t.administrationDetail),
     preflight:(operationId,phase)=>{const lease=administrationLease;return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>!!lease&&!!guard?.current(lease)&&!!window?.isFocused()&&!window.isDestroyed());},
     quiesce:value=>controller?.setAdministrationPending(value),
@@ -170,12 +177,12 @@ async function start():Promise<void> {
   createTray();updateTheme();
   await startBackend();
   const saved=controller.state.snapshot?.settings.window;
-  if(saved){const dip=screen.screenToDipRect(window,{x:saved.x,y:saved.y,width:saved.width,height:saved.height});window.setBounds(restorePlacement({...saved,...dip,dpi:96},screen.getAllDisplays()));if(saved.maximized)window.maximize();}
+  if(saved){const dip=screen.screenToDipRect(window,{x:saved.x,y:saved.y,width:saved.width,height:saved.height});window.setBounds(restorePlacement({...saved,...dip,dpi:96},screen.getAllDisplays()));lifecycle.deferMaximizedRestore(saved.maximized);if(window.isVisible())show();}
   ready=true;
   if(initialAdministration==='invalid')dialog.showErrorBox(t.title,t.administrationCliInvalid);
   if(administrativeCliPending){administrativeCliPending=false;show();void requestAdministration(true);}
   await runLogin();
-  if(lifecycle.shouldShowAtStartup(controller.state.snapshot?.settings.showWindowAtLogin??false,trayRegistered))show();
+  if(lifecycle.shouldShowAtStartup(controller.state.snapshot?.settings,trayRegistered,controller.state.connection!=='ready'||controller.state.snapshot?.readOnly===true,controller.state.snapshot?.issues))show();
   if(window.isVisible())diagnostics?.initialReady();
 }
 async function startBackend():Promise<void> {
@@ -184,7 +191,8 @@ async function startBackend():Promise<void> {
   if(quitting)throw new Error(t.closing);
   if(!controller)throw new Error('Controller unavailable');
   if(backend&&!backend.exited)throw new Error(t.backendStillAlive(backend.pid));
-  backend=new BackendClient({executable:packagedBackend(path.dirname(process.execPath)),hostExecutable:process.execPath});
+  backend=new BackendClient({executable:packagedBackend(path.dirname(process.execPath)),hostExecutable:process.execPath,...(initialAdoption.descriptor?{startupAdoption:initialAdoption.descriptor}:{})});
+  if(adoptionPending)controller.setAdministrationPending(true);
   controller.setAuthority(backend);controller.setConnection('starting');
   backend.on('snapshot',(snapshot:ManagerSnapshot)=>controller?.setSnapshot(snapshot));
   backend.on('unavailable',(error:Error)=>{if(!quitting)controller?.setConnection('failed',error.message);});
@@ -200,10 +208,44 @@ async function startBackend():Promise<void> {
     }
     controller.setSnapshot(await backend.request<ManagerSnapshot>('load',{}));
     controller.setConnection('ready');
+    if(initialAdoption.descriptor){
+      const result=await backend.request<OperationResult>('adoptStartupContinuation',{},150000);
+      adoptionPending=startupAdoptionBlocksInteraction(result);controller.setAdministrationPending(adoptionPending);
+      show();if(window)await dialog.showMessageBox(window,{type:result.outcome==='Confirmed'?'info':'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+    }
   }catch(error){controller.setConnection('failed',safeError(error));show();}
 }
-async function runLogin():Promise<void> {if(administration?.active||stopExit.active||quitting||!backend?.ready||!controller||!lifecycle.takeLogin())return;await controller.runLogin().catch(error=>controller?.setConnection('failed',safeError(error)));}
+async function reportLoginResult(result:OperationResult):Promise<void> {
+  try{continuationOffer=backend?.ready?await backend.request<StartupContinuationOffer|null>('startupContinuation',{}):null;}catch{continuationOffer=null;}updateTray();
+  if(continuationOffer?.canResume){show();await requestStartupContinuation();return;}
+  await reportStartupResult(result,{show,warn:async value=>{if(window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:value.detail??t.loginFailure(value.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}});
+}
+async function checkStartupAdoption():Promise<void> {
+  if(!adoptionPending||!backend?.ready||!controller||quitting)return;
+  try{
+    const result=await backend.request<OperationResult>('startupAdoptionStatus',{},10000);
+    adoptionPending=startupAdoptionBlocksInteraction(result);controller.setAdministrationPending(adoptionPending);controller.setConnection('ready');updateTray();show();
+    if(window)await dialog.showMessageBox(window,{type:result.outcome==='Confirmed'?'info':'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+  }catch{show();dialog.showErrorBox(t.loginResultTitle,t.administrationPending);}
+}
+async function requestStartupContinuation():Promise<void> {
+  if(adoptionPending||administration?.active||!backend?.ready||!controller||quitting)return;
+  continuationOffer=await backend.request<StartupContinuationOffer|null>('startupContinuation',{});updateTray();
+  if(!continuationOffer?.canResume||!window)return;
+  show();
+  const choice=await dialog.showMessageBox(window,{type:'warning',title:t.continuationTitle,message:t.continuationTitle,detail:t.continuationDetail(continuationOffer.scriptNames),buttons:[t.continuationContinue,t.continuationLater],defaultId:1,cancelId:1,noLink:true});
+  if(choice.response!==0)return;
+  const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));
+  administrationLease=documentLease;
+  const result=await administration?.request(true,continuationOffer.operationId);
+  if(result&&result.outcome!=='Confirmed'&&window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+}
+async function runLogin():Promise<void> {
+  if(initialAdoption.descriptor!==null||adoptionPending||administration?.active||stopExit.active||quitting||!backend?.ready||!controller||!lifecycle.takeLogin())return;
+  try{await reportLoginResult(await controller.runLogin());}catch(error){controller.setConnection('failed',safeError(error));show();dialog.showErrorBox(t.loginResultTitle,safeError(error));}
+}
 async function requestAdministration(explicitCli=false){
+  if(adoptionPending)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
   if(administration?.processing)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
   if(controller?.state.authorityMode==='Administrator'){show();return {outcome:'Confirmed' as const,code:'None',detail:null,correlationId:null};}
   if(explicitCli){const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));}
@@ -220,10 +262,10 @@ function createTray():void {
 function updateTray():void {
   if(!tray||tray.isDestroyed())return;
   const running=controller?.state.snapshot?.scripts.filter(s=>s.status==='Running')??[];
-  tray.setContextMenu(Menu.buildFromTemplate([{label:t.tray.open,click:()=>{lifecycle.requestExplicitActivation();show();}},{label:window?.isVisible()?t.tray.hide:t.tray.show,click:()=>{lifecycle.requestExplicitActivation();if(window?.isVisible())window.hide();else show();updateTray();}},{type:'separator'},{label:t.tray.running(running.length),submenu:running.length?running.map(s=>({label:s.friendlyName,enabled:false})):[{label:t.tray.noneRunning,enabled:false}]},{label:t.tray.preferences,enabled:!stopExit.active&&!administration?.active,click:showPreferences},{type:'separator'},{label:t.tray.exit,enabled:!stopExit.active&&!quitting,click:()=>void quit()},{label:t.tray.stopExit,enabled:!stopExit.active&&!quitting&&controller?.state.connection==='ready',click:()=>void stopScriptsAndQuit()},{label:t.tray.stopping(stopExitProgress.done,stopExitProgress.total),visible:stopExit.active,enabled:false},{label:t.tray.cancelStopExit,visible:stopExit.active,click:()=>{stopExit.cancel();updateTray();}}]));
+  tray.setContextMenu(Menu.buildFromTemplate([{label:t.continuationCheck,visible:adoptionPending,enabled:adoptionPending&&backend?.ready===true&&!quitting,click:()=>void checkStartupAdoption()},{label:t.continuationMenu,visible:continuationOffer!==null,enabled:continuationOffer?.canResume===true&&!adoptionPending&&!administration?.active&&!quitting,click:()=>void requestStartupContinuation()},{label:t.tray.open,click:()=>{lifecycle.requestExplicitActivation();show();}},{label:window?.isVisible()?t.tray.hide:t.tray.show,click:()=>{lifecycle.requestExplicitActivation();if(window?.isVisible())window.hide();else show();updateTray();}},{type:'separator'},{label:t.tray.running(running.length),submenu:running.length?running.map(s=>({label:s.friendlyName,enabled:false})):[{label:t.tray.noneRunning,enabled:false}]},{label:t.tray.preferences,enabled:!stopExit.active&&!administration?.active,click:showPreferences},{type:'separator'},{label:t.tray.exit,enabled:!stopExit.active&&!quitting,click:()=>void quit()},{label:t.tray.stopExit,enabled:!stopExit.active&&!quitting&&controller?.state.connection==='ready',click:()=>void stopScriptsAndQuit()},{label:t.tray.stopping(stopExitProgress.done,stopExitProgress.total),visible:stopExit.active,enabled:false},{label:t.tray.cancelStopExit,visible:stopExit.active,click:()=>{stopExit.cancel();updateTray();}}]));
 }
 async function stopScriptsAndQuit():Promise<void> {
-  if(administration?.active||quitting||!controller||!stopExit.begin())return;
+  if(adoptionPending||administration?.active||quitting||!controller||!stopExit.begin())return;
   stopExitProgress={done:0,total:0};updateTray();
   try{
     const receipt=await controller.stopScriptsForExit({cancelled:()=>stopExit.cancelled,progress:(done,total)=>{stopExitProgress={done,total};updateTray();}});
@@ -264,6 +306,7 @@ function registerIpc():void {
     ipcMain.handle(`manager:${name}`,async(event,envelope:unknown)=>{
       const {lease,body}=guard!.validate(event,envelope);requireValid(body,validate,`${name} request`);
       if(quitting&&name!=='getState'&&name!=='getTheme')throw new Error(t.closing);
+      if(adoptionPending&&!['getState','getTheme','getActivity'].includes(name))throw new Error(t.administrationPending);
       if(controller!.state.administrationPending&&!['getState','getTheme','getActivity','requestAdministration'].includes(name))throw new Error(t.administrationPending);
       const value=await documentScope.run(()=>guard!.current(lease),()=>handler(body));
       if(!guard!.current(lease))throw new Error(t.documentChanged);
