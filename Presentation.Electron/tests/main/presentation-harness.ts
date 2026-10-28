@@ -70,8 +70,11 @@ app.whenReady().then(async()=>{
   fs.watch(output,(_event,name)=>{if(name!=='command.json')return;try{const command=JSON.parse(fs.readFileSync(path.join(output,name),'utf8'));if(!Number.isSafeInteger(command.id)||seen.has(command.id))return;seen.add(command.id);tail=tail.then(async()=>{
     if(command.action==='capture'){
       if(!/^[a-z0-9-]+$/.test(command.name))throw new Error('Invalid capture name');
+      await window.webContents.executeJavaScript('document.fonts.ready.then(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))');
       fs.writeFileSync(path.join(output,command.name+'.internal.png'),(await window.webContents.capturePage()).toPNG());
       const dom=await window.webContents.executeJavaScript('({width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,active:document.activeElement?.id,fixture:!!document.getElementById("fixture-warning")})');report();write(command.name+'.done.json',{dom,theme:currentTheme(),fixture:true});
+    }else if(command.action==='overview'&&scenarios){
+      const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.previewOverview()');write('visual-'+command.id+'.json',{assertions,fixture:true});
     }else if(command.action==='theme'&&['system','light','dark'].includes(command.value)){nativeTheme.themeSource=command.value;emitTheme();}
     else if(command.action==='resize'&&[740,760,1000,1240,1440].includes(command.width)&&[560,600,720,820,900].includes(command.height)){window.setMinimumSize(700,560);window.setSize(command.width,command.height);report();}
     else if(command.action==='zoom'&&[1,2].includes(command.factor)){window.webContents.setZoomFactor(command.factor);report();}

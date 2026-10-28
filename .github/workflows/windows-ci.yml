@@ -127,11 +127,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Node tests failed.' }
 
       - name: Build production frontend bundle
+        id: frontend-build
         if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
         working-directory: Presentation.Electron
         run: |
           npm.cmd run build -- --out "$env:CI_OUTPUT/frontend"
           if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+
+      - name: Download verified Electron runtime
+        id: electron-runtime
+        if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          node.exe node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw 'Electron runtime download failed.' }
+
+      - name: Test and capture Electron interface
+        if: ${{ !cancelled() && steps.frontend-build.outcome == 'success' && steps.electron-runtime.outcome == 'success' }}
+        run: |
+          ./tools/Test-ElectronPresentation.ps1 -FrontendRoot "$env:CI_OUTPUT/frontend" -HarnessRoot "$env:CI_OUTPUT/presentation-harness" -OutputRoot "$env:CI_OUTPUT/presentation"
 
       - name: Publish production backend
         if: ${{ !cancelled() && steps.backend-dependencies.outcome == 'success' }}
@@ -150,5 +164,18 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/backend/*.txt
             ${{ runner.temp }}/ahk-manager-ci/startup-inspection/*.txt
             ${{ runner.temp }}/ahk-manager-ci/frontend/build-info.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload interface screenshots and assertions
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-ui-evidence
+          path: |
+            ${{ runner.temp }}/ahk-manager-ci/presentation/*.png
+            ${{ runner.temp }}/ahk-manager-ci/presentation/*.json
+            ${{ runner.temp }}/ahk-manager-ci/presentation/*.log
+            ${{ runner.temp }}/ahk-manager-ci/presentation/*.txt
           if-no-files-found: warn
           retention-days: 14

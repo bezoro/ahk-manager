@@ -351,6 +351,19 @@ export async function previewHotkeys(missing=false):Promise<AssertionRecord[]> {
   return [{name:'synthetic hotkeys and long path preview',passed:!document.documentElement.scrollWidth||document.documentElement.scrollWidth<=innerWidth}];
 }
 
+// Keep the selected script's primary actions visible for CI visual review.
+export async function previewOverview():Promise<AssertionRecord[]> {
+  const results=await previewHotkeys(false);
+  const panel=document.querySelector<HTMLElement>('.inspector')!;
+  const metadata=panel.querySelector<HTMLDetailsElement>('.metadata-expander');
+  if(metadata)metadata.open=false;
+  panel.scrollTop=0;
+  const workspace=document.querySelector<HTMLElement>('.workspace');
+  if(workspace)workspace.scrollTop=0;
+  await tick();
+  return results;
+}
+
 export async function focusRecovery():Promise<AssertionRecord[]> {
   await previewHotkeys(true);
   for(const label of [text.locateScript,text.remove]){
