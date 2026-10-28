@@ -20,14 +20,21 @@ internal static class BackendChecks
     public static async Task RunAsync(string root)
     {
         ObservationInventory(); OwnedAhkChecks.ScopeChecks(root, Check); await ElevationChecks.RunAsync(Check); await Framing(); await HostBoundaries(); await QueueAndDeadlines(); await Tokens(root); await Migration(root); Startup(root); StartupCommandChecks.Run(root, Check); await HeaderSnapshotAsync(root);
-        await SettingsPreferenceChecks.RunAsync(root, Check);
-        await StartupRegistrationChecks.RunAsync(root, Check);
-        await StartupRecoveryChecks.RunAsync(root, Check);
-        await RuntimeServiceChecks.RunAsync(root, Check);
-        await StartupSettingsChecks.RunAsync(root, Check);
-        await StartupContinuationChecks.RunAsync(root, Check);
-        await StartupVisibilityFixturesAsync(root);
+        var failures = new List<Exception>();
+        async Task Suite(string name, Func<Task> action)
+        {
+            try { await action(); }
+            catch (Exception ex) { Console.Error.WriteLine($"FAILED SUITE {name}: {ex}"); failures.Add(ex); }
+        }
+        await Suite("settings", () => SettingsPreferenceChecks.RunAsync(root, Check));
+        await Suite("registration", () => StartupRegistrationChecks.RunAsync(root, Check));
+        await Suite("recovery", () => StartupRecoveryChecks.RunAsync(root, Check));
+        await Suite("runtime", () => RuntimeServiceChecks.RunAsync(root, Check));
+        await Suite("startup settings", () => StartupSettingsChecks.RunAsync(root, Check));
+        await Suite("continuation", () => StartupContinuationChecks.RunAsync(root, Check));
+        await Suite("visibility", () => StartupVisibilityFixturesAsync(root));
         Console.WriteLine("BACKEND checks=" + count);
+        if (failures.Count > 0) throw new AggregateException("Independent backend suites failed.", failures);
     }
     static async Task StartupVisibilityFixturesAsync(string root)
     {

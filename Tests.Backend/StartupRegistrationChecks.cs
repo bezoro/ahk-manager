@@ -3,6 +3,7 @@ using System.Management;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Xml.Linq;
+using Bezoro.AhkManager.Backend;
 using Bezoro.AhkManager.WinUI.Models;
 using Bezoro.AhkManager.WinUI.Infrastructure;
 using Bezoro.AhkManager.WinUI.Services;
@@ -95,6 +96,14 @@ internal static class StartupRegistrationChecks
         document = XDocument.Parse(xml); document.Root!.Element(ns + "Actions")!.Add(new XElement(ns + "Exec"));
         check(WindowsStartupTaskStore.Parse(document.ToString()).Command.Length == 0, "additional task actions prevent ownership");
         check(WindowsStartupTaskStore.Parse("<!DOCTYPE x [<!ENTITY a 'expanded'>]><x>&a;</x>").Command.Length == 0, "task parser refuses DTD input without expanding entities");
+        string installedHost = StartupUninstallInspection.HostPath(Path.Combine(root, "installed", "backend"));
+        check(ScriptPaths.Equal(installedHost, Path.Combine(root, "installed", "Bezoro.AhkManager.exe")), "uninstall inspection fixes the host to the backend's parent directory");
+        var ownedForRemoval = specification with { Command = ScriptPaths.QuoteArgument(installedHost) + " --login --background" };
+        check(StartupUninstallInspection.Classify(null, installedHost, sid) == 0 && StartupUninstallInspection.Classify(ownedForRemoval, installedHost, sid) == 2, "uninstall inspection distinguishes absent and owned exact current-user task");
+        check(StartupUninstallInspection.Classify(ownedForRemoval with { Enabled = false, HighestPrivileges = false }, installedHost, sid) == 2, "disabled owned task still blocks uninstall so no orphan definition is left behind");
+        check(StartupUninstallInspection.Classify(ownedForRemoval, installedHost.ToUpperInvariant(), sid) == 2, "uninstall ownership respects Windows path casing without relaxing arguments");
+        foreach (var foreign in new[] { ownedForRemoval with { Source = "foreign source" }, ownedForRemoval with { UserSid = "S-1-5-21-other" }, ownedForRemoval with { Command = ownedForRemoval.Command + " --extra" }, ownedForRemoval with { InteractiveToken = false }, ownedForRemoval with { UserLogonOnly = false }, ownedForRemoval with { Command = ScriptPaths.QuoteArgument(Path.Combine(root, "other-install.exe")) + " --login --background" } })
+            check(StartupUninstallInspection.Classify(foreign, installedHost, sid) == 0, "read-only uninstall inspection preserves foreign identity source path or trigger");
         if (OperatingSystem.IsWindows())
         {
             InspectEmbeddedTaskProperties(sid, check);

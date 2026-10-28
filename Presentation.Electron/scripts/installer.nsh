@@ -1,6 +1,5 @@
 ; Never stop a process tree. A running Manager must complete its own bounded shutdown.
 !include "$%AHK_PACKAGE_OUT%\owned-files.nsh"
-!define AHK_STARTUP_TASK_INSPECTOR "${__FILEDIR__}\Check-StartupTask.ps1"
 
 LangString ahkManualUpdate 1046 "A atualização no mesmo local está desabilitada. Saia do AHK Manager, desinstale a versão anterior preservando perfis e scripts e instale a nova versão. Depois verifique a preferência de início com Windows, se a utilizava. Nenhum arquivo da instalação será alterado por esta tentativa."
 
@@ -55,19 +54,15 @@ LangString ahkManualUpdate 1046 "A atualização no mesmo local está desabilita
 !macroend
 
 !macro checkOwnedAdministrativeStartup
-  ; Fixed helper only inspects COM. A policy or access failure blocks removal;
-  ; there is no ExecutionPolicy bypass, task deletion or fabricated product flag.
-  InitPluginsDir
-  SetOutPath "$PLUGINSDIR"
-  File /oname=Check-StartupTask.ps1 "${AHK_STARTUP_TASK_INSPECTOR}"
-  nsExec::ExecToStack /TIMEOUT=15000 '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -File "$PLUGINSDIR\Check-StartupTask.ps1" -ManagerExecutable "$INSTDIR\Bezoro.AhkManager.exe"'
+  ; validateOwnedRemoval has already verified this exact backend and its paths.
+  ; The zero-argument inspection fixes its own host path and never opens a profile.
+  nsExec::ExecToStack /TIMEOUT=15000 '"$INSTDIR\backend\AhkManager.Backend.exe" --inspect-owned-startup'
   Pop $R2
   Pop $R3
-  SetOutPath "$INSTDIR"
   ${If} $R2 == 2
     Abort "Este AHK Manager ainda possui uma tarefa de início com Windows. Abra o Manager como administrador, desative Iniciar com Windows nas Preferências, saia do Manager e execute a desinstalação novamente. Nenhum arquivo foi removido."
   ${ElseIf} $R2 != 0
-    Abort "Não foi possível conferir a tarefa de início com Windows. Nenhum arquivo foi removido. Verifique o acesso ao Agendador de Tarefas e a política de execução do PowerShell antes de tentar novamente."
+    Abort "Não foi possível conferir a tarefa de início com Windows. Nenhum arquivo foi removido. Verifique o acesso ao Agendador de Tarefas antes de tentar novamente."
   ${EndIf}
 !macroend
 
