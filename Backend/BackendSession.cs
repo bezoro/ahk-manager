@@ -69,6 +69,7 @@ internal sealed class BackendSession : IBackendSession
         {
             if (!loaded || administration is null) throw new ProtocolException("InvalidRequest");
             if (action == "administrationStatus") { var request = Read(payload, Protocol.Json.ElevationStatusPayload); return Pack(await administration.Status(request.OperationId, request.AfterRevision, ct).ConfigureAwait(false), Protocol.Json.ElevationStatus); }
+            if (action == "beginAdministration") { var request = Read(payload, Protocol.Json.AdministrationBeginPayload); return Pack(administration.Begin(request.OperationId, request.ResumeLogin), Protocol.Json.ElevationStatus); }
             var ticket = Read(payload, Protocol.Json.ElevationOperationPayload);
             var status = action switch
             {
@@ -136,6 +137,8 @@ internal sealed class BackendSession : IBackendSession
             case "saveSettings":
                 var settings = Read(payload, Protocol.Json.SettingsPayload);
                 return Pack(await manager.SaveSettingsAsync(settings.Settings ?? throw new ProtocolException("InvalidRequest"), settings.StartupConsent, ct).ConfigureAwait(false), Protocol.Json.OperationResult);
+            case "initializeStartup":
+                Empty(payload); return Pack(await manager.SaveSettingsAsync(manager.Snapshot.Settings, true, ct).ConfigureAwait(false), Protocol.Json.OperationResult);
             case "runLogin": Empty(payload); return Pack(startupAdoption is not null ? new(Outcome.Confirmed, ReasonCode.StartupAlreadyProcessed) : await manager.RunLoginAsync(ct).ConfigureAwait(false), Protocol.Json.OperationResult);
             case "startupContinuation": Empty(payload); return Pack(manager is ManagerService concrete ? await concrete.GetStartupContinuationAsync().ConfigureAwait(false) : null, Protocol.Json.StartupContinuationOffer);
             case "activity":

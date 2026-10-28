@@ -134,6 +134,7 @@ public static partial class CoreSuite
         await using var manager = new ManagerService(Path.Combine(root, "data"), owner, boundary,
             new UserStartupService(registration, Path.Combine(root, "Manager.exe")));
         await manager.LoadAsync();
+        await UseNormalStartupFixtureAsync(manager);
         Guid id = (await manager.AddFilesAsync(new[] { script })).Added.Single();
         var metadata = new ScriptMetadata("Regression", "", null, true, false, false, []);
         Check((await manager.SaveMetadataAsync(id, metadata, true)).Succeeded, "regression setup registers fake startup with valid owner");

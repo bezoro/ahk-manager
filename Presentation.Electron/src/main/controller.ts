@@ -166,7 +166,7 @@ export class ManagerController {
     const current=this.requireReady();
     for(const key of ['interpreterPath','editorPath'] as const){const value=proposed[key];if(value!==null&&value!==current.settings[key]&&!this.paths.has(path.normalize(value).toLowerCase()))throw new Error(t.selectExecutable);}
     let startupConsent=false;
-    if(proposed.launchManagerAtLogin&&!current.settings.launchManagerAtLogin){startupConsent=await this.native.confirm(t.managerStartupTitle,t.managerStartupDetail);if(!startupConsent)return cancelled();}
+    if(proposed.launchManagerAtLogin&&(!current.settings.launchManagerAtLogin||proposed.launchManagerAsAdministrator!==current.settings.launchManagerAsAdministrator)){startupConsent=await this.native.confirm(t.managerStartupTitle,t.managerStartupDetail);if(!startupConsent)return cancelled();}
     if(!this.native.alive()||!this.matches(current.revision))return stale();
     return this.authority.request('saveSettings',{settings:{...proposed,window:this.native.placement()},startupConsent});
   });}

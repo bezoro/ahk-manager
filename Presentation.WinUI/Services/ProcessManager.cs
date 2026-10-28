@@ -25,6 +25,13 @@ public sealed class ProcessManager(IEffectOwner owner, bool documentedControlsPr
     readonly Dictionary<int, Process> monitors = [];
     readonly Dictionary<int, HeldProcess> launchProofs = [];
     readonly IManualElevationDispatcher elevation = elevationDispatcher ?? new ManualElevation();
+    readonly object observationPulseLock = new();
+    readonly object notificationLock = new();
+    ProcessObservationPulse? observationPulse;
+    Task? disposal;
+    IReadOnlyCollection<string> observedInterpreters = [];
+    ObservedProcesses? lastObservation;
+    int disposed;
     public event EventHandler? Invalidated;
     public bool IsAdministrator
     {
@@ -41,11 +48,17 @@ public sealed class ProcessManager(IEffectOwner owner, bool documentedControlsPr
     public async Task<ObservedProcesses> ObserveAsync(IReadOnlyCollection<string> interpreters, CancellationToken ct = default)
     {
         await gate.WaitAsync(ct).ConfigureAwait(false);
-        try { return await Task.Run(() => Observe(interpreters, ct), ct).ConfigureAwait(false); }
+        try { observedInterpreters = interpreters.ToArray(); return await Task.Run(() => Observe(interpreters, ct), ct).ConfigureAwait(false); }
         finally { gate.Release(); }
     }
     ObservedProcesses Observe(IReadOnlyCollection<string> interpreters, CancellationToken ct)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        lock (observationPulseLock)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+            observationPulse ??= new(() => Volatile.Read(ref disposed) == 0 && gate.CurrentCount != 0 && owner.Held && owner.Trusted, PollForChanges, TimeSpan.FromSeconds(5));
+        }
         PruneExitedLaunchProofs(launchProofs);
         var fresh = ProcessObservation.Read(interpreters, out bool complete, out var issues, ct, observationSource, launchProofs.Values);
         var replacement = new Dictionary<int, HeldProcess>();
@@ -65,8 +78,54 @@ public sealed class ProcessManager(IEffectOwner owner, bool documentedControlsPr
         }
         foreach (var item in held.Values) item.Handle.Dispose();
         held.Clear(); foreach (var pair in replacement) held[pair.Key] = pair.Value;
-        foreach (var pid in monitors.Keys.Where(pid => monitors[pid].HasExited).ToArray()) { monitors[pid].Dispose(); monitors.Remove(pid); }
-        return new(held.Values.Select(h => h.Snapshot).ToImmutableArray(), complete, issues);
+        foreach (var pid in monitors.Keys.ToArray())
+            if (!replacement.TryGetValue(pid, out var target) || !ExitMonitorMatches(monitors[pid], target.Snapshot.Identity))
+            {
+                monitors[pid].Exited -= OnExit; monitors[pid].Dispose(); monitors.Remove(pid);
+            }
+        // Processes that predate this Manager still need immediate exit updates.
+        // A retained creation receipt prevents a reused PID from becoming a monitor.
+        foreach (var item in replacement.Values)
+            if (!monitors.ContainsKey(item.Snapshot.Identity.Pid) && TryCreateExitMonitor(item.Snapshot.Identity, OnExit) is { } monitor)
+                monitors[item.Snapshot.Identity.Pid] = monitor;
+        return lastObservation = new(held.Values.Select(h => h.Snapshot).ToImmutableArray(), complete, issues);
+    }
+    async Task PollForChanges()
+    {
+        if (Volatile.Read(ref disposed) != 0 || !await gate.WaitAsync(0).ConfigureAwait(false)) return;
+        bool changed = false;
+        try
+        {
+            var previous = lastObservation;
+            var current = await Task.Run(() => Observe(observedInterpreters, CancellationToken.None)).ConfigureAwait(false);
+            changed = previous is null || !SameObservation(previous, current);
+        }
+        catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is System.ComponentModel.Win32Exception or InvalidOperationException or System.Management.ManagementException) { }
+        finally { gate.Release(); }
+        if (changed) OnExit(this, EventArgs.Empty);
+    }
+    internal static bool SameObservation(ObservedProcesses left, ObservedProcesses right) => left.Complete == right.Complete && left.Issues.SequenceEqual(right.Issues) && left.Processes.OrderBy(p => p.Identity.Pid).SequenceEqual(right.Processes.OrderBy(p => p.Identity.Pid));
+    static bool ExitMonitorMatches(Process process, ProcessIdentity identity)
+    {
+        try
+        {
+            using var native = new NativeProcessIdentity(process.Id);
+            return !process.HasExited && process.Id == identity.Pid && ProcessNative.GetProcessTimes(process.SafeHandle, out long created, out _, out _, out _) && created == identity.CreationFileTime && native.Matches(identity);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException) { return false; }
+    }
+    internal static Process? TryCreateExitMonitor(ProcessIdentity identity, EventHandler onExit)
+    {
+        Process? process = null;
+        try
+        {
+            process = Process.GetProcessById(identity.Pid);
+            if (!ExitMonitorMatches(process, identity)) return null;
+            process.Exited += onExit; process.EnableRaisingEvents = true;
+            var retained = process; process = null; return retained;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException) { return null; }
+        finally { process?.Dispose(); }
     }
     static bool CoreSame(ProcessIdentity left, ProcessIdentity right) => left.Pid == right.Pid && left.CreationFileTime == right.CreationFileTime && ScriptPaths.Equal(left.ScriptPath, right.ScriptPath) && ScriptPaths.Equal(left.ExecutablePath, right.ExecutablePath) && left.UserSid == right.UserSid && left.SessionId == right.SessionId;
     internal static void PruneExitedLaunchProofs(Dictionary<int, HeldProcess> proofs, Func<NativeProcessIdentity, bool>? exited = null)
@@ -131,8 +190,8 @@ public sealed class ProcessManager(IEffectOwner owner, bool documentedControlsPr
                     if (!receiptHandle.Matches(identity)) { receiptHandle.Dispose(); return new LaunchResult(new(Outcome.Unknown, ReasonCode.LaunchUncertain), null); }
                     if (launchProofs.Remove(pid, out var oldProof)) oldProof.Handle.Dispose();
                     launchProofs.Add(pid, new(receiptHandle, new(identity, ExecutionOrigin.Manager, version.Version, DateTimeOffset.FromFileTime(stamp.Created))));
-                    process.EnableRaisingEvents = true;
-                    process.Exited += OnExit;
+                    if (monitors.Remove(pid, out var previousMonitor)) { previousMonitor.Exited -= OnExit; previousMonitor.Dispose(); }
+                    process.Exited += OnExit; process.EnableRaisingEvents = true;
                     monitors[pid] = process; process = null;
                     var deadline = Stopwatch.StartNew();
                     do
@@ -154,7 +213,11 @@ public sealed class ProcessManager(IEffectOwner owner, bool documentedControlsPr
         { return new(new(dispatched ? Outcome.Unknown : Outcome.Failed, dispatched ? ReasonCode.LaunchUncertain : ReasonCode.DispatchFailed, ex.Message), null); }
         finally { gate.Release(); }
     }
-    void OnExit(object? sender, EventArgs e) => Invalidated?.Invoke(this, EventArgs.Empty);
+    void OnExit(object? sender, EventArgs e)
+    {
+        lock (notificationLock)
+            if (Volatile.Read(ref disposed) == 0) Invalidated?.Invoke(this, EventArgs.Empty);
+    }
 
     public async Task<OperationResult> ControlAsync(ProcessIdentity expected, ScriptOperation operation, CancellationToken ct = default)
     {
@@ -190,10 +253,67 @@ public sealed class ProcessManager(IEffectOwner owner, bool documentedControlsPr
     }
     public ValueTask DisposeAsync()
     {
-        foreach (var process in monitors.Values) { process.Exited -= OnExit; process.Dispose(); }
-        foreach (var item in held.Values) item.Handle.Dispose();
-        foreach (var item in launchProofs.Values) item.Handle.Dispose();
-        monitors.Clear(); held.Clear(); launchProofs.Clear();
-        return ValueTask.CompletedTask;
+        lock (observationPulseLock) return new(disposal ??= DisposeCore());
+    }
+    async Task DisposeCore()
+    {
+        Volatile.Write(ref disposed, 1);
+        // Wait for an already-entered synchronous exit notification as well as
+        // the timer probe; no subscriber is called after disposal completes.
+        lock (notificationLock) { }
+        var pulse = observationPulse;
+        if (pulse is not null) await pulse.DisposeAsync().ConfigureAwait(false);
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            foreach (var process in monitors.Values) { process.Exited -= OnExit; process.Dispose(); }
+            foreach (var item in held.Values) item.Handle.Dispose();
+            foreach (var item in launchProofs.Values) item.Handle.Dispose();
+            monitors.Clear(); held.Clear(); launchProofs.Clear();
+        }
+        finally { gate.Release(); }
+    }
+}
+
+// The pulse only invalidates a snapshot; ManagerService serializes the ensuing
+// observation. It never starts or stops processes and never overlaps callbacks.
+internal sealed class ProcessObservationPulse : IAsyncDisposable
+{
+    readonly object sync = new();
+    readonly Timer timer;
+    readonly Func<bool> available;
+    readonly Func<Task> invalidate;
+    Task active = Task.CompletedTask;
+    Task? disposal;
+    int disposed;
+    internal ProcessObservationPulse(Func<bool> available, Func<Task> invalidate, TimeSpan interval)
+    {
+        if (interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval));
+        this.available = available; this.invalidate = invalidate;
+        timer = new(_ => Tick(), null, interval, interval);
+    }
+    void Tick()
+    {
+        lock (sync)
+        {
+            if (Volatile.Read(ref disposed) != 0 || !active.IsCompleted) return;
+            active = Invoke();
+        }
+    }
+    async Task Invoke()
+    {
+        try { if (Volatile.Read(ref disposed) == 0 && available()) await invalidate().ConfigureAwait(false); }
+        catch (Exception ex) when (SafeJsonFiles.Known(ex) || ex is System.ComponentModel.Win32Exception or InvalidOperationException or System.Management.ManagementException or System.Runtime.InteropServices.COMException) { }
+    }
+    public ValueTask DisposeAsync()
+    {
+        lock (sync) return new(disposal ??= DisposeCore());
+    }
+    async Task DisposeCore()
+    {
+        Volatile.Write(ref disposed, 1);
+        await timer.DisposeAsync().ConfigureAwait(false);
+        Task pending; lock (sync) pending = active;
+        await pending.ConfigureAwait(false);
     }
 }

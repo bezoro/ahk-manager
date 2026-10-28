@@ -1,9 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, withinDeadline, reportStartupResult, type ShutdownBoundary } from '../../src/main/lifecycle.js';
+import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, withinDeadline, reportStartupResult, reportStartupWithContinuation, type ShutdownBoundary } from '../../src/main/lifecycle.js';
 import { ManagerController } from '../../src/main/controller.js';
 import { snapshot } from './fixtures.js';
+
+test('declining or refusing startup continuation retains the original mixed login summary',async()=>{
+  for(const offered of [true,false]){
+    const events:string[]=[];
+    const result={outcome:'Partial' as const,code:'None',detail:'Iniciados: 1. Administrativos ignorados: 1.',correlationId:null};
+    await reportStartupWithContinuation(result,offered,async()=>{events.push('offer');return false;},{show:()=>events.push('show'),warn:async value=>{events.push(value.detail!);}});
+    assert.deepEqual(events,offered?['offer','show',result.detail]:['show',result.detail]);
+  }
+  const events:string[]=[];
+  await reportStartupWithContinuation({outcome:'Partial',code:'None',detail:null,correlationId:null},true,async()=>true,{show:()=>events.push('show'),warn:async()=>{events.push('warn');}});
+  assert.deepEqual(events,[],'An acknowledged replacement owns subsequent reporting');
+});
 
 test('partial, failed and unknown startup reports show the hidden host and await the named native warning',async()=>{
   const events:string[]=[];

@@ -19,7 +19,7 @@ const results: Record<string, Validator> = {
   beginStartupContinuation:elevationStatus,startupContinuation:startupContinuationOffer,adoptStartupContinuation:operationResult,startupAdoptionStatus:operationResult,
   hello:shape({protocolVersion:v=>v===1,profileRoot:text(),hostExecutable:text()}),
   load:snapshot,snapshot,refresh:snapshot,addFiles:catalogResult,addFolder:catalogResult,
-  remove:operationResult,saveMetadata:operationResult,saveCollection:operationResult,removeCollection:operationResult,
+  remove:operationResult,saveMetadata:operationResult,saveCollection:operationResult,removeCollection:operationResult,initializeStartup:operationResult,
   prepare:shape({planId:guid,plan:operationPlan}),perform:operationResult,saveSettings:operationResult,runLogin:operationResult,
   activity:array(activity),previewImport:shape({previewId:guid,preview:importPreview}),import:operationResult,
   restoreBackup:operationResult,recoverPending:operationResult,previewMigration:migration,migrate:operationResult,shutdown:operationResult,

@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AhkManager.Backend", "Backe
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Tests.Backend", "Tests.Backend\Tests.Backend.csproj", "{CEC222A9-4A86-47CF-9A85-A941D45727E0}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AhkManager.UpdateHost", "UpdateHost\AhkManager.UpdateHost.csproj", "{E55273C9-BE22-43FF-82DD-65996D7254A0}"
+EndProject
 Global
  GlobalSection(SolutionConfigurationPlatforms) = preSolution
   Release|x64 = Release|x64
@@ -15,5 +17,7 @@ Global
   {555E2DC7-891D-4E18-939B-FFB1536A46D0}.Release|x64.Build.0 = Release|x64
   {CEC222A9-4A86-47CF-9A85-A941D45727E0}.Release|x64.ActiveCfg = Release|x64
   {CEC222A9-4A86-47CF-9A85-A941D45727E0}.Release|x64.Build.0 = Release|x64
+  {E55273C9-BE22-43FF-82DD-65996D7254A0}.Release|x64.ActiveCfg = Release|Any CPU
+  {E55273C9-BE22-43FF-82DD-65996D7254A0}.Release|x64.Build.0 = Release|Any CPU
  EndGlobalSection
 EndGlobal

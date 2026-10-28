@@ -1,17 +1,18 @@
 import type { AdministrationUiGuard, HostState, ManagerSnapshot, ScriptSnapshot, ThemeState } from '../../src/shared/contracts.js';
 import { operation, outcome, reason, text } from '../../src/renderer/resources/pt-BR.js';
+import type { UpdateState } from '../../src/shared/updates.js';
 
-declare global { interface Window { fixtureHarness: { readGuard(): AdministrationUiGuard | null; setResponse(method: string, response: { value?: unknown; error?: string; pending?: boolean }): Promise<void>; resolveResponse(method: string, response: { value?: unknown; error?: string }): Promise<void>; resetResponses(): Promise<void>; openPreferences(): Promise<void>; setState(state: HostState): Promise<void>; setTheme(theme: ThemeState): Promise<void>; calls(): Promise<Array<{ method: string; args: unknown[] }>>; clearCalls(): Promise<void> } } }
+declare global { interface Window { fixtureHarness: { setUpdates(state: UpdateState): Promise<void>; readGuard(): AdministrationUiGuard | null; setResponse(method: string, response: { value?: unknown; error?: string; pending?: boolean }): Promise<void>; resolveResponse(method: string, response: { value?: unknown; error?: string }): Promise<void>; resetResponses(): Promise<void>; openPreferences(): Promise<void>; setState(state: HostState): Promise<void>; setTheme(theme: ThemeState): Promise<void>; calls(): Promise<Array<{ method: string; args: unknown[] }>>; clearCalls(): Promise<void> } } }
 interface AssertionRecord { name: string; passed: boolean; detail?: string }
 const tick = (): Promise<void> => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 async function until(predicate: () => boolean, label: string): Promise<void> { const deadline = performance.now() + 3000; do { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 20)); } while (performance.now() < deadline); throw new Error(label); }
 function assert(value: unknown, label: string): asserts value { if (!value) throw new Error(label); }
 function button(label: string, root: ParentNode = document): HTMLButtonElement { const found = [...root.querySelectorAll<HTMLButtonElement>('button')].find(node => node.textContent?.trim() === label || node.getAttribute('aria-label') === label); assert(found, 'Missing button: ' + label); return found; }
 function input(label: string): HTMLInputElement { const node = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`); assert(node, 'Missing input: ' + label); return node; }
-function edit(node: HTMLInputElement | HTMLTextAreaElement, value: string): void { const prototype = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }
+function edit(node: HTMLInputElement | HTMLTextAreaElement, value: string): void { const details = node.closest<HTMLDetailsElement>('details'); if (details) details.open = true; const prototype = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }
 function selectScript(id: string): void { const row = document.getElementById('script-' + id); const button = row?.querySelector<HTMLButtonElement>('.row-select'); assert(button, 'Missing selection button: ' + id); button.click(); }
 function script(id: string, patch: Partial<ScriptSnapshot> = {}): ScriptSnapshot { return { id, friendlyName: 'Script ' + id, path: `C:\\FIXTURE ISOLADA\\${id}.ahk`, description: '', collectionId: '33333333-3333-3333-3333-333333333333', runAtLogin: false, runAsAdministrator: false, launchBlocked: false, status: 'Stopped', process: null, hotkeys: [], coverage: 'Partial', issues: [], ...patch }; }
-function state(): HostState { const snapshot: ManagerSnapshot = { revision: '9007199254741001', scripts: [script('11111111-1111-1111-1111-111111111111', { friendlyName: 'Editor de teste', hotkeys: [{ chord: '^j', normalizedChord: '^j', origin: 'Manual', context: null, sourcePath: null, line: null, isRemap: false, possibleConflict: false }] }), script('22222222-2222-2222-2222-222222222222', { friendlyName: 'Navegador de teste', collectionId: null })], collections: [{ id: '33333333-3333-3333-3333-333333333333', name: 'Trabalho de teste' }], settings: { interpreterPath: null, editorPath: null, editorArguments: [], launchManagerAtLogin: false, showWindowAtLogin: false,startInTray:false, theme: 'System', closeBehavior: 'HideToTray', window: { x: 0, y: 0, width: 1240, height: 820, maximized: false, dpi: 96 } }, activity: [], issues: [{ code: 'PartialAnalysis', detail: 'FIXTURE ISOLADA — sem scripts, perfis ou efeitos reais.', scriptId: null }], readOnly: false, effectsAvailable: true, observedAt: '2026-10-23T00:00:00Z' }; return { connection: 'ready', snapshot, error: null, busy: false, authorityMode: 'Normal', administrationPending: false }; }
+function state(): HostState { const snapshot: ManagerSnapshot = { revision: '9007199254741001', scripts: [script('11111111-1111-1111-1111-111111111111', { friendlyName: 'Editor de teste', hotkeys: [{ chord: '^j', normalizedChord: '^j', origin: 'Manual', context: null, sourcePath: null, line: null, isRemap: false, possibleConflict: false }] }), script('22222222-2222-2222-2222-222222222222', { friendlyName: 'Navegador de teste', collectionId: null })], collections: [{ id: '33333333-3333-3333-3333-333333333333', name: 'Trabalho de teste' }], settings: { interpreterPath: null, editorPath: null, editorArguments: [], launchManagerAtLogin: false, launchManagerAsAdministrator: false, showWindowAtLogin: false,startInTray:false, theme: 'System', closeBehavior: 'HideToTray', window: { x: 0, y: 0, width: 1240, height: 820, maximized: false, dpi: 96 } }, activity: [], issues: [{ code: 'PartialAnalysis', detail: 'FIXTURE ISOLADA — sem scripts, perfis ou efeitos reais.', scriptId: null }], readOnly: false, effectsAvailable: true, observedAt: '2026-10-23T00:00:00Z' }; return { connection: 'ready', snapshot, error: null, busy: false, authorityMode: 'Normal', administrationPending: false }; }
 async function untilCall(method: string): Promise<void> { for (let attempt = 0; attempt < 100; attempt++) { if ((await window.fixtureHarness.calls()).some(call => call.method === method)) return; await new Promise(resolve => setTimeout(resolve, 20)); } throw new Error('No fixture call: ' + method); }
 const light: ThemeState = { dark: false, highContrast: false, reducedMotion: false, accent: '#627c47', material: 'solid' };
 
@@ -21,6 +22,60 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   const previousDialog = document.querySelector('[role="dialog"]'); if (previousDialog) button('Cancelar', previousDialog).click(); await window.fixtureHarness.resetResponses(); button('Scripts').click(); const oldSearch = document.querySelector<HTMLInputElement>('input[aria-label="Pesquisar scripts"]'); if (oldSearch) edit(oldSearch, '');
   const host = state(); await window.fixtureHarness.setState(host); await window.fixtureHarness.setTheme(light); await until(() => !!document.getElementById('script-11111111-1111-1111-1111-111111111111'), 'Renderer did not show fixture rows');
   await check('actual snapshot labels, startup heading and accessible list options', async () => { assert(document.querySelector('h1')?.textContent === 'Scripts', 'Page heading'); assert(document.querySelector('.table-head')?.textContent?.includes('Iniciar com Windows'), 'Explicit startup heading'); assert(document.querySelectorAll('tbody tr.script-row').length === 2, 'Real fixture rows'); assert(document.querySelector('.native-title>span')?.textContent === 'AHK Manager', 'Native caption drag surface'); });
+  await check('global pending recovery remains visible and dispatches once with an empty or filtered catalog', async () => {
+    for (const empty of [true, false]) {
+      const current = { ...host, snapshot: { ...host.snapshot!, scripts: empty ? [] : host.snapshot!.scripts, effectsAvailable: false, issues: [{ code: 'PendingOperation', detail: 'Fixture de continuação interrompida.', scriptId: null }] } };
+      await window.fixtureHarness.setState(current); await tick();
+      if (!empty) { edit(input(text.search), 'nenhum resultado de fixture'); await tick(); }
+      assert(document.querySelectorAll('.script-row').length === 0, 'Recovery fixture must have no visible row');
+      const recover = button(text.recover, document.querySelector('.library-notice')!);
+      assert(!recover.disabled && !recover.closest('details'), 'Global recovery depends on selection or collapsed details');
+      await window.fixtureHarness.clearCalls(); recover.click(); await untilCall('recoverPending'); await tick();
+      const calls = await window.fixtureHarness.calls();
+      assert(calls.filter(call => call.method === 'recoverPending').length === 1 && !calls.some(call => call.method === 'operate'), 'Recovery used a selected script or repeated dispatch');
+      if (!empty) { edit(input(text.search), ''); await tick(); }
+    }
+    await window.fixtureHarness.setState(host); await tick();
+  });
+  await check('startup and administrator preferences remain independent drafts through cancel, failure and confirmed save', async () => {
+    const initial = { ...host, snapshot: { ...host.snapshot!, settings: { ...host.snapshot!.settings, launchManagerAtLogin: true, launchManagerAsAdministrator: true } } };
+    await window.fixtureHarness.setState(initial); await tick(); await window.fixtureHarness.resetResponses(); await window.fixtureHarness.clearCalls();
+    const openSettings = async (): Promise<HTMLElement> => { button(text.preferences).click(); await until(() => !!document.getElementById('settings-administrator'), 'Administrator preference missing'); await tick(); return document.querySelector<HTMLElement>('[role="dialog"]')!; };
+    const administrator = (): HTMLInputElement => document.getElementById('settings-administrator') as HTMLInputElement;
+    const login = (): HTMLInputElement => document.getElementById('settings-launch-at-login') as HTMLInputElement;
+    let dialog = await openSettings();
+    assert(dialog.querySelector('.preference-section h3')?.textContent === text.startup && administrator().checked && login().checked, 'Startup priority or default preferences lost');
+    assert(!(dialog.querySelector('.preference-advanced') as HTMLDetailsElement).open && dialog.querySelector('input[aria-label="' + text.editor + '"]')?.getAttribute('placeholder')?.includes('VS Code'), 'Advanced arguments or automatic editor default lost');
+    administrator().click(); await tick();
+    assert(login().checked && !(await window.fixtureHarness.calls()).some(call => call.method === 'saveSettings'), 'Administrator toggle changed login or persisted before save');
+    button(text.cancel, dialog).click(); await tick(); dialog = await openSettings();
+    assert(administrator().checked && login().checked, 'Cancelled draft persisted');
+    administrator().click(); login().click(); await tick();
+    await window.fixtureHarness.setResponse('saveSettings', { value: { outcome: 'Failed', code: 'StorageFailure', detail: 'Fixture de falha ao salvar.', correlationId: null } });
+    button(text.save, dialog).click(); await until(() => !!dialog.querySelector('.notice'), 'Save failure missing');
+    assert(!administrator().checked && !login().checked, 'Failure discarded startup draft');
+    await window.fixtureHarness.setResponse('saveSettings', { value: { outcome: 'Confirmed', code: 'None', detail: null, correlationId: null } });
+    button(text.save, dialog).click(); await until(() => !document.querySelector('[role="dialog"]'), 'Confirmed startup save did not close');
+    const saved = (await window.fixtureHarness.calls()).filter(call => call.method === 'saveSettings').at(-1)!.args[0] as ManagerSnapshot['settings'];
+    assert(!saved.launchManagerAtLogin && !saved.launchManagerAsAdministrator && saved.startInTray === initial.snapshot.settings.startInTray, 'Saved startup flags were coupled or missing');
+    await window.fixtureHarness.setState({ ...initial, snapshot: { ...initial.snapshot, settings: saved } }); await tick(); dialog = await openSettings();
+    assert(!administrator().checked && !login().checked, 'Reopened persisted preferences differ');
+    button(text.cancel, dialog).click(); await tick(); await window.fixtureHarness.resetResponses(); await window.fixtureHarness.setState(host); await tick();
+  });
+  await check('saving administrator preference waits for the closed dialog before requesting Windows approval', async () => {
+    await window.fixtureHarness.setState(host); await tick(); await window.fixtureHarness.resetResponses(); await window.fixtureHarness.clearCalls();
+    button(text.preferences).click(); await until(() => !!document.getElementById('settings-administrator'), 'Administrator preference missing');
+    (document.getElementById('settings-administrator') as HTMLInputElement).click(); await tick();
+    assert(!(await window.fixtureHarness.calls()).some(call => call.method === 'requestAdministration'), 'Toggling preference requested UAC');
+    await window.fixtureHarness.setResponse('saveSettings', { value: { outcome: 'Partial', code: 'ManualElevationRequired', detail: 'Intenção salva; configurar início elevado.', correlationId: null } });
+    await window.fixtureHarness.setResponse('requestAdministration', { value: { outcome: 'CancelledBeforeDispatch', code: 'Cancelled', detail: null, correlationId: null } });
+    button(text.save, document.querySelector('[role="dialog"]')!).click(); await untilCall('requestAdministration'); await tick();
+    assert(!document.querySelector('[role="dialog"]') && window.fixtureHarness.readGuard()?.dialogOpen === false && window.fixtureHarness.readGuard()?.pendingWork === false, 'Save requested UAC with stale dialog or pending-work guard');
+    const calls = await window.fixtureHarness.calls();
+    assert(calls.filter(call => call.method === 'saveSettings').length === 1 && calls.filter(call => call.method === 'requestAdministration').length === 1, 'Save/elevation dispatch repeated');
+    assert(document.querySelector('.main-column>.notice')?.textContent?.includes(outcome('CancelledBeforeDispatch')), 'Windows cancellation was hidden');
+    await window.fixtureHarness.resetResponses(); await window.fixtureHarness.setState(host); await tick();
+  });
   await check('readable hotkeys agree across list Inspector page and raw/readable search with accessible details',async()=>{
     const keys=['!^#+u','~LButton Up','F13'].map((chord,index)=>({chord,normalizedChord:chord,origin:'Parsed' as const,context:'fixture context',sourcePath:'C:\\FIXTURE ISOLADA\\generic.ahk',line:index+1,isRemap:false,possibleConflict:index===0,declaredGesture:index===1?'DoubleClick' as const:null}));
     const current={...host,snapshot:{...host.snapshot!,scripts:[{...host.snapshot!.scripts[0]!,hotkeys:keys},host.snapshot!.scripts[1]!]}};
@@ -89,6 +144,21 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   await check('native-theme accessibility settings and layout stay bounded in current viewport', async () => {
     await window.fixtureHarness.setTheme({ ...light, highContrast: true, reducedMotion: true }); await tick(); const root = document.querySelector('.app-root')!; assert(root.getAttribute('data-contrast') === 'true' && root.getAttribute('data-reduced-motion') === 'true', 'Accessibility settings not applied'); assert(document.documentElement.scrollWidth <= innerWidth, 'Document horizontal overflow'); assert(document.querySelector('.main-column')!.scrollWidth <= document.querySelector('.main-column')!.clientWidth + 1, 'Main column horizontal overflow'); await window.fixtureHarness.setTheme(light);
   });
+  await check('filter labels fit their controls and primary script actions remain in one group at this viewport', async () => {
+    await window.fixtureHarness.setState(host); await tick(); selectScript(host.snapshot!.scripts[0]!.id); await tick();
+    const canvas = document.createElement('canvas'); const context = canvas.getContext('2d'); assert(context, 'Text measurement unavailable');
+    for (const select of document.querySelectorAll<HTMLSelectElement>('.script-filters select')) {
+      const style = getComputedStyle(select); context.font = style.font;
+      const label = select.selectedOptions[0]?.textContent ?? '';
+      assert(context.measureText(label).width + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) <= select.clientWidth + 1, 'Selected filter label is clipped: ' + label);
+    }
+    const actions = [...document.querySelectorAll<HTMLButtonElement>('.primary-script-actions button')];
+    assert(actions.length === 3 && Math.max(...actions.map(node => node.getBoundingClientRect().top)) - Math.min(...actions.map(node => node.getBoundingClientRect().top)) < 1, 'Primary process controls wrapped into separate lines');
+    assert(actions.every(node => node.scrollWidth <= node.clientWidth + 1), 'Primary process label clipped');
+    const more = button(text.moreScriptActions, document.querySelector('.inspector')!); more.click(); await tick();
+    assert(document.querySelector('[role="menu"]')?.textContent?.includes(operation('TogglePause')) && document.querySelector('[role="menu"]')?.textContent?.includes(operation('ToggleSuspend')), 'Secondary controls missing from menu');
+    more.click(); await tick();
+  });
   const activeDialog = (): HTMLElement => { const node = document.querySelector<HTMLElement>('[role="dialog"]'); assert(node, 'Active dialog missing'); assert(!node.closest('[aria-hidden="true"]'), 'Dialog hidden from accessibility tree'); return node; };
   const failure = { outcome: 'Failed', code: 'PersistenceFailed', detail: 'FIXTURE diagnostic detail', correlationId: null };
   const open = async (kind: string): Promise<void> => {
@@ -119,11 +189,11 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   }
   await check('picker, startup feedback and late completions respect preferences sessions', async () => {
     await open('preferences'); let dialog = activeDialog(); const draft = dialog.querySelector<HTMLTextAreaElement>('#settings-editor-arguments')!; edit(draft, 'FIXTURE preserved'); await tick();
-    await window.fixtureHarness.setResponse('pickInterpreter', { error: 'FIXTURE picker failure' }); button(text.choose, dialog).click(); await until(() => dialog.querySelector('.notice pre')?.textContent?.includes('FIXTURE picker failure') === true, 'Picker error hidden'); assert(draft.value === 'FIXTURE preserved', 'Picker reset draft');
-    await window.fixtureHarness.setResponse('pickInterpreter', { value: null }); button(text.choose, dialog).click(); await until(() => !dialog.querySelector('.notice') && !button(text.choose, dialog).matches(':disabled'), 'Null picker reported failure');
+    await window.fixtureHarness.setResponse('pickInterpreter', { error: 'FIXTURE picker failure' }); button(text.choose, dialog.querySelector('[aria-labelledby="settings-interpreter-title"]')!).click(); await until(() => dialog.querySelector('.notice pre')?.textContent?.includes('FIXTURE picker failure') === true, 'Picker error hidden'); assert(draft.value === 'FIXTURE preserved', 'Picker reset draft');
+    await window.fixtureHarness.setResponse('pickInterpreter', { value: null }); button(text.choose, dialog.querySelector('[aria-labelledby="settings-interpreter-title"]')!).click(); await until(() => !dialog.querySelector('.notice') && !button(text.choose, dialog.querySelector('[aria-labelledby="settings-interpreter-title"]')!).matches(':disabled'), 'Null picker reported failure');
     await window.fixtureHarness.setResponse('transferStartup', { value: { ...failure, outcome: 'Partial' } }); button(text.transferStartup, dialog).click(); await until(() => dialog.querySelector('.notice strong')?.textContent === outcome('Partial'), 'Transfer result hidden');
     for (const response of [{ value: 'C:\\FIXTURE\\late.exe' }, { error: 'FIXTURE late picker rejection' }]) {
-      await window.fixtureHarness.clearCalls(); await window.fixtureHarness.setResponse('pickInterpreter', { pending: true }); button(text.choose, dialog).click(); await untilCall('pickInterpreter');
+      await window.fixtureHarness.clearCalls(); await window.fixtureHarness.setResponse('pickInterpreter', { pending: true }); button(text.choose, dialog.querySelector('[aria-labelledby="settings-interpreter-title"]')!).click(); await untilCall('pickInterpreter');
       button(text.cancel, dialog).click(); await tick(); await window.fixtureHarness.openPreferences(); await tick(); dialog = activeDialog();
       await window.fixtureHarness.resolveResponse('pickInterpreter', response); await tick(); assert(!dialog.querySelector('.notice'), 'Late completion leaked to reopened dialog'); assert(dialog.querySelector<HTMLInputElement>('input[aria-label="' + text.interpreter + '"]')?.value === '', 'Late picker populated reopened draft');
     }
@@ -321,12 +391,13 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     await window.fixtureHarness.setState({ ...withHeader, snapshot: { ...withHeader.snapshot!, scripts: [{ ...withHeader.snapshot!.scripts[0]!, headerDescription: null }, withHeader.snapshot!.scripts[1]!] } }); await tick();
     assert(panel.querySelector('.description')?.textContent === 'Manual persistida' && manual.value === 'Manual em edição', 'Header removal did not restore snapshot manual fallback independently');
     assert(panel.querySelector('.description-guidance')?.textContent?.includes(text.addDescriptionHint) && panel.querySelector('.description-guidance pre')?.textContent === text.descriptionHeaderExample, 'Absent header lacks localized syntax guidance');
-    assert(!!(panel.querySelector('.description')!.compareDocumentPosition(panel.querySelector('.description-guidance')!) & Node.DOCUMENT_POSITION_FOLLOWING), 'Manual fallback must precede guidance');
+    assert(panel.querySelector('.description-guidance')?.closest('.metadata-expander') === metadata && !(panel.querySelector('.description-guidance') as HTMLDetailsElement).open, 'Header guidance must be collapsed inside editable information');
     await window.fixtureHarness.setState({ ...withHeader, snapshot: { ...withHeader.snapshot!, scripts: [{ ...withHeader.snapshot!.scripts[0]!, description: '', headerDescription: null }, withHeader.snapshot!.scripts[1]!] } }); await tick();
     assert(!panel.querySelector('.description') && panel.querySelector('.description-guidance')?.textContent?.includes(text.descriptionRefreshHint) && manual.value === 'Manual em edição', 'Completely empty description must show guidance alone without replacing draft');
     assert(!(await window.fixtureHarness.calls()).some(call => call.method === 'saveMetadata'), 'Derived refresh persisted without explicit save');
     await window.fixtureHarness.setState(withHeader); await tick(); metadata.open = false; panel.scrollTop = 0;
   });
+  results.push(...await runUpdateScenarios());
   return results;
 }
 
@@ -349,6 +420,19 @@ export async function previewHotkeys(missing=false):Promise<AssertionRecord[]> {
   const panel=document.querySelector<HTMLElement>('.inspector')!;panel.scrollTop=missing?0:Math.max(0,(panel.querySelector('.hotkey-details') as HTMLElement)?.offsetTop-180);
   if(innerWidth<=900)panel.scrollIntoView({block:'start'});
   return [{name:'synthetic hotkeys and long path preview',passed:!document.documentElement.scrollWidth||document.documentElement.scrollWidth<=innerWidth}];
+}
+
+// Keep the selected script's primary actions visible for CI visual review.
+export async function previewOverview():Promise<AssertionRecord[]> {
+  const results=await previewHotkeys(false);
+  const panel=document.querySelector<HTMLElement>('.inspector')!;
+  const metadata=panel.querySelector<HTMLDetailsElement>('.metadata-expander');
+  if(metadata)metadata.open=false;
+  panel.scrollTop=0;
+  const workspace=document.querySelector<HTMLElement>('.workspace');
+  if(workspace)workspace.scrollTop=0;
+  await tick();
+  return results;
 }
 
 export async function focusRecovery():Promise<AssertionRecord[]> {
@@ -423,4 +507,122 @@ export async function runStartInTrayScenario(): Promise<AssertionRecord[]> {
     button(text.cancel,document.querySelector('[role="dialog"]')!).click();await tick();await window.fixtureHarness.resetResponses();await window.fixtureHarness.setState(host);await tick();
     return [{name:'start in tray checkbox preserves cancel, failure, save and login preferences',passed:true}];
   } catch(error) { return [{name:'start in tray checkbox preserves cancel, failure, save and login preferences',passed:false,detail:String(error)}]; }
+}
+
+export async function previewPreferences(): Promise<AssertionRecord[]> {
+  const previous = document.querySelector('[role="dialog"]'); if (previous) button(text.cancel, previous).click();
+  await window.fixtureHarness.resetResponses();
+  const host = state(); host.snapshot!.settings = { ...host.snapshot!.settings, launchManagerAtLogin: true, launchManagerAsAdministrator: true };
+  await window.fixtureHarness.setState(host); await tick(); await window.fixtureHarness.openPreferences(); await tick();
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  assert(dialog.querySelector('.preference-section h3')?.textContent === text.startup, 'Startup preferences not first');
+  assert((document.getElementById('settings-administrator') as HTMLInputElement).checked, 'Default administrator preference absent');
+  const content = dialog.querySelector<HTMLElement>('.fui-DialogContent'); if (content) content.scrollTop = 0;
+  return [{ name: 'preferences preview shows startup defaults and automatic VS Code editor', passed: true }];
+}
+
+function updateFixture(): UpdateState {
+  return {
+    currentVersion: '1.2.1', phase: 'idle', availableVersion: '1.2.2', lastCheckedAt: '2026-10-28T11:30:00Z', error: null, accessConfigured: false, progress: null,
+    releases: [
+      { id: 'fixture-new-122', version: '1.2.2', publishedAt: '2026-10-28T10:00:00Z', notes: 'Melhora o início dos scripts e a organização das preferências.\nNotas de exemplo da fixture.', commit: 'a'.repeat(40), installed: false, canInstall: true, cached: false },
+      { id: 'fixture-installed-121', version: '1.2.1', publishedAt: '2026-10-25T10:00:00Z', notes: 'Versão instalada nesta fixture.', commit: 'b'.repeat(40), installed: true, canInstall: false, cached: true },
+      { id: 'fixture-cached-120', version: '1.2.0', publishedAt: '2026-10-19T10:00:00Z', notes: 'Versão anterior disponível neste computador. <img src=x onerror=alert(1)>', commit: 'c'.repeat(40), installed: false, canInstall: true, cached: true },
+    ],
+  };
+}
+
+export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
+  const results: AssertionRecord[] = [];
+  const host = state(), updates = updateFixture();
+  const outstanding = new Set<string>();
+  async function check(name: string, test: () => Promise<void>): Promise<void> {
+    try { await test(); results.push({ name, passed: true }); }
+    catch (error) { results.push({ name, passed: false, detail: String(error) }); }
+    finally {
+      for (const method of outstanding) { try { await window.fixtureHarness.resolveResponse(method, { value: updates }); } catch { /* A completed fake request needs no release. */ } } outstanding.clear();
+      await tick(); await window.fixtureHarness.resetResponses();
+      const modal = document.querySelector('[role="dialog"]'); if (modal) button(text.cancel, modal).click();
+      await window.fixtureHarness.setState(host); await window.fixtureHarness.setUpdates(updates); await tick(); button(text.scripts).click(); await tick();
+      for (const row of host.snapshot!.scripts) { selectScript(row.id); await tick(); const discard = document.querySelector<HTMLButtonElement>('.inspector .form-actions button:last-child'); if (discard && !discard.disabled) discard.click(); await tick(); }
+    }
+  }
+  await check('update navigation announces availability and check keeps escaped permanent history on error', async () => {
+    await window.fixtureHarness.setState(host); await window.fixtureHarness.setUpdates(updates); await tick();
+    assert(document.querySelector('.update-nav-dot') && button(text.updateOpen), 'New version indicator absent');
+    button(text.updateOpen).click(); await tick();
+    assert(document.querySelector('h1')?.textContent === text.updates && button(text.updateInstall), 'Update page or primary action absent');
+    assert(document.querySelectorAll('.update-release').length === 3 && !document.querySelector('.update-release-notes img'), 'History is incomplete or interpreted release markup');
+    await window.fixtureHarness.clearCalls();
+    await window.fixtureHarness.setResponse('checkUpdates', { value: { ...updates, phase: 'error', error: 'Sem conexão. As versões locais foram preservadas.' } });
+    button(text.updateCheck).click(); await untilCall('checkUpdates'); await tick();
+    assert(document.querySelectorAll('.update-release').length === 3 && document.querySelector('.update-feedback')?.textContent?.includes('preservadas'), 'Check error discarded history');
+  });
+  await check('rollback remains available with no backend and dispatches one opaque release ID', async () => {
+    await window.fixtureHarness.setState({ snapshot: null, connection: 'failed', error: 'Fixture de falha da biblioteca.', busy: false, authorityMode: null, administrationPending: false });
+    await window.fixtureHarness.setUpdates({ ...updates, availableVersion: null, phase: 'error', error: 'Sem conexão com o GitHub.', releases: updates.releases.filter(release => release.cached) }); await tick(); button(text.updates).click(); await tick();
+    const cachedCard = [...document.querySelectorAll<HTMLElement>('.update-release')].find(card => card.querySelector('h3')?.textContent === '1.2.0');
+    assert(cachedCard, 'Cached rollback version is missing');
+    const rollback = button(text.updateRollback, cachedCard);
+    assert(!rollback.disabled && document.querySelector('.update-recovery-notice')?.textContent === text.updateRecoveryHint, 'Backend failure disabled recovery');
+    await window.fixtureHarness.clearCalls(); await window.fixtureHarness.setResponse('installUpdate', { pending: true }); outstanding.add('installUpdate');
+    rollback.click(); rollback.click(); await untilCall('installUpdate'); await tick();
+    const calls = (await window.fixtureHarness.calls()).filter(call => call.method === 'installUpdate');
+    assert(calls.length === 1, 'Rollback repeated its request');
+    assert(calls[0]!.args[0] === 'fixture-cached-120', 'Rollback did not send the cached opaque release ID');
+    assert(rollback.disabled, 'Pending rollback action remains enabled');
+    assert(document.querySelector('.updates-availability')?.textContent === text.updateLatestUnknown, 'Failed check falsely reports the installed version as latest');
+    const checked = new Date(updates.lastCheckedAt!).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    assert(document.querySelector('.updates-summary')?.textContent?.includes(checked), 'Last successful check lost its date and time');
+    const guard = window.fixtureHarness.readGuard(); assert(guard && !guard.dirtyDrafts && !guard.dialogOpen && !guard.pendingWork, 'Install button pending state blocks its own host preflight');
+    await window.fixtureHarness.resolveResponse('installUpdate', { value: updates }); outstanding.delete('installUpdate'); await tick();
+  });
+  await check('dirty script drafts and active modal block update installation without losing edits', async () => {
+    await window.fixtureHarness.setState(host); await window.fixtureHarness.setUpdates(updates); await tick(); button(text.scripts).click(); selectScript(host.snapshot!.scripts[0]!.id); await tick();
+    const field = document.getElementById('draft-name') as HTMLInputElement; edit(field, 'Rascunho preservado antes de atualizar'); await tick();
+    button(text.updates).click(); await tick(); await window.fixtureHarness.clearCalls();
+    assert(button(text.updateInstall).disabled && document.querySelector('.update-recovery-notice')?.textContent === text.updateDirtyGuard, 'Dirty metadata did not block update');
+    button(text.updateInstall).click(); await tick(); assert(!(await window.fixtureHarness.calls()).some(call => call.method === 'installUpdate'), 'Dirty draft dispatched installation');
+    button(text.scripts).click(); await tick(); assert((document.getElementById('draft-name') as HTMLInputElement).value === 'Rascunho preservado antes de atualizar', 'Update navigation discarded draft');
+    button(text.discard, document.querySelector('.inspector')!).click(); await tick(); button(text.updates).click(); await tick();
+    assert(!button(text.updateInstall).disabled, 'Discarded draft kept installation blocked');
+    button(text.help).click(); await tick(); assert(button(text.updateInstall).disabled, 'Open modal did not block update action');
+    button(text.close, document.querySelector('[role="dialog"]')!).click(); await tick();
+  });
+  await check('GitHub token is masked, cleared before save resolves, never echoed and removable', async () => {
+    await window.fixtureHarness.setState(host); await window.fixtureHarness.setUpdates(updates); await tick(); button(text.updates).click(); await tick();
+    const access = document.querySelector<HTMLDetailsElement>('.update-access')!; access.open = true;
+    const field = document.getElementById('update-token') as HTMLInputElement; const fixtureCredential = 'fixture-only-token-never-a-real-secret';
+    assert(field.type === 'password' && !field.value, 'Credential field is unmasked or prepopulated');
+    assert(access.textContent?.includes('repositório público funcionam sem token') && access.textContent?.includes('é opcional') && document.querySelector('.update-access-state')?.textContent === text.updateAccessMissing, 'Public updates incorrectly require authentication');
+    edit(field, fixtureCredential); await tick(); await window.fixtureHarness.clearCalls(); await window.fixtureHarness.setResponse('setUpdateToken', { pending: true }); outstanding.add('setUpdateToken');
+    button(text.updateSaveAccess).click(); await untilCall('setUpdateToken'); await tick();
+    assert(!field.value && !document.body.textContent?.includes(fixtureCredential), 'Saved credential stayed in the rendered page');
+    assert((await window.fixtureHarness.calls()).find(call => call.method === 'setUpdateToken')?.args[0] === '[redacted]', 'Fixture log retained credential');
+    await window.fixtureHarness.resolveResponse('setUpdateToken', { value: { ...updates, accessConfigured: true } }); outstanding.delete('setUpdateToken'); await tick();
+    assert(!button(text.updateRemoveAccess).disabled && document.querySelector('.update-access-state')?.textContent === text.updateAccessConfigured, 'Configured access not reflected');
+    await window.fixtureHarness.setResponse('setUpdateToken', { value: updates }); button(text.updateRemoveAccess).click(); await tick();
+    const last = (await window.fixtureHarness.calls()).filter(call => call.method === 'setUpdateToken').at(-1);
+    assert(last?.args[0] === null && document.querySelector('.update-access-state')?.textContent === text.updateAccessMissing, 'Remove access did not send null');
+  });
+  await window.fixtureHarness.setUpdates({ ...updates, availableVersion: null, releases: [] }); await tick();
+  return results;
+}
+
+export async function previewUpdates(recovery = false): Promise<AssertionRecord[]> {
+  const modal = document.querySelector('[role="dialog"]'); if (modal) button(text.cancel, modal).click();
+  await window.fixtureHarness.resetResponses();
+  const updates = updateFixture(); updates.releases[2] = { ...updates.releases[2]!, notes: 'Correções de estabilidade e recuperação de arquivos. Esta versão foi preservada neste computador.' };
+  if (recovery) { updates.availableVersion = null; updates.phase = 'error'; updates.error = 'Não foi possível verificar versões online. As versões locais continuam disponíveis.'; updates.releases = [updates.releases[2]!, updates.releases[1]!, { ...updates.releases[0]!, canInstall: false }]; }
+  await window.fixtureHarness.setUpdates(updates);
+  await window.fixtureHarness.setState(recovery ? { snapshot: null, connection: 'failed', error: 'Fixture de recuperação.', busy: false, authorityMode: null, administrationPending: false } : state());
+  await tick(); button(text.updates).click(); await tick();
+  const scroll = document.querySelector<HTMLElement>('.updates-page'); if (scroll) scroll.scrollTop = 0;
+  assert(scroll && scroll.clientHeight > 0 && scroll.scrollWidth <= scroll.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth, 'Update page overflows its viewport');
+  if (recovery && innerWidth < 700) {
+    const history = document.querySelector<HTMLElement>('.update-history')!;
+    scroll.scrollTop = history.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 8;
+    await tick();
+  }
+  return [{ name: 'updates preview shows new version and cached rollback history', passed: !!document.querySelector('.update-release-list') }];
 }

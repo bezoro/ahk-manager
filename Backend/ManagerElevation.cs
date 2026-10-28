@@ -13,7 +13,7 @@ using Microsoft.Win32.SafeHandles;
 namespace Bezoro.AhkManager.Backend;
 
 public sealed record ElevationFrame(string Kind, Guid OperationId, string Nonce, string? ReceiptHash = null, string? FileIdentity = null);
-public sealed record ElevationReceipt(int Version, Guid OperationId, Guid ReceiptId, string Nonce, ProcessStamp NormalBackend, ProcessStamp NormalHost, ProcessStamp Bootstrap, string BackendHash, string HostHash, string ArchiveHash, string ProfileRoot, string ChromiumRoot, DateTimeOffset ExpiresAt, StartupContinuationTicket? StartupContinuation = null);
+public sealed record ElevationReceipt(int Version, Guid OperationId, Guid ReceiptId, string Nonce, ProcessStamp NormalBackend, ProcessStamp NormalHost, ProcessStamp Bootstrap, string BackendHash, string HostHash, string ArchiveHash, string ProfileRoot, string ChromiumRoot, DateTimeOffset ExpiresAt, StartupContinuationTicket? StartupContinuation = null, bool ResumeLogin = false);
 
 // State is retained for the lifetime of the normal backend. Mutating ticket calls never replay
 // a launch, even after a transport timeout. No profile or domain owner is opened by bootstrap.
@@ -29,6 +29,7 @@ internal sealed class ManagerElevation : IDisposable
     readonly Func<Process?>? dispatchBoundary;
     readonly Func<StartupContinuationTicket, Task<bool>>? commitStartup;
     StartupContinuationTicket? startupContinuation;
+    bool resumeLogin;
     Guid operationId, receiptId;
     long revision;
     ElevationState state;
@@ -81,7 +82,7 @@ internal sealed class ManagerElevation : IDisposable
     {
         lock (sync) { state = value; reason = code; canResume = resume; revision++; var previous = changed; changed = NewSignal(); previous.TrySetResult(); }
     }
-    public ElevationStatus Begin(Guid id)
+    public ElevationStatus Begin(Guid id, bool resumeLogin = false)
     {
         if (id == Guid.Empty) throw new ProtocolException("InvalidRequest");
         lock (sync)
@@ -105,6 +106,7 @@ internal sealed class ManagerElevation : IDisposable
                 ready = NewSignal(); ack = NewSignal();
             }
             if (startingStartupId != id) startupContinuation = null;
+            this.resumeLogin = startupContinuation is null && resumeLogin;
             operationId = id;
             if (parent.AuthorityMode != AuthorityMode.Normal || !quiescent()) { Set(ElevationState.Failed, ReasonCode.PendingOperation, true); return Current(); }
             nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
@@ -151,7 +153,7 @@ internal sealed class ManagerElevation : IDisposable
             using var normalHost = new NativeProcessIdentity(parent.ParentPid);
             if (!self.TryRead(out var own) || !normalHost.TryRead(out var hostStamp) || own.Created != parent.ChildCreated || hostStamp.Created != parent.ParentCreated || files is null || !files.Valid()) throw new ProtocolException("IdentityChanged");
             if (startupContinuation is { } startup && (commitStartup is null || !await commitStartup(startup).ConfigureAwait(false))) throw new ProtocolException("IdentityChanged");
-            var receipt = new ElevationReceipt(1, operationId, receiptId, nonce, own, hostStamp, candidateStamp, files.BackendHash, files.HostHash, files.ArchiveHash, profile, ChromiumRoot, DateTimeOffset.UtcNow.AddSeconds(120), startupContinuation);
+            var receipt = new ElevationReceipt(1, operationId, receiptId, nonce, own, hostStamp, candidateStamp, files.BackendHash, files.HostHash, files.ArchiveHash, profile, ChromiumRoot, DateTimeOffset.UtcNow.AddSeconds(120), startupContinuation, resumeLogin);
             string directory = CoordinationPath(nonce);
             ElevationNative.CreatePrivateDirectory(directory, own.Sid);
             string path = Path.Combine(directory, "commit.json");
@@ -325,7 +327,7 @@ internal sealed class ManagerElevation : IDisposable
         }
         bool Launch()
         {
-            using var launched = Process.Start(CommittedHostStartInfo(hostPath, adoption?.Descriptor.Encode()));
+            using var launched = Process.Start(CommittedHostStartInfo(hostPath, adoption?.Descriptor.Encode(), receipt.ResumeLogin));
             if (launched is null || !ProcessNative.GetProcessTimes(launched.SafeHandle, out long launchedAt, out _, out _, out _)) return false;
             using var delivered = new NativeProcessIdentity(launched.Id);
             bool valid = delivered.TryRead(out var stamp) && stamp.Created == launchedAt && ScriptPaths.Equal(stamp.Executable, hostPath) && stamp.Sid == own.Sid && stamp.Session == own.Session && delivered.TryReadSecurity(out var actual) && ParentGuard.TokenMode(actual) == AuthorityMode.Administrator;
@@ -341,11 +343,13 @@ internal sealed class ManagerElevation : IDisposable
         if (result != 0 && normal.Exited && host.Exited) ElevationNative.RecoveryError();
         return result;
     }
-    internal static ProcessStartInfo CommittedHostStartInfo(string hostPath, string? startupAdoption = null)
+    internal static ProcessStartInfo CommittedHostStartInfo(string hostPath, string? startupAdoption = null, bool resumeLogin = false)
     {
         var start = new ProcessStartInfo(hostPath) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(hostPath)! };
         // This requests only window activation. Authority still comes from native token proof.
-        start.ArgumentList.Add("--foreground");
+        if (resumeLogin && startupAdoption is not null) throw new ProtocolException("InvalidRequest");
+        if (resumeLogin) { start.ArgumentList.Add("--login"); start.ArgumentList.Add("--background"); }
+        else start.ArgumentList.Add("--foreground");
         if (startupAdoption is not null) start.ArgumentList.Add("--startup-adoption=" + startupAdoption);
         return start;
     }

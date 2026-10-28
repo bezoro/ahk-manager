@@ -1,3 +1,15 @@
+## Electron 1.1.0, revisão e CI no Windows em 28/10/2026
+
+A [execução Windows CI 40680309200](https://github.com/bezoro/ahk-manager/actions/runs/40680309200), no commit `192aba8`, passou com 382 verificações de backend, 365 de core, 36 regressões nativas, 179 testes Node sem skips e 64 verificações de interface. Restore travado, typecheck, bundle de produção, publicação do backend e compilação do instalador NSIS também passaram. O runner foi Windows Server 2025 x64, com .NET SDK 10.0.402 e Node 24.22.0.
+
+A revisão e a implementação usaram agentes separados para inicialização, serviços de execução, recuperação, interface e integração dos testes. Foram corrigidos os valores padrão e a migração de perfis antigos, o registro administrativo por tarefa agendada, a preservação da intenção de login após elevação, a descoberta do VS Code, a observação de processos externos e o tratamento de continuações inválidas. Testes verificam falhas de registro, nova tentativa com as mesmas preferências, consentimento, identidade de processos e preservação dos arquivos inválidos durante a recuperação.
+
+As 14 capturas da própria janela Electron foram baixadas e revisadas. Cobrem temas claro/escuro, lista, seleção, atalhos, arquivo ausente, preferências, largura de 740 pixels e zoom de 200%. As ações Iniciar/Parar/Reiniciar ficam alinhadas; os filtros exibem seus rótulos; inicialização, administrador e VS Code aparecem no início das preferências. A recuperação permanece disponível com catálogo vazio ou filtrado. O harness usa dados sintéticos, fundo sólido e nenhum backend. Não comprova Mica nem a composição gráfica do Windows 11.
+
+Os artefatos `windows-ci-evidence`, `windows-ui-evidence` e `windows-installer` preservam logs, resultados, capturas e `AHK-Manager-1.1.0-Setup-x64.exe`, com seu SHA256, por 14 dias. O hash do instalador baixado foi conferido com `SHA256.txt`. O pacote continua sem assinatura de editor verificado.
+
+A CI consulta WMI e valida XML nativo de tarefas sem registrar tarefas de login. Os testes de política usam adaptadores isolados. Esta rodada não executou scripts AHK, não instalou o pacote e não realizou UAC interativo ou um ciclo real de login/logoff. Instalação, atualização, desinstalação e o primeiro login com a tarefa administrativa ainda exigem ensaio nativo separado. Os resultados históricos abaixo pertencem às respectivas versões e não substituem essa validação da 1.1.0.
+
 ## Electron 1.0.4 — validação da alteração
 
 Foram aprovadas a implementação integrada e a análise estática do instalador. Passaram 296 verificações de core, 171 de backend, 161 testes Node (mais um caso NUL opt-in não executado), 47 verificações de apresentação e duas de preservação do escopo da seleção. O formatador de atalhos passou em 18 testes e a rotina inerte de intervalo do clique duplo em 21. Typecheck, bundle de produção e publicação Release passaram. As verificações incluem troca de arquivo durante confirmação, veto de encerramento, falha de persistência, cancelamento, resposta tardia e manutenção da seleção durante a parada.

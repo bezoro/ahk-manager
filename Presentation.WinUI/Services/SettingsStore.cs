@@ -100,6 +100,15 @@ public sealed class SettingsStore(string path)
         SafeJsonFiles.UniqueProperties(json.RootElement);
         if (!json.RootElement.TryGetProperty("Schema", out var schema) || schema.ValueKind != JsonValueKind.Number || !schema.TryGetInt32(out var version) || version != 1) throw new UnsupportedSchemaException();
         var document = JsonSerializer.Deserialize(bytes, ManagerJson.Default.SettingsDocument) ?? throw new InvalidDataException("Empty document.");
+        // Source-generated construction supplies default(bool) for absent init-only
+        // properties. Apply version-compatible defaults explicitly, preserving any
+        // false value the user has already saved.
+        if (document.Settings is not null && json.RootElement.TryGetProperty("Settings", out var settings) && settings.ValueKind == JsonValueKind.Object)
+            document = document with { Settings = document.Settings with
+            {
+                LaunchManagerAtLogin = settings.TryGetProperty(nameof(ManagerSettings.LaunchManagerAtLogin), out _) ? document.Settings.LaunchManagerAtLogin : true,
+                LaunchManagerAsAdministrator = settings.TryGetProperty(nameof(ManagerSettings.LaunchManagerAsAdministrator), out _) ? document.Settings.LaunchManagerAsAdministrator : true
+            } };
         Validate(document);
         return document;
     }

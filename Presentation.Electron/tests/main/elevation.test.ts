@@ -36,6 +36,17 @@ test('native cancel and dirty guard dispatch no ticket; CLI skips only native ap
   const dirty=fixture({preflight:[false]});await dirty.coordinator.request(true);assert.equal(dirty.calls.length,0);assert.equal(dirty.confirmations,0);
   const cli=fixture();await cli.coordinator.request(true);assert.equal(cli.confirmations,0);assert.deepEqual(cli.phases,['begin','begin','commit']);assert.equal(cli.quit,1);
 });
+test('automatic administrative launch preserves login intent only in its authenticated begin request',async()=>{
+  const login=fixture();
+  assert.equal((await login.coordinator.request(true,undefined,true)).outcome,'Confirmed');
+  assert.equal(login.calls[0]?.payload.resumeLogin,true);
+  assert.equal(login.calls.filter(call=>call.action==='beginAdministration').length,1);
+  const manual=fixture();await manual.coordinator.request(true);
+  assert.equal(manual.calls[0]?.payload.resumeLogin,undefined);
+  const scoped=fixture();await scoped.coordinator.request(true,'33333333-3333-3333-3333-333333333333',true);
+  assert.equal(scoped.calls[0]?.action,'beginStartupContinuation');
+  assert.equal(scoped.calls[0]?.payload.resumeLogin,undefined,'A scoped continuation must never rerun the general login loop');
+});
 test('drain and placement precede Begin; active lane blocks concurrent requests and quits only after receipt',async()=>{
   let release!:()=>void;const f=fixture({drain:()=>new Promise(resolve=>{release=resolve;})});const request=f.coordinator.request();
   for(let i=0;i<5;i++)await Promise.resolve();assert.equal(f.coordinator.active,true);assert.equal(f.calls.length,0);assert.equal((await f.coordinator.request()).code,'PendingOperation');assert.equal(f.quit,0);

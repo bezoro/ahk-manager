@@ -64,7 +64,8 @@ public sealed record ManagerSettings
     public string? InterpreterPath { get; init; }
     public string? EditorPath { get; init; }
     public ImmutableArray<string> EditorArguments { get; init; } = [];
-    public bool LaunchManagerAtLogin { get; init; }
+    public bool LaunchManagerAtLogin { get; init; } = true;
+    public bool LaunchManagerAsAdministrator { get; init; } = true;
     public bool ShowWindowAtLogin { get; init; }
     public bool StartInTray { get; init; }
     public AppThemePreference Theme { get; init; } = AppThemePreference.System;

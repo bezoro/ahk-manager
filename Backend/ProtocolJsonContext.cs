@@ -13,6 +13,7 @@ namespace Bezoro.AhkManager.Backend;
 [JsonSerializable(typeof(HelloResult))]
 [JsonSerializable(typeof(ParentProof))]
 [JsonSerializable(typeof(ElevationOperationPayload))]
+[JsonSerializable(typeof(AdministrationBeginPayload))]
 [JsonSerializable(typeof(StartupElevationPayload))]
 [JsonSerializable(typeof(ElevationStatusPayload))]
 [JsonSerializable(typeof(ElevationStatus))]

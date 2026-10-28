@@ -1,0 +1,303 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-checks:
+    name: Build and isolated tests (Windows x64)
+    runs-on: windows-2025
+    timeout-minutes: 40
+    outputs:
+      release-version: ${{ steps.release-metadata.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.22.0'
+          cache: npm
+          cache-dependency-path: Presentation.Electron/package-lock.json
+
+      - name: Set up .NET SDK from global.json
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+
+      - name: Set isolated output path
+        run: |
+          "CI_OUTPUT=$(Join-Path $env:RUNNER_TEMP 'ahk-manager-ci')" >> $env:GITHUB_ENV
+
+      - name: Set release identity
+        id: release-metadata
+        run: |
+          $version = if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') { "1.2.$env:GITHUB_RUN_NUMBER" } else { '1.2.1' }
+          "AHK_RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+          "AHK_SOURCE_COMMIT=$env:GITHUB_SHA" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install locked frontend dependencies
+        id: frontend-dependencies
+        working-directory: Presentation.Electron
+        run: |
+          npm.cmd ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
+
+      - name: Prepare read-only AutoHotkey version fixture
+        id: ahk-fixture
+        if: ${{ !cancelled() }}
+        run: |
+          New-Item -ItemType Directory -Path $env:CI_OUTPUT -ErrorAction Stop | Out-Null
+          $archive = Join-Path $env:CI_OUTPUT 'AutoHotkey_2.0.30.zip'
+          Invoke-WebRequest -Uri 'https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.30/AutoHotkey_2.0.30.zip' -OutFile $archive
+          $expectedHash = '1e0ece7ecb2d5646e55758150472677996a57f9db5c83d2996d8b47b9e2f31a4'
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expectedHash) { throw 'AutoHotkey archive hash mismatch.' }
+          # Discovery reads executable metadata here; no installer or AHK script runs.
+          $fixture = Join-Path $env:LOCALAPPDATA 'Programs/AutoHotkey/v2'
+          if (Test-Path -LiteralPath $fixture) { throw 'AutoHotkey fixture destination must be absent.' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $fixture
+          $interpreter = Join-Path $fixture 'AutoHotkey64.exe'
+          if (-not (Test-Path -LiteralPath $interpreter -PathType Leaf)) { throw 'AutoHotkey fixture is missing.' }
+
+      - name: Restore locked backend and test dependencies
+        id: backend-dependencies
+        if: ${{ !cancelled() }}
+        run: |
+          dotnet restore Tests.Backend/Tests.Backend.csproj --locked-mode --configfile NuGet.Config -r win-x64
+          if ($LASTEXITCODE -ne 0) { throw 'NuGet restore failed.' }
+
+      - name: Publish backend tests
+        id: backend-publish
+        if: ${{ !cancelled() && steps.backend-dependencies.outcome == 'success' }}
+        run: |
+          dotnet publish Tests.Backend/Tests.Backend.csproj -c Release -r win-x64 --self-contained true --no-restore -o "$env:CI_OUTPUT/test-bin"
+          if ($LASTEXITCODE -ne 0) { throw 'Backend test publish failed.' }
+
+      - name: Run backend contract and continuation checks
+        id: backend-tests
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --backend --root "$env:CI_OUTPUT/backend" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/backend.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Backend checks failed.' }
+
+      - name: Run core and startup policy checks
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' && steps.ahk-fixture.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --core --root "$env:CI_OUTPUT/core" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/core.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Core checks failed.' }
+
+      - name: Run native identity regression checks
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' && steps.ahk-fixture.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --corrections --root "$env:CI_OUTPUT/corrections" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/corrections.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Native regression checks failed.' }
+
+      - name: Inspect Windows startup through WMI (read-only)
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --startup-inspection --root "$env:CI_OUTPUT/startup-inspection" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/startup-inspection.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows startup inspection failed.' }
+
+      - name: Typecheck frontend
+        if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          npm.cmd run typecheck
+          if ($LASTEXITCODE -ne 0) { throw 'Typecheck failed.' }
+
+      - name: Verify release manifest and immutable publication policy with mocks
+        if: ${{ !cancelled() }}
+        run: |
+          ./tools/Test-ReleaseTooling.ps1 -OutputRoot "$env:CI_OUTPUT/release-tooling-tests"
+
+      - name: Run Node tests with actual backend snapshot fixtures
+        if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' && steps.backend-tests.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          $env:AHK_HEADER_SNAPSHOT_INPUT = Join-Path $env:CI_OUTPUT 'backend/header-description-snapshot.json'
+          $env:AHK_FOREGROUND_ARGUMENTS_INPUT = Join-Path $env:CI_OUTPUT 'backend/foreground-host-arguments.txt'
+          $env:AHK_STARTUP_RECOVERY_INPUT = Join-Path $env:CI_OUTPUT 'backend/startup-recovery-snapshot.json'
+          npm.cmd test -- --out "$env:CI_OUTPUT/node-tests" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/node-tests.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Node tests failed.' }
+
+      - name: Build production frontend bundle
+        id: frontend-build
+        if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          npm.cmd run build -- --out "$env:CI_OUTPUT/frontend"
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+          ../tools/Set-ReleaseBuildInfo.ps1 -FrontendRoot "$env:CI_OUTPUT/frontend" -Version $env:AHK_RELEASE_VERSION -Commit $env:AHK_SOURCE_COMMIT
+
+      - name: Download verified Electron runtime
+        id: electron-runtime
+        if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          node.exe node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw 'Electron runtime download failed.' }
+
+      - name: Test and capture Electron interface
+        if: ${{ !cancelled() && steps.frontend-build.outcome == 'success' && steps.electron-runtime.outcome == 'success' }}
+        run: |
+          ./tools/Test-ElectronPresentation.ps1 -FrontendRoot "$env:CI_OUTPUT/frontend" -HarnessRoot "$env:CI_OUTPUT/presentation-harness" -OutputRoot "$env:CI_OUTPUT/presentation"
+
+      - name: Publish production backend
+        id: production-backend
+        if: ${{ !cancelled() && steps.backend-dependencies.outcome == 'success' }}
+        run: |
+          dotnet publish Backend/AhkManager.Backend.csproj -c Release -r win-x64 --self-contained true --no-restore "-p:Version=$env:AHK_RELEASE_VERSION" "-p:SourceRevisionId=$env:AHK_SOURCE_COMMIT" -o "$env:CI_OUTPUT/backend-publish"
+          if ($LASTEXITCODE -ne 0) { throw 'Backend publish failed.' }
+
+      - name: Publish the standalone update host
+        id: update-host
+        if: ${{ !cancelled() && steps.production-backend.outcome == 'success' }}
+        run: |
+          dotnet restore UpdateHost/AhkManager.UpdateHost.csproj --locked-mode --configfile NuGet.Config -r win-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Update host restore failed.' }
+          dotnet publish UpdateHost/AhkManager.UpdateHost.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$env:AHK_RELEASE_VERSION" "-p:SourceRevisionId=$env:AHK_SOURCE_COMMIT" -o "$env:CI_OUTPUT/backend-publish/update"
+          if ($LASTEXITCODE -ne 0) { throw 'Update host publish failed.' }
+
+      - name: Run isolated update host policy and recovery checks
+        if: ${{ !cancelled() && steps.update-host.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/backend-publish/update/AhkManager.UpdateHost.exe" --self-test --root "$env:CI_OUTPUT/update-host-tests" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/update-host.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Update host policy checks failed.' }
+
+      - name: Build Windows installer
+        id: installer-build
+        if: ${{ !cancelled() && steps.frontend-build.outcome == 'success' && steps.update-host.outcome == 'success' && steps.electron-runtime.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        env:
+          CSC_LINK: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.WINDOWS_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.WINDOWS_CSC_KEY_PASSWORD || '' }}
+          AHK_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}
+        run: |
+          $env:AHK_FRONTEND_DIST = Join-Path $env:CI_OUTPUT 'frontend'
+          $env:AHK_BACKEND_DIST = Join-Path $env:CI_OUTPUT 'backend-publish'
+          $env:AHK_PACKAGE_OUT = Join-Path $env:CI_OUTPUT 'installer'
+          npm.cmd run package -- --publish never
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer build failed.' }
+          Get-ChildItem -LiteralPath $env:AHK_PACKAGE_OUT -Filter '*Setup-x64.exe' | Get-FileHash -Algorithm SHA256 | Format-List | Out-File (Join-Path $env:AHK_PACKAGE_OUT 'SHA256.txt')
+
+      - name: Prepare versioned release manifest
+        if: ${{ !cancelled() && steps.installer-build.outcome == 'success' }}
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath "$env:CI_OUTPUT/installer" -Filter '*Setup-x64.exe')
+          if ($installers.Count -ne 1) { throw 'Exactly one target installer is required.' }
+          $notes = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Commit notes are unavailable.' }
+          ./tools/New-ReleaseManifest.ps1 -InstallerPath $installers[0].FullName -OutputPath "$env:CI_OUTPUT/installer/ahk-manager-release.json" -Version $env:AHK_RELEASE_VERSION -Commit $env:AHK_SOURCE_COMMIT -Notes $notes
+          ./tools/Publish-GitHubRelease.ps1 -InstallerPath $installers[0].FullName -ManifestPath "$env:CI_OUTPUT/installer/ahk-manager-release.json" -Repository $env:GITHUB_REPOSITORY -Commit $env:AHK_SOURCE_COMMIT -ValidateOnly
+
+      - name: Build synthetic baseline installer for update tests
+        id: baseline-installer
+        if: ${{ !cancelled() && steps.installer-build.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          Copy-Item -LiteralPath "$env:CI_OUTPUT/frontend" -Destination "$env:CI_OUTPUT/baseline-frontend" -Recurse
+          ../tools/Set-ReleaseBuildInfo.ps1 -FrontendRoot "$env:CI_OUTPUT/baseline-frontend" -Version '1.2.0' -Commit $env:AHK_SOURCE_COMMIT
+          $env:AHK_RELEASE_VERSION = '1.2.0'
+          $env:AHK_FRONTEND_DIST = Join-Path $env:CI_OUTPUT 'baseline-frontend'
+          $env:AHK_BACKEND_DIST = Join-Path $env:CI_OUTPUT 'backend-publish'
+          $env:AHK_PACKAGE_OUT = Join-Path $env:CI_OUTPUT 'baseline-installer'
+          npm.cmd run package -- --publish never
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic baseline packaging failed.' }
+
+      - name: Verify installation update and rollback without launching the app
+        if: ${{ !cancelled() && steps.installer-build.outcome == 'success' && steps.baseline-installer.outcome == 'success' }}
+        run: |
+          ./tools/Test-UpdateInstallation.ps1 -BaselineInstaller "$env:CI_OUTPUT/baseline-installer/AHK-Manager-1.2.0-Setup-x64.exe" -TargetInstaller "$env:CI_OUTPUT/installer/AHK-Manager-$($env:AHK_RELEASE_VERSION)-Setup-x64.exe" -OutputRoot "$env:CI_OUTPUT/update-installation"
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-ci-evidence
+          path: |
+            ${{ runner.temp }}/ahk-manager-ci/*.log
+            ${{ runner.temp }}/ahk-manager-ci/backend/**/*.json
+            ${{ runner.temp }}/ahk-manager-ci/backend/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/startup-inspection/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/frontend/build-info.json
+            ${{ runner.temp }}/ahk-manager-ci/update-host-tests/*.json
+            ${{ runner.temp }}/ahk-manager-ci/update-installation/*.json
+            ${{ runner.temp }}/ahk-manager-ci/update-installation/*.log
+            ${{ runner.temp }}/ahk-manager-ci/release-tooling-tests/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload interface screenshots and assertions
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-ui-evidence
+          path: |
+            ${{ runner.temp }}/ahk-manager-ci/presentation/*.png
+            ${{ runner.temp }}/ahk-manager-ci/presentation/*.json
+            ${{ runner.temp }}/ahk-manager-ci/presentation/*.log
+            ${{ runner.temp }}/ahk-manager-ci/presentation/*.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Windows installer
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-installer
+          path: |
+            ${{ runner.temp }}/ahk-manager-ci/installer/*Setup-x64.exe
+            ${{ runner.temp }}/ahk-manager-ci/installer/SHA256.txt
+            ${{ runner.temp }}/ahk-manager-ci/installer/ahk-manager-release.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  publish-release:
+    name: Publish approved main release
+    needs: windows-checks
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'bezoro/ahk-manager' && needs.windows-checks.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download the installer approved by Windows CI
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-installer
+          path: release-artifacts
+
+      - name: Publish immutable release assets
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.windows-checks.outputs.release-version }}
+        run: |
+          $root = Join-Path $env:GITHUB_WORKSPACE 'release-artifacts'
+          ./tools/Publish-GitHubRelease.ps1 -InstallerPath (Join-Path $root "AHK-Manager-$($env:RELEASE_VERSION)-Setup-x64.exe") -ManifestPath (Join-Path $root 'ahk-manager-release.json') -Repository $env:GITHUB_REPOSITORY -Commit $env:GITHUB_SHA

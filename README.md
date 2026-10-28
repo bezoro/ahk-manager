@@ -1,3 +1,31 @@
+# AHK Manager 1.2, atualizações e histórico
+
+A página **Atualizações** avisa quando há uma versão disponível, mostra o progresso do download e oferece **Atualizar** ou **Voltar para esta versão** no histórico. O Manager consulta o GitHub ao abrir e a cada 15 minutos. Cada mudança na `main` que passa pela CI produz uma versão numerada e um instalador permanente nas Releases. Branches e pull requests não são oferecidos como atualizações.
+
+A atualização é sempre solicitada pelo usuário. O `electron-updater` baixa e verifica o instalador; o aplicador aguarda o encerramento normal do Manager, preserva uma cópia da instalação e só então aplica a versão escolhida. Os scripts AHK continuam em execução. Perfis, scripts e preferências de início com Windows são preservados. Uma falha confirmada na instalação restaura a cópia anterior; uma operação de resultado incerto fica bloqueada para não repetir efeitos.
+
+Com o repositório público, as atualizações funcionam sem login ou token. Se o repositório estiver privado ou o GitHub limitar as consultas, há um acesso opcional em **Atualizações > Acesso avançado ao GitHub**. O Windows protege essa credencial; ela não vai para o renderer, logs ou pacote. Os instaladores já preservados permitem voltar de versão mesmo sem conexão. O histórico publicado continua no GitHub.
+
+O primeiro uso do atualizador exige instalar uma versão 1.2. Versões até 1.1 recusam atualização no mesmo local: saia do Manager, desinstale preservando o perfil e instale a 1.2. Se houver tarefa administrativa ativa, desative o início com Windows antes dessa primeira desinstalação e confirme novamente sua preferência depois. Nas atualizações seguintes, o aplicativo faz a troca pelo botão.
+
+Consulte [UPDATES.md](UPDATES.md) para publicação, assinatura e recuperação. O instalador da CI de pull request usa a versão 1.2.1; versões de `main` usam `1.2.<número da execução>`.
+
+## Comportamento de inicialização introduzido na 1.1
+
+O Manager inicia com Windows e como administrador por padrão. As duas preferências são independentes e configuráveis. Na primeira abertura, a confirmação do Windows permite concluir o modo administrativo. O início elevado usa uma tarefa agendada por usuário; o modo padrão usa uma entrada de login do usuário. Se uma alteração não puder ser aplicada, a interface informa que a configuração está pendente e permite tentar novamente.
+
+Scripts marcados para iniciar com Windows são executados no login. Cada script mantém sua preferência administrativa; scripts normais continuam com privilégio padrão mesmo quando o Manager está elevado. Iniciar, parar e reiniciar verificam a identidade do processo. Novos processos e encerramentos externos atualizam o estado automaticamente.
+
+Editar procura o VS Code instalado, preservando a seleção de outro editor e seus argumentos. Sem VS Code, utiliza a associação segura Editar ou um editor de texto. Um Manager elevado abre o editor com o privilégio padrão do usuário.
+
+As preferências de inicialização aparecem primeiro. As ações principais ficam juntas, ações secundárias estão em um menu e a recuperação de pendências funciona mesmo com a lista vazia. Registros de continuação inválidos podem ser preservados em quarentena após uma recuperação explícita, sem repetir execuções.
+
+A CI do Windows verifica backend, contratos, WMI, tipos e cenários de interface, captura temas claro/escuro, janelas estreitas e zoom de 200%, e compila o instalador. Logs, capturas e instalador ficam disponíveis nos artefatos da execução. Consulte [SAFE-TESTS.md](SAFE-TESTS.md) para o escopo e [VALIDATION.md](VALIDATION.md) para os resultados e limites da validação atual.
+
+Para desinstalar uma instalação com tarefa administrativa ativa, abra o Manager como administrador e desative "Iniciar o Manager com Windows" antes de usar o desinstalador. Ele verifica a tarefa da instalação e interrompe a remoção enquanto ela estiver registrada. Perfis, backups e scripts são preservados.
+
+Os registros abaixo descrevem versões anteriores, inclusive políticas e instalações que mudaram na 1.1.0.
+
 ## Versão 1.0.4 — recuperação de arquivos e atalhos legíveis
 
 Arquivos ausentes mostram **Localizar script…** e **Remover da lista** no painel. Localizar preserva o registro e suas preferências; remover da lista preserva o arquivo. Para arquivos existentes, **Excluir arquivo…** solicita confirmação e usa a Lixeira do Windows. Se o script estiver em execução, a mensagem explica que ele será parado primeiro. A exclusão só prossegue após o encerramento comprovado; recusa de saída, identidade incerta ou mudança de arquivo interrompem a operação.

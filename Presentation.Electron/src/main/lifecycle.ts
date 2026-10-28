@@ -51,6 +51,12 @@ export async function reportStartupResult(result:OperationResult,boundary:{show(
   boundary.show();await boundary.warn(result);
 }
 
+export async function reportStartupWithContinuation(result:OperationResult,offerAvailable:boolean,
+  continueStartup:()=>Promise<boolean>,boundary:{show():void;warn(result:OperationResult):Promise<void>}):Promise<void> {
+  if(offerAvailable&&await continueStartup())return;
+  await reportStartupResult(result,boundary);
+}
+
 export const SHUTDOWN_DEADLINE_MS=15000;
 /** The administrative route is a foreground intent and can never become a login request. */
 export function administrationCli(argv:readonly string[]):'none'|'request'|'invalid' {

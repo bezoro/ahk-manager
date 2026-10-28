@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, session, shell, systemPreferences, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, safeStorage, screen, session, shell, systemPreferences, Tray } from 'electron';
 import { scriptFileStamp } from './script-files.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -6,7 +6,7 @@ import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
-import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupResult } from './lifecycle.js';
+import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupWithContinuation } from './lifecycle.js';
 import { AdministrationPreflight, ElevationCoordinator } from './elevation.js';
 import { createDiagnostics, type PageDiagnostics } from './diagnostics.js';
 import {hostText as t} from '../shared/host-pt-BR.js';
@@ -14,6 +14,12 @@ import { APP_URL, assetFromUrl, CSP, DocumentGuard, packagedBackend, type Docume
 import { capturePlacement, restorePlacement } from './placement.js';
 import type { AdministrationUiGuard, ElevationStatus, ManagerSnapshot, OperationResult, StartupContinuationOffer, ThemeState, WindowPlacement } from '../shared/contracts.js';
 import { activityQuery, array, assertActivityQuery, assertMetadata, assertOperation, assertSelection, assertSettings, bool, decimal, guid, metadata, nullable, oneOf, operation, requireValid, selection, shape, text } from '../shared/validation.js';
+import { UpdateService } from './update-service.js';
+import { UpdateStore, type CachedInstaller } from './update-store.js';
+import { GitHubUpdateClient, compareVersions } from './github-updates.js';
+import { downloadRelease, verifyCachedInstallerSignature } from './electron-update-download.js';
+import { prepareUpdate, updateRecoveryStatus, type PreparedUpdate } from './update-handoff.js';
+import { shutdownAndCommitUpdate } from './update-shutdown.js';
 
 protocol.registerSchemesAsPrivileged([{scheme:'ahk-manager',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.setName(t.title);
@@ -45,6 +51,10 @@ const stopExit=new StopExitIntent();
 let stopExitProgress={done:0,total:0};
 let quitting=false;
 let quitComplete=false;
+let updates:UpdateService|null=null;
+let updateStore:UpdateStore|null=null;
+let updateApplying=false;
+let updateShutdownInFlight:Promise<void>|null=null;
 const documentScope=new AsyncLocalStorage<()=>boolean>();
 const alive=()=>!quitting&&(documentScope.getStore()?.()??(window!==null&&!window.isDestroyed()));
 const single=app.requestSingleInstanceLock();
@@ -126,6 +136,69 @@ function lockSession():void {
   target.on('will-download',event=>event.preventDefault());
   target.webRequest.onBeforeRequest((details,callback)=>callback({cancel:!details.url.startsWith('ahk-manager://app/')}));
 }
+async function configureUpdates():Promise<void> {
+  // A dedicated Electron session retains OS proxy support and cannot grant renderer access.
+  const network=session.fromPartition('electron-updater',{cache:false});
+  network.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
+  network.setPermissionCheckHandler(()=>false);
+  network.webRequest.onBeforeRequest((details,callback)=>{
+    let allowed=false;
+    try { const url=new URL(details.url);allowed=url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&(url.hostname==='api.github.com'&&url.pathname.startsWith('/repos/bezoro/ahk-manager/releases')||['release-assets.githubusercontent.com','objects.githubusercontent.com'].includes(url.hostname)); } catch { /* Only the fixed update origin is permitted. */ }
+    callback({cancel:!allowed});
+  });
+  network.webRequest.onBeforeSendHeaders((details,callback)=>{
+    const headers={...details.requestHeaders};
+    if(new URL(details.url).hostname!=='api.github.com')for(const name of Object.keys(headers))if(['authorization','cookie','proxy-authorization'].includes(name.toLowerCase()))delete headers[name];
+    callback({requestHeaders:headers});
+  });
+  const root=path.join(process.env.LOCALAPPDATA??path.join(app.getPath('home'),'AppData','Local'),'Bezoro','AhkManagerElectron','Updates');
+  updateStore=new UpdateStore(root,{available:()=>safeStorage.isEncryptionAvailable(),encrypt:value=>safeStorage.encryptString(value),decrypt:value=>safeStorage.decryptString(value)});
+  const client=new GitHubUpdateClient(network.fetch.bind(network) as typeof fetch);
+  updates=new UpdateService({
+    version:app.getVersion(),store:updateStore,releases:token=>client.releases(token),resolve:(id,token)=>client.resolve(id,token),download:downloadRelease,
+    preflight:(operationId,phase)=>{
+      const lease=documentLease;
+      return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>!!lease&&!!guard?.current(lease)&&!!window?.isFocused()&&!window.isDestroyed()&&!quitting&&!updateApplying&&!updateShutdownInFlight&&!adoptionPending&&!administration?.active&&!stopExit.active&&!controller?.state.busy&&!controller?.state.administrationPending);
+    },
+    confirm:release=>confirm(compareVersions(release.version,app.getVersion())<0?'Voltar para a versão '+release.version+'?':'Atualizar para a versão '+release.version+'?','O Manager será fechado e reaberto. Os scripts que já estão em execução continuam funcionando, e suas configurações serão preservadas.'),
+    apply:applyUpdate,changed:state=>guard?.send('manager:updates',state),recovery:()=>updateRecoveryStatus(updateStore!),
+  });
+  await updates.initialize();
+  void updates.check();
+  const interval=setInterval(()=>{if(!quitting&&!updateApplying)void updates?.check();},15*60*1000);interval.unref();
+}
+async function applyUpdate(operationId:string,target:CachedInstaller):Promise<void> {
+  if(!updateStore||!window||updateApplying||updateShutdownInFlight||quitting||adoptionPending||administration?.active||stopExit.active)throw new Error('Aguarde as operações do Manager antes de atualizar.');
+  updateApplying=true;controller?.setAdministrationPending(true);
+  let prepared:PreparedUpdate|null=null;
+  let shutdownStarted=false;
+  try {
+    await verifyCachedInstallerSignature(target.installerPath);
+    const created=app.getAppMetrics().find(metric=>metric.pid===process.pid)?.creationTime;
+    if(!created||!Number.isFinite(created))throw new Error('Não foi possível confirmar a sessão do Manager para atualizar.');
+    prepared=await prepareUpdate(updateStore,operationId,target,path.dirname(app.getPath('exe')),new Date(created).toISOString());
+    shutdownStarted=true;
+    await shutdownAndCommitUpdate({
+      drain:async()=>{await controller?.drain();},backendPresent:()=>backend!==null,backendExited:()=>backend?.exited??true,
+      persistPlacement:async()=>{await controller?.savePlacement(true);},shutdownBackend:async()=>{
+        if(!backend)return;
+        const closing=backend.shutdown().then(()=>{});updateShutdownInFlight=closing;
+        try{await closing;}finally{if(updateShutdownInFlight===closing)updateShutdownInFlight=null;}
+      },
+      reportPlacementFailure:()=>{},
+    },SHUTDOWN_DEADLINE_MS,()=>prepared!.commit());
+    quitting=true;tray?.destroy();quitComplete=true;app.quit();
+  } catch(error) {
+    let cancellationError:unknown;
+    try{await prepared?.cancel();}catch(cancelError){cancellationError=cancelError;}
+    finally{
+      updateApplying=false;controller?.setAdministrationPending(false);
+      if(shutdownStarted&&backend)controller?.setConnection('failed','A atualização foi cancelada sem confirmação do encerramento. Aguarde e reconecte o backend antes de continuar.');
+    }
+    if(cancellationError)throw new Error(safeError(error)+' Não foi possível registrar o cancelamento da atualização.',{cause:cancellationError});
+    throw error;
+  }
+}
 async function start():Promise<void> {
   if(initialAdoption.invalid)throw new Error(t.adoptionInvalid);
   if(process.platform!=='win32'||!app.isPackaged)throw new Error(t.windowsPackagedRequired);
@@ -172,6 +245,7 @@ async function start():Promise<void> {
     request:(action,payload,timeoutMs)=>{if(!backend)throw new Error(t.backendUnavailable);return backend.request<ElevationStatus>(action,payload,timeoutMs);},
     quitAfterAcknowledgement:()=>quit(true),
   });
+  await configureUpdates();
   registerIpc();
   await window.loadURL(APP_URL);
   createTray();updateTheme();
@@ -180,7 +254,23 @@ async function start():Promise<void> {
   if(saved){const dip=screen.screenToDipRect(window,{x:saved.x,y:saved.y,width:saved.width,height:saved.height});window.setBounds(restorePlacement({...saved,...dip,dpi:96},screen.getAllDisplays()));lifecycle.deferMaximizedRestore(saved.maximized);if(window.isVisible())show();}
   ready=true;
   if(initialAdministration==='invalid')dialog.showErrorBox(t.title,t.administrationCliInvalid);
-  if(administrativeCliPending){administrativeCliPending=false;show();void requestAdministration(true);}
+  const wantsAdministrator=controller.state.snapshot?.settings.launchManagerAsAdministrator===true;
+  const canInitialize=!initialAdoption.descriptor&&!adoptionPending&&controller.state.connection==='ready'&&controller.state.snapshot?.readOnly===false&&controller.state.snapshot.effectsAvailable;
+  let setupDeferred=false;
+  if(administrativeCliPending||canInitialize&&wantsAdministrator&&controller.state.authorityMode==='Normal'){
+    administrativeCliPending=false;show();
+    const result=await requestAdministration(true,lifecycle.loginRequested);
+    if(result.outcome==='Confirmed'){
+      if(quitting||quitComplete)return;
+    }else{
+      setupDeferred=true;
+      if(window)await dialog.showMessageBox(window,{type:'warning',title:t.administrationTitle,message:t.administrationSetupDeferred,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+    }
+  }
+  if(canInitialize&&!setupDeferred&&backend?.ready){
+    const result=await backend.request<OperationResult>('initializeStartup',{});
+    if(result.outcome!=='Confirmed'&&window){show();await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.startupSetupIncomplete,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}
+  }
   await runLogin();
   if(lifecycle.shouldShowAtStartup(controller.state.snapshot?.settings,trayRegistered,controller.state.connection!=='ready'||controller.state.snapshot?.readOnly===true,controller.state.snapshot?.issues))show();
   if(window.isVisible())diagnostics?.initialReady();
@@ -217,8 +307,7 @@ async function startBackend():Promise<void> {
 }
 async function reportLoginResult(result:OperationResult):Promise<void> {
   try{continuationOffer=backend?.ready?await backend.request<StartupContinuationOffer|null>('startupContinuation',{}):null;}catch{continuationOffer=null;}updateTray();
-  if(continuationOffer?.canResume){show();await requestStartupContinuation();return;}
-  await reportStartupResult(result,{show,warn:async value=>{if(window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:value.detail??t.loginFailure(value.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}});
+  await reportStartupWithContinuation(result,continuationOffer?.canResume===true,requestStartupContinuation,{show,warn:async value=>{if(window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:value.detail??t.loginFailure(value.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}});
 }
 async function checkStartupAdoption():Promise<void> {
   if(!adoptionPending||!backend?.ready||!controller||quitting)return;
@@ -228,29 +317,30 @@ async function checkStartupAdoption():Promise<void> {
     if(window)await dialog.showMessageBox(window,{type:result.outcome==='Confirmed'?'info':'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
   }catch{show();dialog.showErrorBox(t.loginResultTitle,t.administrationPending);}
 }
-async function requestStartupContinuation():Promise<void> {
-  if(adoptionPending||administration?.active||!backend?.ready||!controller||quitting)return;
+async function requestStartupContinuation():Promise<boolean> {
+  if(adoptionPending||administration?.active||!backend?.ready||!controller||quitting)return false;
   continuationOffer=await backend.request<StartupContinuationOffer|null>('startupContinuation',{});updateTray();
-  if(!continuationOffer?.canResume||!window)return;
+  if(!continuationOffer?.canResume||!window)return false;
   show();
   const choice=await dialog.showMessageBox(window,{type:'warning',title:t.continuationTitle,message:t.continuationTitle,detail:t.continuationDetail(continuationOffer.scriptNames),buttons:[t.continuationContinue,t.continuationLater],defaultId:1,cancelId:1,noLink:true});
-  if(choice.response!==0)return;
+  if(choice.response!==0)return false;
   const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));
   administrationLease=documentLease;
   const result=await administration?.request(true,continuationOffer.operationId);
   if(result&&result.outcome!=='Confirmed'&&window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+  return result?.outcome==='Confirmed';
 }
 async function runLogin():Promise<void> {
   if(initialAdoption.descriptor!==null||adoptionPending||administration?.active||stopExit.active||quitting||!backend?.ready||!controller||!lifecycle.takeLogin())return;
   try{await reportLoginResult(await controller.runLogin());}catch(error){controller.setConnection('failed',safeError(error));show();dialog.showErrorBox(t.loginResultTitle,safeError(error));}
 }
-async function requestAdministration(explicitCli=false){
+async function requestAdministration(explicitCli=false,resumeLogin=false){
   if(adoptionPending)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
   if(administration?.processing)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
   if(controller?.state.authorityMode==='Administrator'){show();return {outcome:'Confirmed' as const,code:'None',detail:null,correlationId:null};}
   if(explicitCli){const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));}
   administrationLease=documentLease;
-  return administration?.request(explicitCli)??{outcome:'CancelledBeforeDispatch' as const,code:'CapabilityUnverified',detail:null,correlationId:null};
+  return administration?.request(explicitCli,undefined,resumeLogin)??{outcome:'CancelledBeforeDispatch' as const,code:'CapabilityUnverified',detail:null,correlationId:null};
 }
 function createTray():void {
   try{
@@ -274,6 +364,7 @@ async function stopScriptsAndQuit():Promise<void> {
   }catch(error){stopExit.complete(false);updateTray();show();dialog.showErrorBox(t.stopExitPartialTitle,safeError(error));}
 }
 async function closeWindow():Promise<void> {
+  if(updateApplying||updateShutdownInFlight){show();return;}
   if(administration?.active){show();return;}
   if(stopExit.active){stopExit.cancel();updateTray();return;}
   if(quitting)return;
@@ -282,6 +373,7 @@ async function closeWindow():Promise<void> {
   else await quit();
 }
 async function quit(administrativeAcknowledgement=false):Promise<void> {
+  if((updateApplying||updateShutdownInFlight)&&!quitComplete){show();return;}
   if(administration?.active&&!administrativeAcknowledgement){show();return;}
   if(stopExit.active){stopExit.cancel();updateTray();return;}
   if(quitting||quitComplete)return;quitting=true;
@@ -306,6 +398,7 @@ function registerIpc():void {
     ipcMain.handle(`manager:${name}`,async(event,envelope:unknown)=>{
       const {lease,body}=guard!.validate(event,envelope);requireValid(body,validate,`${name} request`);
       if(quitting&&name!=='getState'&&name!=='getTheme')throw new Error(t.closing);
+      if(updateApplying&&!['getState','getTheme','getUpdateState'].includes(name))throw new Error('A instalação da atualização está sendo preparada.');
       if(adoptionPending&&!['getState','getTheme','getActivity'].includes(name))throw new Error(t.administrationPending);
       if(controller!.state.administrationPending&&!['getState','getTheme','getActivity','requestAdministration'].includes(name))throw new Error(t.administrationPending);
       const value=await documentScope.run(()=>guard!.current(lease),()=>handler(body));
@@ -314,6 +407,10 @@ function registerIpc():void {
     });
   };
   bind('getState',none,()=>controller!.state);bind('getTheme',none,theme);
+  bind('getUpdateState',none,()=>updates!.snapshot);
+  bind('checkUpdates',none,()=>updates!.check());
+  bind('installUpdate',shape({id:text(100)}),v=>updates!.install(v.id));
+  bind('setUpdateToken',shape({token:nullable(text(512))}),v=>updates!.setToken(v.token));
   bind('requestAdministration',none,()=>requestAdministration());
   bind('refresh',none,()=>controller!.refresh());bind('addFiles',none,()=>controller!.add('scripts'));bind('addFolder',none,()=>controller!.add('folder'));
   bind('removeScript',shape({scriptId:guid,revision:decimal}),v=>controller!.remove(v.scriptId,v.revision));
@@ -329,7 +426,7 @@ function registerIpc():void {
   bind('previewImport',none,()=>controller!.previewImport());bind('commitImport',shape({token:guid}),v=>controller!.commitImport(v.token));
   bind('migrateProfile',none,()=>controller!.migrateProfile());bind('transferStartup',none,()=>controller!.transferStartup());
   bind('restoreBackup',none,()=>controller!.restoreBackup());bind('recoverPending',none,()=>controller!.recoverPending());
-  bind('retryBackend',none,async()=>{await startBackend();if(backend?.ready)await runLogin();});
+  bind('retryBackend',none,async()=>{if(updateShutdownInFlight)throw new Error('Aguarde a confirmação de encerramento do backend.');await startBackend();if(backend?.ready)await runLogin();});
   bind('copyText',shape({text:text(65536)}),v=>clipboard.writeText(v.text));
   ipcMain.on('manager:updateSelection',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);const selected=body===null?null:assertSelection(body);controller!.updateSelection(selected);diagnosticSelection=selected?.scriptId??null;diagnostics?.selectionCommitted(diagnosticSelection);}catch{/* Untrusted fire-and-forget messages cannot alter host authority. */}});
   ipcMain.on('manager:documentReady',(event,envelope:unknown)=>{try{const {lease,body}=guard!.validate(event,envelope);requireValid(body,none,'document ready');documentLease=lease;rendererReady=true;deliverPreferences();}catch{/* No authority for invalid readiness signals. */}});

@@ -1,4 +1,10 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+function validateVersion(value){
+  if(typeof value!=='string'||value.length>128)throw new Error('Invalid installer version');
+  const match=/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(value);
+  if(!match||match[4]?.split('.').some(part=>/^[0-9]+$/.test(part)&&part.length>1&&part.startsWith('0')))throw new Error('Invalid installer version');
+  return value;
+}
 function validateRelative(value){
   const relative=value.replaceAll('\\','/');
   if(!relative||relative.startsWith('/')||relative.split('/').some(part=>!part||part==='.'||part==='..'||!(/^[A-Za-z0-9._ ()-]+$/).test(part)||/[. ]$/.test(part)||/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)/i.test(part)))throw new Error('Unsafe owned package path');
@@ -28,11 +34,12 @@ function collectOwnedFiles(root){
   };
   walk(base);return rows.sort((a,b)=>a.relative.localeCompare(b.relative,'en'));
 }
-function renderOwnedFiles(rows){
+function renderOwnedFiles(rows,version){
+  version=validateVersion(version);
   const directories=new Set();
   for(const row of rows){validateRelative(row.relative);if(!/^[a-f0-9]{128}$/.test(row.sha512))throw new Error('Invalid owned file hash');const parts=row.relative.split('/');for(let i=1;i<parts.length;i++)directories.add(parts.slice(0,i).join('/'));}
   const q=relative=>`"$INSTDIR${relative?'\\'+relative.replaceAll('/','\\'):''}"`;
-  const out=['; Generated from exact final packaged files. No recursive removal.','!include "FileFunc.nsh"','!macro validateOwnedRemoval',
+  const out=['; Generated from exact final packaged files. No recursive removal.',`!define APP_VERSION "${version}"`,'!include "FileFunc.nsh"','!macro validateOwnedRemoval',
     '  ClearErrors','  GetFullPathName $R6 "$INSTDIR"','  ${If} ${Errors}','    Abort "O caminho absoluto da instalação não pôde ser verificado."','  ${EndIf}',
     '  ${GetRoot} "$R6" $R7','  ${If} $R7 == ""','    Abort "A raiz do volume ou compartilhamento não pôde ser verificada."','  ${EndIf}',
     '  ${Do}','    ${If} $R6 == $R7',`      System::Call 'kernel32::GetFileAttributesW(w "$R6\\") i .r0'`,'    ${Else}',`      System::Call 'kernel32::GetFileAttributesW(w "$R6") i .r0'`,'    ${EndIf}',
@@ -50,17 +57,20 @@ function renderOwnedFiles(rows){
     const file=q(row.relative);
     out.push('  ${If} ${FileExists} '+file,'    ${StdUtils.HashFile} $2 "SHA2-512" '+file,'    ${If} $2 != "'+row.sha512+'"','      Abort "Um arquivo da instalação foi alterado. Nada será removido; preserve os dados e verifique a instalação."','    ${EndIf}','  ${EndIf}');
   }
-  out.push(`  System::Call 'kernel32::GetFileAttributesW(w "$INSTDIR\\\${UNINSTALL_FILENAME}") i .r0 ?e'`,'  Pop $2','  ${If} $0 == -1','    ${If} $2 != 2','    ${AndIf} $2 != 3','      Abort "O caminho do desinstalador não pôde ser verificado."','    ${EndIf}','  ${EndIf}','  ${If} $0 != -1','    IntOp $1 $0 & 0x410','    ${If} $1 != 0','      Abort "O caminho do desinstalador foi redirecionado ou alterado."','    ${EndIf}','  ${EndIf}','  ${If} ${FileExists} "$INSTDIR\\${UNINSTALL_FILENAME}"','    ${StdUtils.HashFile} $2 "SHA2-512" "$INSTDIR\\${UNINSTALL_FILENAME}"','    ${StdUtils.HashFile} $3 "SHA2-512" "$EXEPATH"','    StrLen $4 $2','    StrLen $5 $3','    ${If} $4 != 128','    ${OrIf} $5 != 128','    ${OrIf} $2 != $3','      Abort "O desinstalador instalado não corresponde a esta execução."','    ${EndIf}','  ${EndIf}','!macroend','!macro customRemoveFiles','  !insertmacro rejectInPlaceUpdate','  !insertmacro validateOwnedRemoval');
+  out.push(`  System::Call 'kernel32::GetFileAttributesW(w "$INSTDIR\\\${UNINSTALL_FILENAME}") i .r0 ?e'`,'  Pop $2','  ${If} $0 == -1','    ${If} $2 != 2','    ${AndIf} $2 != 3','      Abort "O caminho do desinstalador não pôde ser verificado."','    ${EndIf}','  ${EndIf}','  ${If} $0 != -1','    IntOp $1 $0 & 0x410','    ${If} $1 != 0','      Abort "O caminho do desinstalador foi redirecionado ou alterado."','    ${EndIf}','  ${EndIf}','  ${If} ${FileExists} "$INSTDIR\\${UNINSTALL_FILENAME}"','    ${StdUtils.HashFile} $2 "SHA2-512" "$INSTDIR\\${UNINSTALL_FILENAME}"','    ${StdUtils.HashFile} $3 "SHA2-512" "$EXEPATH"','    StrLen $4 $2','    StrLen $5 $3','    ${If} $4 != 128','    ${OrIf} $5 != 128','    ${OrIf} $2 != $3','      Abort "O desinstalador instalado não corresponde a esta execução."','    ${EndIf}','  ${EndIf}','!macroend','!macro customRemoveFiles','  !insertmacro guardUninstallUpdate','  !insertmacro validateOwnedRemoval');
   for(const row of rows)out.push('  ${If} ${FileExists} '+q(row.relative),'    ClearErrors',`    Delete ${q(row.relative)}`,'    ${If} ${Errors}','      Abort "Não foi possível remover um arquivo. A remoção está incompleta; os demais arquivos foram preservados."','    ${EndIf}','  ${EndIf}');
   out.push('  Delete "$INSTDIR\\${UNINSTALL_FILENAME}"','  SetOutPath $TEMP');
   for(const directory of Array.from(directories).sort((a,b)=>b.split('/').length-a.split('/').length||b.localeCompare(a)))out.push(`  RMDir ${q(directory)}`);
   out.push('  RMDir "$INSTDIR"','!macroend','');return out.join('\r\n');
 }
 async function writeOwnedFiles(context,output,uninstallerIcon){
+  // appInfo contains the resolved extraMetadata.version override used by this
+  // exact package. package.json may describe another version in a two-build CI.
+  const version=validateVersion(context?.packager?.appInfo?.version);
   const rows=collectOwnedFiles(context.appOutDir);
   rows.push({relative:'uninstallerIcon.ico',sha512:digest(uninstallerIcon),bytes:fs.statSync(uninstallerIcon).size});
-  const body=renderOwnedFiles(rows);
+  const body=renderOwnedFiles(rows,version);
   fs.writeFileSync(path.join(output,'owned-files.nsh'),body,'utf8');
-  fs.writeFileSync(path.join(output,'owned-files.json'),JSON.stringify({schema_version:1,files:rows,uninstaller:'same bytes as running $EXEPATH',policy:'Hash guard before removal; no reparse paths; exact files; empty directories only'},null,2));
+  fs.writeFileSync(path.join(output,'owned-files.json'),JSON.stringify({schema_version:1,version,updateProtocol:1,files:rows,uninstaller:'same bytes as running $EXEPATH',policy:'Hash guard before removal; no reparse paths; exact files; empty directories only'},null,2));
 }
-module.exports={validateRelative,collectOwnedFiles,renderOwnedFiles,writeOwnedFiles};
+module.exports={validateRelative,validateVersion,collectOwnedFiles,renderOwnedFiles,writeOwnedFiles};

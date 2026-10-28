@@ -7,6 +7,9 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        // A fixed-path, read-only uninstall inspection opens neither profile nor
+        // process authority. Additional arguments never select another target.
+        if (args.Length > 0 && args[0] == "--inspect-owned-startup") return args.Length == 1 ? StartupUninstallInspection.Run() : 3;
         Console.InputEncoding = new UTF8Encoding(false, true); Console.OutputEncoding = new UTF8Encoding(false, true);
         try
         {
