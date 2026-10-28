@@ -91,17 +91,17 @@ internal static class InstallationSnapshot
     }
     internal static void VerifySecurity(string root, SnapshotManifest manifest)
     {
-        if (SnapshotSecurity.Read(Path.GetDirectoryName(root)!, true) != manifest.ParentDacl) throw new IOException("Installation parent permissions changed.");
-        if (SnapshotSecurity.Read(root, true) != manifest.RootDacl) throw new IOException("Installation root permissions changed.");
+        if (!SnapshotSecurity.Equivalent(manifest.ParentDacl, SnapshotSecurity.Read(Path.GetDirectoryName(root)!, true))) throw new IOException("Installation parent permissions changed.");
+        if (!SnapshotSecurity.Equivalent(manifest.RootDacl, SnapshotSecurity.Read(root, true))) throw new IOException("Installation root permissions changed.");
         foreach (var directory in manifest.Directories)
-            if (SnapshotSecurity.Read(Path.Combine(root, directory.RelativePath), true) != directory.Dacl) throw new IOException("Installation directory permissions changed.");
+            if (!SnapshotSecurity.Equivalent(directory.Dacl, SnapshotSecurity.Read(Path.Combine(root, directory.RelativePath), true))) throw new IOException("Installation directory permissions changed.");
         foreach (var file in manifest.Files)
-            if (SnapshotSecurity.Read(Path.Combine(root, file.RelativePath), false) != file.Dacl) throw new IOException("Installation file permissions changed.");
+            if (!SnapshotSecurity.Equivalent(file.Dacl, SnapshotSecurity.Read(Path.Combine(root, file.RelativePath), false))) throw new IOException("Installation file permissions changed.");
     }
     internal static void RestoreSecurity(string staging, SnapshotManifest manifest)
     {
         UpdatePaths.NoRedirects(staging);
-        if (SnapshotSecurity.Read(Path.GetDirectoryName(staging)!, true) != manifest.ParentDacl) throw new IOException("Installation parent permissions changed before recovery.");
+        if (!SnapshotSecurity.Equivalent(manifest.ParentDacl, SnapshotSecurity.Read(Path.GetDirectoryName(staging)!, true))) throw new IOException("Installation parent permissions changed before recovery.");
         Verify(staging, manifest); VerifyPrivate(staging, manifest);
         // Protect each original DACL while the root is still private. Opening
         // the root cannot propagate its permissions into a formerly protected

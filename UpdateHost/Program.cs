@@ -6,11 +6,15 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--self-test" && args[1] == "--root")
+        {
+            try { return await SelfTests.Run(args[2]).ConfigureAwait(false); }
+            catch (Exception ex) { Console.Error.WriteLine("update-host:self-test:" + ex); return 65; }
+        }
         string? trustedOperation = null; UpdatePlan? trustedPlan = null; OperationLog? log = null;
         bool ready = false;
         try
         {
-            if (args.Length == 3 && args[0] == "--self-test" && args[1] == "--root") return await SelfTests.Run(args[2]).ConfigureAwait(false);
             if (!OperatingSystem.IsWindows() || args.Length != 4 || args[0] != "--plan" || args[2] != "--sha256" || !UpdateProtocol.Hash(args[3])) throw new InvalidDataException("Use --plan <absolute path> --sha256 <plan checksum>.");
             string root = UpdatePaths.UpdatesRoot;
             string ownPath = Environment.ProcessPath ?? throw new InvalidDataException("Update host image is unavailable.");

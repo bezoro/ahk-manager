@@ -9,8 +9,11 @@ internal sealed class NativeApplyEffects(UpdatePlan plan, string operationDirect
     public BackupState? RecoveryState { get; private set; }
     internal static ProcessStartInfo InstallerStartInfo(string installer, string installDirectory)
     {
-        var info = new ProcessStartInfo(installer) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(installer)!, WindowStyle = ProcessWindowStyle.Hidden };
-        info.ArgumentList.Add("/S"); info.ArgumentList.Add("--updated"); info.ArgumentList.Add("/D=" + installDirectory); return info;
+        installer = UpdatePaths.Local(installer); installDirectory = UpdatePaths.Local(installDirectory);
+        // NSIS consumes everything after its final /D= as the destination and
+        // requires it without surrounding quotes, including paths with spaces.
+        // Local() rejects quotes, NUL, CR/LF and all other control characters.
+        return new ProcessStartInfo(installer) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(installer)!, WindowStyle = ProcessWindowStyle.Hidden, Arguments = "/S --updated /D=" + installDirectory };
     }
     public void CheckCancellation()
     {

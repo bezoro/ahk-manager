@@ -170,7 +170,7 @@ jobs:
           dotnet publish Backend/AhkManager.Backend.csproj -c Release -r win-x64 --self-contained true --no-restore "-p:Version=$env:AHK_RELEASE_VERSION" "-p:SourceRevisionId=$env:AHK_SOURCE_COMMIT" -o "$env:CI_OUTPUT/backend-publish"
           if ($LASTEXITCODE -ne 0) { throw 'Backend publish failed.' }
 
-      - name: Publish and test the standalone update host
+      - name: Publish the standalone update host
         id: update-host
         if: ${{ !cancelled() && steps.production-backend.outcome == 'success' }}
         run: |
@@ -178,6 +178,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Update host restore failed.' }
           dotnet publish UpdateHost/AhkManager.UpdateHost.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$env:AHK_RELEASE_VERSION" "-p:SourceRevisionId=$env:AHK_SOURCE_COMMIT" -o "$env:CI_OUTPUT/backend-publish/update"
           if ($LASTEXITCODE -ne 0) { throw 'Update host publish failed.' }
+
+      - name: Run isolated update host policy and recovery checks
+        if: ${{ !cancelled() && steps.update-host.outcome == 'success' }}
+        run: |
           & "$env:CI_OUTPUT/backend-publish/update/AhkManager.UpdateHost.exe" --self-test --root "$env:CI_OUTPUT/update-host-tests" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/update-host.log"
           if ($LASTEXITCODE -ne 0) { throw 'Update host policy checks failed.' }
 

@@ -13,6 +13,26 @@ internal static class SnapshotSecurity
         ? (FileSystemSecurity)new DirectoryInfo(path).GetAccessControl(AccessControlSections.Access)
         : new FileInfo(path).GetAccessControl(AccessControlSections.Access)).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
 
+    internal static bool Equivalent(string expected, string actual)
+    {
+        var first = new RawSecurityDescriptor(expected); var second = new RawSecurityDescriptor(actual);
+        // Windows may normalize the auto-inheritance bookkeeping flags when
+        // persisting a DACL. Protection, presence, ACE order and every ACE byte
+        // still have to match, including masks, SIDs and inheritance flags.
+        const ControlFlags policy = ControlFlags.DiscretionaryAclPresent | ControlFlags.DiscretionaryAclProtected;
+        if ((first.ControlFlags & policy) != (second.ControlFlags & policy)) return false;
+        var left = first.DiscretionaryAcl; var right = second.DiscretionaryAcl;
+        if (left is null || right is null) return left is null && right is null;
+        if (left.Count != right.Count) return false;
+        for (int i = 0; i < left.Count; i++)
+        {
+            byte[] a = new byte[left[i].BinaryLength], b = new byte[right[i].BinaryLength];
+            left[i].GetBinaryForm(a, 0); right[i].GetBinaryForm(b, 0);
+            if (!a.AsSpan().SequenceEqual(b)) return false;
+        }
+        return true;
+    }
+
     static DirectorySecurity PrivateDirectory()
     {
         using var identity = WindowsIdentity.GetCurrent();

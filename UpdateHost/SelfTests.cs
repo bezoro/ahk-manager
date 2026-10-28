@@ -33,7 +33,18 @@ internal static class SelfTests
             bool refused = false; try { UpdatePaths.ValidateInstallerLocation(path, plan.Version, root); } catch (InvalidDataException) { refused = true; }
             Check(refused, "only the exact immutable version cache can supply an installer");
         }
-        Check(NativeApplyEffects.InstallerStartInfo(plan.InstallerPath, plan.InstallDirectory).ArgumentList.SequenceEqual(["/S", "--updated", "/D=" + plan.InstallDirectory]), "installer arguments preserve exact destination as the final argument without a shell");
+        string spacedDestination = Path.Combine(root, "Manager with spaces");
+        var nsis = NativeApplyEffects.InstallerStartInfo(plan.InstallerPath, spacedDestination);
+        Check(!nsis.UseShellExecute && nsis.ArgumentList.Count == 0 && nsis.Arguments == "/S --updated /D=" + spacedDestination, "NSIS receives its final destination with spaces unquoted and without a shell");
+        foreach (string invalid in new[] { spacedDestination + "\r/S", spacedDestination + "\n/S", spacedDestination + "\0/S", spacedDestination + "\" /S" })
+        {
+            bool refused = false; try { _ = NativeApplyEffects.InstallerStartInfo(plan.InstallerPath, invalid); } catch (InvalidDataException) { refused = true; }
+            Check(refused, "NSIS destination refuses command line control characters and quotes");
+        }
+        const string equivalentAcl = "D:P(A;OICI;FA;;;SY)(A;OICI;FR;;;BU)";
+        Check(SnapshotSecurity.Equivalent(equivalentAcl, equivalentAcl.Replace("D:P", "D:PAI", StringComparison.Ordinal)), "DACL comparison ignores only auto-inheritance bookkeeping normalization");
+        foreach (string changedAcl in new[] { equivalentAcl.Replace("D:P", "D:", StringComparison.Ordinal), equivalentAcl.Replace("FR", "FA", StringComparison.Ordinal), equivalentAcl.Replace("BU", "AU", StringComparison.Ordinal), equivalentAcl.Replace("OICI;FR", "OICIIO;FR", StringComparison.Ordinal), equivalentAcl.Replace("OICI;FR", "OICIID;FR", StringComparison.Ordinal), "D:P(A;OICI;FR;;;BU)(A;OICI;FA;;;SY)" })
+            Check(!SnapshotSecurity.Equivalent(equivalentAcl, changedAcl), "DACL comparison preserves protection access masks principals inheritance and ACE order");
 
         Directory.CreateDirectory(Path.GetDirectoryName(plan.InstallerPath)!);
         await File.WriteAllTextAsync(plan.InstallerPath, "inert package fixture; never executed");
@@ -93,7 +104,22 @@ internal static class SelfTests
         _ = await InstallationSnapshot.Copy(aclBackup, staging);
         InstallationSnapshot.VerifyPrivate(aclBackup, aclManifest); InstallationSnapshot.VerifyPrivate(staging, aclManifest);
         Check(SnapshotSecurity.Read(staging, true) != aclManifest.RootDacl, "backup and staging remain private under a parent granting Users full control");
-        InstallationSnapshot.RestoreSecurity(staging, aclManifest); InstallationSnapshot.VerifySecurity(staging, aclManifest);
+        try { InstallationSnapshot.RestoreSecurity(staging, aclManifest); InstallationSnapshot.VerifySecurity(staging, aclManifest); }
+        catch
+        {
+            try
+            {
+                Evidence.WriteNew(Path.Combine(root, "acl-restoration-diagnostics.json"), new
+                {
+                    Expected = aclManifest,
+                    ActualParent = SnapshotSecurity.Read(aclParent, true), ActualRoot = SnapshotSecurity.Read(staging, true),
+                    ActualDirectories = aclManifest.Directories.Select(directory => new { directory.RelativePath, Dacl = SnapshotSecurity.Read(Path.Combine(staging, directory.RelativePath), true) }).ToArray(),
+                    ActualFiles = aclManifest.Files.Select(file => new { file.RelativePath, Dacl = SnapshotSecurity.Read(Path.Combine(staging, file.RelativePath), false) }).ToArray()
+                });
+            }
+            catch (Exception ex) { Console.Error.WriteLine("self-test:acl-diagnostics:" + ex); }
+            throw;
+        }
         Check(true, "restoration preserves root directory file and protected child DACLs with original inheritance flags");
         string published = Path.Combine(aclParent, "restored"); Directory.Move(staging, published); InstallationSnapshot.VerifySecurity(published, aclManifest);
         Check(true, "publishing the restored directory does not broaden its original DACLs");
