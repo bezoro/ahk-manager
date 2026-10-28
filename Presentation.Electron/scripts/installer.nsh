@@ -82,10 +82,22 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
 ; Missing ancestors are permitted only when preparing a new cache directory.
 !macro validateDirectoryChain TARGET REQUIRE_EXISTING
   ClearErrors
-  GetFullPathName $R6 "${TARGET}"
-  ${If} ${Errors}
-    !insertmacro abortManualUpdate
-  ${EndIf}
+  !if ${REQUIRE_EXISTING} == 0
+    ; NSIS GetFullPathName rejects a missing leaf; the Win32 API normalizes it.
+    System::Call 'kernel32::GetFullPathNameW(w "${TARGET}", i ${NSIS_MAX_STRLEN}, w .r1, p 0) i .r0 ?e'
+    Pop $2
+    ${If} $0 == 0
+    ${OrIf} $0 >= ${NSIS_MAX_STRLEN}
+      !insertmacro traceInstaller "directory-chain: canonicalization-failed; length=$0; win32=$2"
+      !insertmacro abortManualUpdate
+    ${EndIf}
+    StrCpy $R6 $1
+  !else
+    GetFullPathName $R6 "${TARGET}"
+    ${If} ${Errors}
+      !insertmacro abortManualUpdate
+    ${EndIf}
+  !endif
   ${GetRoot} "$R6" $R7
   ${If} $R7 == ""
     !insertmacro abortManualUpdate
