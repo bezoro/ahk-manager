@@ -1,0 +1,154 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-checks:
+    name: Build and isolated tests (Windows x64)
+    runs-on: windows-2025
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.22.0'
+          cache: npm
+          cache-dependency-path: Presentation.Electron/package-lock.json
+
+      - name: Set up .NET SDK from global.json
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+
+      - name: Set isolated output path
+        run: |
+          "CI_OUTPUT=$(Join-Path $env:RUNNER_TEMP 'ahk-manager-ci')" >> $env:GITHUB_ENV
+
+      - name: Install locked frontend dependencies
+        id: frontend-dependencies
+        working-directory: Presentation.Electron
+        run: |
+          npm.cmd ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
+
+      - name: Prepare read-only AutoHotkey version fixture
+        id: ahk-fixture
+        if: ${{ !cancelled() }}
+        run: |
+          New-Item -ItemType Directory -Path $env:CI_OUTPUT -ErrorAction Stop | Out-Null
+          $archive = Join-Path $env:CI_OUTPUT 'AutoHotkey_2.0.30.zip'
+          Invoke-WebRequest -Uri 'https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.30/AutoHotkey_2.0.30.zip' -OutFile $archive
+          $expectedHash = '1e0ece7ecb2d5646e55758150472677996a57f9db5c83d2996d8b47b9e2f31a4'
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expectedHash) { throw 'AutoHotkey archive hash mismatch.' }
+          # Discovery reads executable metadata here; no installer or AHK script runs.
+          $fixture = Join-Path $env:LOCALAPPDATA 'Programs/AutoHotkey/v2'
+          if (Test-Path -LiteralPath $fixture) { throw 'AutoHotkey fixture destination must be absent.' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $fixture
+          $interpreter = Join-Path $fixture 'AutoHotkey64.exe'
+          if (-not (Test-Path -LiteralPath $interpreter -PathType Leaf)) { throw 'AutoHotkey fixture is missing.' }
+
+      - name: Restore locked backend and test dependencies
+        id: backend-dependencies
+        if: ${{ !cancelled() }}
+        run: |
+          dotnet restore Tests.Backend/Tests.Backend.csproj --locked-mode --configfile NuGet.Config -r win-x64
+          if ($LASTEXITCODE -ne 0) { throw 'NuGet restore failed.' }
+
+      - name: Publish backend tests
+        id: backend-publish
+        if: ${{ !cancelled() && steps.backend-dependencies.outcome == 'success' }}
+        run: |
+          dotnet publish Tests.Backend/Tests.Backend.csproj -c Release -r win-x64 --self-contained true --no-restore -o "$env:CI_OUTPUT/test-bin"
+          if ($LASTEXITCODE -ne 0) { throw 'Backend test publish failed.' }
+
+      - name: Run backend contract and continuation checks
+        id: backend-tests
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --backend --root "$env:CI_OUTPUT/backend" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/backend.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Backend checks failed.' }
+
+      - name: Run core and startup policy checks
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' && steps.ahk-fixture.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --core --root "$env:CI_OUTPUT/core" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/core.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Core checks failed.' }
+
+      - name: Run native identity regression checks
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' && steps.ahk-fixture.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --corrections --root "$env:CI_OUTPUT/corrections" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/corrections.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Native regression checks failed.' }
+
+      - name: Inspect Windows startup through WMI (read-only)
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --startup-inspection --root "$env:CI_OUTPUT/startup-inspection" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/startup-inspection.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows startup inspection failed.' }
+
+      - name: Typecheck frontend
+        if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          npm.cmd run typecheck
+          if ($LASTEXITCODE -ne 0) { throw 'Typecheck failed.' }
+
+      - name: Run Node tests with actual backend snapshot fixtures
+        if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' && steps.backend-tests.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          $env:AHK_HEADER_SNAPSHOT_INPUT = Join-Path $env:CI_OUTPUT 'backend/header-description-snapshot.json'
+          $env:AHK_FOREGROUND_ARGUMENTS_INPUT = Join-Path $env:CI_OUTPUT 'backend/foreground-host-arguments.txt'
+          $env:AHK_STARTUP_RECOVERY_INPUT = Join-Path $env:CI_OUTPUT 'backend/startup-recovery-snapshot.json'
+          npm.cmd test -- --out "$env:CI_OUTPUT/node-tests" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/node-tests.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Node tests failed.' }
+
+      - name: Build production frontend bundle
+        if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          npm.cmd run build -- --out "$env:CI_OUTPUT/frontend"
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+
+      - name: Publish production backend
+        if: ${{ !cancelled() && steps.backend-dependencies.outcome == 'success' }}
+        run: |
+          dotnet publish Backend/AhkManager.Backend.csproj -c Release -r win-x64 --self-contained true --no-restore -o "$env:CI_OUTPUT/backend-publish"
+          if ($LASTEXITCODE -ne 0) { throw 'Backend publish failed.' }
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-ci-evidence
+          path: |
+            ${{ runner.temp }}/ahk-manager-ci/*.log
+            ${{ runner.temp }}/ahk-manager-ci/backend/**/*.json
+            ${{ runner.temp }}/ahk-manager-ci/backend/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/startup-inspection/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/frontend/build-info.json
+          if-no-files-found: warn
+          retention-days: 14
