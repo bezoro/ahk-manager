@@ -67,6 +67,22 @@ function Installer-Version([string]$Installer) {
 
 function Hash([string]$Path) { return (Get-FileHash -LiteralPath (Local-Path $Path -File) -Algorithm SHA256).Hash.ToLowerInvariant() }
 
+function Save-InstallerDiagnostics([string]$Version) {
+    $index = 0
+    foreach ($root in @([IO.Path]::GetTempPath(), $env:TEMP, $env:TMP) | Select-Object -Unique) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        $source = Join-Path $root "AHK-Manager-$Version-install.log"
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+        try {
+            $source = Local-Path $source -File
+            $index++
+            Copy-Item -LiteralPath $source -Destination (Join-Path $OutputRoot "installer-$Version-diagnostics-$index.log") -Force
+            foreach ($line in (Get-Content -LiteralPath $source -Tail 30)) { Trace "NSIS $Version $line" }
+        }
+        catch { Trace "Installer diagnostic could not be copied: $($_.Exception.GetType().Name)" }
+    }
+}
+
 function Invoke-Installer([string]$Path, [bool]$Updated) {
     $Path = Local-Path $Path -File
     $expectedHash = Hash $Path
@@ -84,9 +100,11 @@ function Invoke-Installer([string]$Path, [bool]$Updated) {
             $script:unknownInstaller = $true
             throw 'Installer exit was not observed. The test will not repeat or kill it.'
         }
-        Assert-Check ($process.ExitCode -eq 0) "installer exits successfully; updated=$Updated"
+        $exitCode = $process.ExitCode
+        Trace "Installer exitCode=$exitCode; updated=$Updated"
+        Assert-Check ($exitCode -eq 0) "installer exits successfully; updated=$Updated; exitCode=$exitCode"
     }
-    finally { $process.Dispose() }
+    finally { Save-InstallerDiagnostics (Installer-Version $Path); $process.Dispose() }
 }
 
 function Read-Uninstaller {

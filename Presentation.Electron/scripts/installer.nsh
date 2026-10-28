@@ -13,15 +13,56 @@ Var /GLOBAL ahkInstallerBytes
 Var /GLOBAL ahkInstallerReceipt
 !endif
 
+; Local stage diagnostics only. Logging cannot change a guard's registers/error flag.
+; Reserve up to four bytes per character so each version's log stays within 32 KiB.
+!macro traceInstaller STAGE
+  !ifndef BUILD_UNINSTALLER
+    Push $R3
+    Push $R4
+    Push $R5
+    Push $R6
+    StrCpy $R3 0
+    ${If} ${Errors}
+      StrCpy $R3 1
+    ${EndIf}
+    ClearErrors
+    FileOpen $R4 "$TEMP\AHK-Manager-${APP_VERSION}-install.log" a
+    ${IfNot} ${Errors}
+      FileSeek $R4 0 END $R5
+      ${IfNot} ${Errors}
+      ${AndIf} $R5 >= 0
+      ${AndIf} $R5 <= 32768
+        StrLen $R6 "${STAGE}$\r$\n"
+        IntOp $R6 $R6 * 4
+        IntOp $R5 $R5 + $R6
+        ${If} $R5 <= 32768
+          FileWrite $R4 "${STAGE}$\r$\n"
+        ${EndIf}
+      ${EndIf}
+      FileClose $R4
+    ${EndIf}
+    ClearErrors
+    ${If} $R3 == 1
+      SetErrors
+    ${EndIf}
+    Pop $R6
+    Pop $R5
+    Pop $R4
+    Pop $R3
+  !endif
+!macroend
+
 LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou uma atualização autorizada pelo AHK Manager. Saia do Manager antes de continuar. A migração de versões anteriores ao protocolo de atualização 1 exige desinstalar preservando perfis e scripts e instalar a nova versão. Nenhum arquivo da instalação foi alterado por esta tentativa."
 
 !macro abortManualUpdate
+  !insertmacro traceInstaller "abort: manual-update; exit=2"
   MessageBox MB_OK|MB_ICONEXCLAMATION "$(ahkManualUpdate)" /SD IDOK
   SetErrorLevel 2
   Abort
 !macroend
 
 !macro abortInstallerCache
+  !insertmacro traceInstaller "abort: installer-cache; exit=3"
   MessageBox MB_OK|MB_ICONEXCLAMATION "Não foi possível preservar este instalador no histórico de versões. Nenhuma cópia existente será sobrescrita. Confira o acesso à pasta Updates/installers e tente novamente." /SD IDOK
   SetErrorLevel 3
   Abort
@@ -58,20 +99,24 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
     Pop $2
     ${If} $0 == -1
       !if ${REQUIRE_EXISTING} == 1
+        !insertmacro traceInstaller "directory-chain: missing; attrs=$0; win32=$2"
         !insertmacro abortManualUpdate
       !else
         ${If} $2 != 2
         ${AndIf} $2 != 3
+          !insertmacro traceInstaller "directory-chain: query-failed; attrs=$0; win32=$2"
           !insertmacro abortManualUpdate
         ${EndIf}
       !endif
     ${Else}
       IntOp $R8 $0 & 0x400
       ${If} $R8 != 0
+        !insertmacro traceInstaller "directory-chain: redirected; attrs=$0; win32=$2"
         !insertmacro abortManualUpdate
       ${EndIf}
       IntOp $R8 $0 & 0x10
       ${If} $R8 == 0
+        !insertmacro traceInstaller "directory-chain: not-directory; attrs=$0; win32=$2"
         !insertmacro abortManualUpdate
       ${EndIf}
     ${EndIf}
@@ -148,19 +193,23 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
   ${If} $0 == -1
     ${If} $2 != 2
     ${AndIf} $2 != 3
+      !insertmacro traceInstaller "cache-file: query-failed; attrs=$0; win32=$2"
       !insertmacro abortInstallerCache
     ${EndIf}
   ${Else}
     IntOp $1 $0 & 0x410
     ${If} $1 != 0
+      !insertmacro traceInstaller "cache-file: unexpected-type; attrs=$0; win32=$2"
       !insertmacro abortInstallerCache
     ${EndIf}
   ${EndIf}
 !macroend
 
 !macro validateExistingInstallerReceipt
+  !insertmacro traceInstaller "receipt: inspect-file"
   !insertmacro validateCacheFile "$ahkInstallerCacheFolder\receipt.json"
   ${If} ${FileExists} "$ahkInstallerCacheFolder\receipt.json"
+    !insertmacro traceInstaller "receipt: compare-existing"
     ClearErrors
     FileOpen $R0 "$ahkInstallerCacheFolder\receipt.json" r
     ${If} ${Errors}
@@ -181,19 +230,25 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
 
 !macro prepareInstallerCache
   StrCpy $ahkInstallerCacheFolder "$LOCALAPPDATA\Bezoro\AhkManagerElectron\Updates\installers\${APP_VERSION}"
+  !insertmacro traceInstaller "cache: path=$ahkInstallerCacheFolder"
+  !insertmacro traceInstaller "cache: inspect-create-ancestors"
   !insertmacro validateDirectoryChain "$ahkInstallerCacheFolder" 0
+  !insertmacro traceInstaller "cache: create-directory"
   ClearErrors
   CreateDirectory "$ahkInstallerCacheFolder"
   ${If} ${Errors}
     !insertmacro abortInstallerCache
   ${EndIf}
+  !insertmacro traceInstaller "cache: verify-created-directory"
   !insertmacro validateDirectoryChain "$ahkInstallerCacheFolder" 1
+  !insertmacro traceInstaller "cache: hash-source-installer"
   ${StdUtils.HashFile} $ahkInstallerHash "SHA2-256" "$EXEPATH"
   StrLen $R0 $ahkInstallerHash
   ${If} $R0 != 64
     !insertmacro abortInstallerCache
   ${EndIf}
   ${StrCase} $ahkInstallerHash "$ahkInstallerHash" "L"
+  !insertmacro traceInstaller "cache: read-source-length"
   ClearErrors
   FileOpen $R0 "$EXEPATH" r
   ${If} ${Errors}
@@ -205,32 +260,40 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
   ${OrIf} $ahkInstallerBytes <= 0
     !insertmacro abortInstallerCache
   ${EndIf}
+  !insertmacro traceInstaller "cache: inspect-existing-copy"
   !insertmacro validateCacheFile "$ahkInstallerCacheFolder\installer.exe"
   ${IfNot} ${FileExists} "$ahkInstallerCacheFolder\installer.exe"
     ; Fail-if-exists prevents overwriting a foreign or concurrently created file.
+    !insertmacro traceInstaller "cache: copy-installer"
     System::Call 'kernel32::CopyFileW(w "$EXEPATH", w "$ahkInstallerCacheFolder\installer.exe", i 1) i .r0'
     ${If} $0 == 0
       !insertmacro abortInstallerCache
     ${EndIf}
   ${EndIf}
+  !insertmacro traceInstaller "cache: hash-cached-installer"
   ${StdUtils.HashFile} $R2 "SHA2-256" "$ahkInstallerCacheFolder\installer.exe"
   ${If} $R2 != $ahkInstallerHash
     !insertmacro abortInstallerCache
   ${EndIf}
   StrCpy $ahkInstallerReceipt '{$\"schemaVersion$\":1,$\"updateProtocol$\":1,$\"version$\":$\"${APP_VERSION}$\",$\"sha256$\":$\"$ahkInstallerHash$\",$\"bytes$\":$ahkInstallerBytes}'
   !insertmacro validateExistingInstallerReceipt
+  !insertmacro traceInstaller "cache: prepared"
 !macroend
 
 ; Publish a receipt only after installation succeeds. Both files survive uninstall.
 !macro publishInstallerReceipt
+  !insertmacro traceInstaller "receipt: publish-start"
   !insertmacro validateDirectoryChain "$ahkInstallerCacheFolder" 1
+  !insertmacro traceInstaller "receipt: verify-installer-file"
   !insertmacro validateCacheFile "$ahkInstallerCacheFolder\installer.exe"
+  !insertmacro traceInstaller "receipt: hash-installer-file"
   ${StdUtils.HashFile} $R2 "SHA2-256" "$ahkInstallerCacheFolder\installer.exe"
   ${If} $R2 != $ahkInstallerHash
     !insertmacro abortInstallerCache
   ${EndIf}
   !insertmacro validateExistingInstallerReceipt
   ${IfNot} ${FileExists} "$ahkInstallerCacheFolder\receipt.json"
+    !insertmacro traceInstaller "receipt: write-temporary"
     GetTempFileName $R4 "$ahkInstallerCacheFolder"
     ClearErrors
     FileOpen $R0 "$R4" w
@@ -242,40 +305,52 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
     ${If} ${Errors}
       !insertmacro abortInstallerCache
     ${EndIf}
+    !insertmacro traceInstaller "receipt: publish-rename"
     ClearErrors
     Rename "$R4" "$ahkInstallerCacheFolder\receipt.json"
     ${If} ${Errors}
       !insertmacro abortInstallerCache
     ${EndIf}
   ${EndIf}
+  !insertmacro traceInstaller "receipt: published"
 !macroend
 
 ; preInit precedes uninstallOldVersion and all installation file/registry effects.
 !macro preInit
   !ifndef BUILD_UNINSTALLER
+    !insertmacro traceInstaller "preInit: begin; version=${APP_VERSION}"
     ${If} ${isUpdated}
+      !insertmacro traceInstaller "preInit: validate-update"
       !insertmacro validateUpdatedInstallation "installer"
     ${Else}
+      !insertmacro traceInstaller "fresh-gate: HKCU64"
       SetRegView 64
       !insertmacro rejectRegisteredInstallation HKCU
+      !insertmacro traceInstaller "fresh-gate: HKLM64"
       !insertmacro rejectRegisteredInstallation HKLM
+      !insertmacro traceInstaller "fresh-gate: HKCU32"
       SetRegView 32
       !insertmacro rejectRegisteredInstallation HKCU
+      !insertmacro traceInstaller "fresh-gate: HKLM32"
       !insertmacro rejectRegisteredInstallation HKLM
       SetRegView 64
     ${EndIf}
     !insertmacro prepareInstallerCache
+    !insertmacro traceInstaller "preInit: complete"
   !endif
 !macroend
 
 !macro customInstall
+  !insertmacro traceInstaller "customInstall: begin"
   !insertmacro publishInstallerReceipt
+  !insertmacro traceInstaller "customInstall: register-protocol"
   SetRegView 64
   ClearErrors
   WriteRegDWORD HKCU "${INSTALL_REGISTRY_KEY}" "UpdateProtocol" 1
   ${If} ${Errors}
     !insertmacro abortInstallerCache
   ${EndIf}
+  !insertmacro traceInstaller "customInstall: complete"
 !macroend
 
 !macro customUnInit
