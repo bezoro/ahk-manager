@@ -6,10 +6,12 @@
 !endif
 
 Var /GLOBAL ahkUpdateRoot
+!ifndef BUILD_UNINSTALLER
 Var /GLOBAL ahkInstallerCacheFolder
 Var /GLOBAL ahkInstallerHash
 Var /GLOBAL ahkInstallerBytes
 Var /GLOBAL ahkInstallerReceipt
+!endif
 
 LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou uma atualização autorizada pelo AHK Manager. Saia do Manager antes de continuar. A migração de versões anteriores ao protocolo de atualização 1 exige desinstalar preservando perfis e scripts e instalar a nova versão. Nenhum arquivo da instalação foi alterado por esta tentativa."
 
