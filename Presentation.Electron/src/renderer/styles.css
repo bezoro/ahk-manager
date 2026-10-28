@@ -60,3 +60,5 @@
 .updates-page{overflow-y:auto;overflow-x:hidden;padding-right:8px}
 .updates-page .updates-scroll{overflow:visible;flex:0 0 auto;min-height:auto;padding-right:0}
 .updates-page>*{flex-shrink:0}
+
+.nav-item>.nav-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:left}

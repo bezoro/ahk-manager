@@ -9,11 +9,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Release-Limits.psm1') -Force
 if ($Notes.Contains([char]0)) { throw 'Release notes cannot contain NUL.' }
 if (-not [IO.Path]::IsPathFullyQualified($InstallerPath) -or -not [IO.Path]::IsPathFullyQualified($OutputPath)) { throw 'Release paths must be absolute.' }
 if (Test-Path -LiteralPath $OutputPath) { throw 'Release manifest must be written to a fresh path.' }
 $installer = Get-Item -LiteralPath $InstallerPath
-if ($installer.PSIsContainer -or $installer.Name -cne "AHK-Manager-$Version-Setup-x64.exe" -or $installer.Length -le 0 -or $installer.Length -gt 2147483647) { throw 'Invalid release installer name or size.' }
+if ($installer.PSIsContainer -or $installer.Name -cne "AHK-Manager-$Version-Setup-x64.exe" -or -not (Test-ReleaseInstallerLength $installer.Length)) { throw 'Invalid release installer name or size; installers must be at most 1 GiB.' }
 $sha512 = Get-FileHash -LiteralPath $InstallerPath -Algorithm SHA512
 $sha512Bytes = [Convert]::FromHexString($sha512.Hash)
 $manifest = [ordered]@{

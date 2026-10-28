@@ -37,6 +37,7 @@ internal sealed class NativeApplyEffects(UpdatePlan plan, string operationDirect
     {
         log?.Invoke("Preparing a complete read-locked installation snapshot.");
         InstallationRegistration.Verify(plan.InstallDirectory, registry.Version);
+        ProfileOwnership.Verify(Path.GetDirectoryName(plan.InstallDirectory)!);
         string backup = Path.Combine(operationDirectory, "backup-installation");
         Evidence.WriteNew(Path.Combine(operationDirectory, "registry-before.json"), registry);
         snapshot = await InstallationSnapshot.Copy(plan.InstallDirectory, backup).ConfigureAwait(false);
@@ -83,8 +84,10 @@ internal sealed class NativeApplyEffects(UpdatePlan plan, string operationDirect
         // moving its partial contents. This also supports installations on D:.
         string staging = plan.InstallDirectory + ".restore-" + plan.OperationId.ToString("N");
         UpdatePaths.NoRedirects(staging);
+        ProfileOwnership.Verify(Path.GetDirectoryName(staging)!);
         _ = await InstallationSnapshot.Copy(backup.Directory, staging).ConfigureAwait(false);
         InstallationSnapshot.Verify(staging, snapshot);
+        InstallationSnapshot.RestoreSecurity(staging, snapshot);
         string? failed = null;
         if (Directory.Exists(plan.InstallDirectory))
         {
@@ -97,6 +100,7 @@ internal sealed class NativeApplyEffects(UpdatePlan plan, string operationDirect
         }
         Directory.Move(staging, plan.InstallDirectory);
         InstallationSnapshot.Verify(plan.InstallDirectory, snapshot);
+        InstallationSnapshot.VerifySecurity(plan.InstallDirectory, snapshot);
         InstallationRegistration.Restore(registry, plan.InstallDirectory);
         log?.Invoke("Previous installation files and owned registry keys restored.");
         return RecoveryState = backup with { FailedDirectory = failed };

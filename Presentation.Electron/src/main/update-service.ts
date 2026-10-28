@@ -11,6 +11,7 @@ export interface UpdateStorePort {
 export interface UpdateBoundary {
   version: string; store: UpdateStorePort;
   releases(token: string | null): Promise<RemoteUpdateRelease[]>;
+  resolve?(id: string, token: string | null): Promise<RemoteUpdateRelease>;
   download(release: RemoteUpdateRelease, token: string | null, progress: (percent: number) => void): Promise<string>;
   preflight(operationId: string, phase: 'begin' | 'commit'): Promise<boolean>;
   confirm(release: UpdateRelease): Promise<boolean>;
@@ -38,7 +39,7 @@ export class UpdateService {
     this.state = { ...this.state, ...patch };
     const versions = new Map<string, UpdateRelease>();
     for (const cached of this.local.filter(item => validUpdateVersion(item.version))) versions.set(cached.version, { id: `local:${cached.version}`, version: cached.version, publishedAt: null, notes: 'Instalador preservado neste computador.', commit: null, installed: cached.version === this.boundary.version, canInstall: cached.version !== this.boundary.version, cached: true });
-    for (const release of this.remote) versions.set(release.version, { id: release.id, version: release.version, publishedAt: release.publishedAt, notes: release.notes, commit: release.commit, installed: release.version === this.boundary.version, canInstall: release.version !== this.boundary.version, cached: this.local.some(item => item.version === release.version && item.sha256 === release.sha256 && item.bytes === release.bytes) });
+    for (const release of this.remote) versions.set(release.version, { id: release.id, version: release.version, publishedAt: release.publishedAt, notes: release.notes, commit: release.commit || null, installed: release.version === this.boundary.version, canInstall: release.version !== this.boundary.version, cached: this.local.some(item => item.version === release.version && (release.metadataOnly || item.sha256 === release.sha256 && item.bytes === release.bytes)) });
     if (!versions.has(this.boundary.version)) versions.set(this.boundary.version, { id: 'installed', version: this.boundary.version, publishedAt: null, notes: 'Versão em execução.', commit: null, installed: true, canInstall: false, cached: false });
     this.state.releases = [...versions.values()].sort((a, b) => compareVersions(b.version, a.version)).slice(0, 1000);
     this.state.availableVersion = this.state.releases.find(item => compareVersions(item.version, this.boundary.version) > 0 && item.canInstall)?.version ?? null;
@@ -80,9 +81,16 @@ export class UpdateService {
       if (!await this.boundary.preflight(operationId, 'begin')) return this.publish({ phase: 'error', error: 'Salve ou descarte as alterações e aguarde as operações antes de atualizar.' });
       if (!await this.boundary.confirm(choice)) return this.snapshot;
       this.publish({ phase: 'downloading', error: null, progress: 0 });
-      const remote = this.remote.find(item => item.id === id);
-      let target = this.local.find(item => item.version === choice.version && (!remote || item.sha256 === remote.sha256 && item.bytes === remote.bytes));
+      let remote = this.remote.find(item => item.id === id);
+      let target = this.local.find(item => item.version === choice.version && (!remote || remote.metadataOnly || item.sha256 === remote.sha256 && item.bytes === remote.bytes));
       if (target) { try { await this.boundary.store.verify(target); } catch (error) { if (!remote) throw error; target = undefined; } }
+      if (!target && remote?.metadataOnly) {
+        if (!this.boundary.resolve) throw new Error('Verifique as atualizações antes de instalar essa versão.');
+        const resolved = await this.boundary.resolve(id, this.token);
+        if (resolved.id !== remote.id || resolved.version !== remote.version || resolved.assetId !== remote.assetId || resolved.bytes !== remote.bytes || resolved.metadataOnly) throw new Error('A identidade dessa versão mudou. Verifique as atualizações novamente.');
+        remote = resolved;
+        this.remote = this.remote.map(item => item.id === id ? resolved : item);
+      }
       if (!target) {
         if (!remote) throw new Error('O instalador dessa versão não está disponível neste computador.');
         const file = await this.boundary.download(remote, this.token, percent => this.publish({ progress: Math.max(0, Math.min(100, percent)) }));

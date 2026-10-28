@@ -44,12 +44,13 @@ internal sealed class FileLease : IDisposable
 
 internal sealed class PackageLease : IDisposable
 {
+    internal const long MaximumInstallerBytes = 1024L * 1024 * 1024;
     internal readonly FileLease Installer;
     readonly FileLease receipt;
     internal PackageLease(string path, string version, string sha256, string updatesRoot)
     {
         UpdatePaths.ValidateInstallerLocation(path, version, updatesRoot);
-        Installer = FileLease.Open(path, 512L * 1024 * 1024);
+        Installer = FileLease.Open(path, MaximumInstallerBytes);
         try
         {
             if (Installer.Length == 0 || Installer.Hash() != sha256) throw new InvalidDataException("Installer checksum changed or installer is empty.");
@@ -99,6 +100,7 @@ internal static class ProfileOwnership
         UpdatePaths.NoRedirects(directory);
         using var identity = WindowsIdentity.GetCurrent(); string sid = identity.User?.Value ?? throw new UnauthorizedAccessException();
         var acl = new DirectoryInfo(directory).GetAccessControl(AccessControlSections.Owner | AccessControlSections.Access);
+        if (new RawSecurityDescriptor(acl.GetSecurityDescriptorBinaryForm(), 0).DiscretionaryAcl is null) throw new UnauthorizedAccessException("An unrestricted DACL is not trusted.");
         string owner = acl.GetOwner(typeof(SecurityIdentifier)).Value;
         var trusted = new HashSet<string>([sid, "S-1-5-18", "S-1-5-32-544"], StringComparer.Ordinal);
         if (!trusted.Contains(owner)) throw new UnauthorizedAccessException("Update cache owner is not trusted.");

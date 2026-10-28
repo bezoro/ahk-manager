@@ -1,4 +1,4 @@
-const REPOSITORY_API = 'https://api.github.com/repos/bezoro/Bezoro.AhkManager';
+const REPOSITORY_API = 'https://api.github.com/repos/bezoro/ahk-manager';
 const MANIFEST_NAME = 'ahk-manager-release.json';
 const METADATA_LIMIT = 2 * 1024 * 1024;
 const MANIFEST_LIMIT = 64 * 1024;
@@ -16,6 +16,7 @@ export interface RemoteUpdateRelease {
   sha512: string;
   bytes: number;
   installerName: string;
+  metadataOnly?: boolean;
 }
 
 function versionParts(value: unknown): number[] | null {
@@ -83,7 +84,7 @@ function parseJson(text: string): unknown {
 }
 
 interface ReleaseAsset { id: number; name: string; size: number }
-interface Candidate { id: number; version: string; publishedAt: string; target: string; manifest: ReleaseAsset; installer: ReleaseAsset }
+interface Candidate { id: number; version: string; publishedAt: string; target: string; notes: string; manifest: ReleaseAsset; installer: ReleaseAsset }
 
 function candidate(value: unknown): Candidate | null {
   if (!object(value) || value.draft !== false || value.prerelease !== false || typeof value.tag_name !== 'string') return null;
@@ -99,7 +100,11 @@ function candidate(value: unknown): Candidate | null {
     if (!object(input) || !positiveId(input.id) || typeof input.name !== 'string' || typeof input.size !== 'number' || !Number.isSafeInteger(input.size) || input.size <= 0 || input.size > maximum || input.state !== 'uploaded') throw invalidManifest();
     return { id: input.id, name: input.name, size: input.size };
   };
-  return { id: value.id, version, publishedAt: value.published_at, target: value.target_commitish, manifest: asset(manifests[0], MANIFEST_LIMIT), installer: asset(installers[0], INSTALLER_LIMIT) };
+  return { id: value.id, version, publishedAt: value.published_at, target: value.target_commitish, notes: typeof value.body === 'string' ? value.body.slice(0, 8000).replaceAll('\0', '') : '', manifest: asset(manifests[0], MANIFEST_LIMIT), installer: asset(installers[0], INSTALLER_LIMIT) };
+}
+
+function releaseFromMetadata(release: Candidate): RemoteUpdateRelease {
+  return { id: `github:${release.id}`, version: release.version, publishedAt: release.publishedAt, notes: release.notes, commit: /^[a-f0-9]{40}$/.test(release.target) ? release.target : '', assetId: release.installer.id, sha256: '', sha512: '', bytes: release.installer.size, installerName: release.installer.name, metadataOnly: true };
 }
 
 function releaseFromManifest(value: unknown, release: Candidate): RemoteUpdateRelease {
@@ -114,14 +119,14 @@ function releaseFromManifest(value: unknown, release: Candidate): RemoteUpdateRe
 export class GitHubUpdateClient {
   private readonly responses = new Map<string, { etag: string; value: unknown }>();
   private readonly manifests = new Map<string, RemoteUpdateRelease>();
+  private listed = new Map<string, Candidate>();
   private credential: string | null | undefined;
   constructor(private readonly fetcher: typeof fetch = globalThis.fetch) {}
 
   async releases(token: string | null): Promise<RemoteUpdateRelease[]> {
     try {
-      if (token !== null && !/^[A-Za-z0-9_]{1,512}$/.test(token)) throw new UpdateRequestError('O acesso ao GitHub é inválido. Configure um token com permissão de leitura deste repositório.');
-      if (this.credential !== token) { this.responses.clear(); this.manifests.clear(); this.credential = token; }
-      const found = new Map<string, RemoteUpdateRelease>();
+      this.useCredential(token);
+      const found = new Map<string, Candidate>();
       const versions = new Set<string>();
       for (let page = 1; page <= 3; page++) {
         const rows = await this.json(`${REPOSITORY_API}/releases?per_page=100&page=${page}`, token, METADATA_LIMIT, true);
@@ -129,26 +134,69 @@ export class GitHubUpdateClient {
         for (const row of rows) {
           const item = candidate(row);
           if (!item) continue;
-          const key = `${item.id}:${item.manifest.id}:${item.installer.id}`;
-          let release = this.manifests.get(key);
-          if (!release) {
-            release = releaseFromManifest(await this.json(assetUrl(item.manifest.id), token, MANIFEST_LIMIT, false), item);
-            this.manifests.set(key, release);
-            if (this.manifests.size > 600) this.manifests.delete(this.manifests.keys().next().value!);
-          } else if (release.version !== item.version || release.bytes !== item.installer.size || item.target !== 'main' && item.target !== release.commit) throw invalidManifest();
-          if (versions.has(release.version) || found.has(release.id)) throw invalidManifest();
-          versions.add(release.version); found.set(release.id, { ...release, publishedAt: item.publishedAt });
+          const id = `github:${item.id}`;
+          if (versions.has(item.version) || found.has(id)) throw invalidManifest();
+          versions.add(item.version); found.set(id, item);
         }
         if (rows.length < 100) break;
       }
-      return [...found.values()].sort((a, b) => compareVersions(b.version, a.version));
+      const sorted = [...found.values()].sort((a, b) => compareVersions(b.version, a.version));
+      // Resolve only the newest manifest during polling. Older releases are
+      // resolved immediately before installation, keeping public API use bounded.
+      if (sorted[0]) await this.resolveCandidate(sorted[0], token);
+      const result = sorted.map(item => {
+        const cached = this.cached(item);
+        return cached ? { ...cached, publishedAt: item.publishedAt } : releaseFromMetadata(item);
+      });
+      this.listed = found;
+      return result;
     } catch (error) {
       if (error instanceof UpdateRequestError) throw error;
       throw new UpdateRequestError('Não foi possível consultar as atualizações. Verifique a conexão e tente novamente.');
     }
   }
 
+  async resolve(id: string, token: string | null): Promise<RemoteUpdateRelease> {
+    try {
+      this.useCredential(token);
+      const item = this.listed.get(id);
+      if (!item) throw new UpdateRequestError('Esta versão não está no histórico consultado. Verifique as atualizações e tente novamente.');
+      return { ...await this.resolveCandidate(item, token), publishedAt: item.publishedAt };
+    } catch (error) {
+      if (error instanceof UpdateRequestError) throw error;
+      throw new UpdateRequestError('Não foi possível consultar esta versão. Verifique a conexão e tente novamente.');
+    }
+  }
+
+  private useCredential(token: string | null): void {
+    if (token !== null && !/^[A-Za-z0-9_]{1,512}$/.test(token)) throw new UpdateRequestError('O acesso ao GitHub é inválido.');
+    if (this.credential !== token) { this.responses.clear(); this.manifests.clear(); this.listed.clear(); this.credential = token; }
+  }
+
+  private requireCredential(token: string | null): void {
+    if (this.credential !== token) throw new UpdateRequestError('O acesso ao GitHub mudou durante a consulta. Verifique as atualizações novamente.');
+  }
+
+  private key(item: Candidate): string { return `${item.id}:${item.manifest.id}:${item.installer.id}`; }
+
+  private cached(item: Candidate): RemoteUpdateRelease | undefined {
+    const release = this.manifests.get(this.key(item));
+    if (release && (release.version !== item.version || release.bytes !== item.installer.size || release.installerName !== item.installer.name || item.target !== 'main' && item.target !== release.commit)) throw invalidManifest();
+    return release;
+  }
+
+  private async resolveCandidate(item: Candidate, token: string | null): Promise<RemoteUpdateRelease> {
+    this.requireCredential(token);
+    const cached = this.cached(item);
+    if (cached) return cached;
+    const release = releaseFromManifest(await this.json(assetUrl(item.manifest.id), token, MANIFEST_LIMIT, false), item);
+    this.manifests.set(this.key(item), release);
+    if (this.manifests.size > 600) this.manifests.delete(this.manifests.keys().next().value!);
+    return release;
+  }
+
   private async json(url: string, token: string | null, maximum: number, metadata: boolean): Promise<unknown> {
+    this.requireCredential(token);
     let location = new URL(url);
     const cached = metadata ? this.responses.get(url) : undefined;
     const signal = AbortSignal.timeout(15000);
@@ -162,6 +210,7 @@ export class GitHubUpdateClient {
         if (cached && metadata) headers['If-None-Match'] = cached.etag;
       }
       const response = await this.fetcher(location.href, { method: 'GET', headers, redirect: 'manual', signal });
+      this.requireCredential(token);
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const redirect = response.headers.get('location');
         await response.body?.cancel();
@@ -172,11 +221,11 @@ export class GitHubUpdateClient {
         location = next; continue;
       }
       if (response.status === 304 && cached && metadata && api) return cached.value;
+      if (response.status === 429 || response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0') { await response.body?.cancel(); throw new UpdateRequestError('O GitHub limitou as consultas de atualização. Aguarde alguns minutos e tente novamente.'); }
       if ([401, 403, 404].includes(response.status)) {
         await response.body?.cancel();
-        throw new UpdateRequestError('Não foi possível acessar as versões no GitHub. Configure um token com permissão de leitura deste repositório e tente novamente.');
+        throw new UpdateRequestError('Não foi possível acessar as versões no GitHub. Verifique a conexão e tente novamente.');
       }
-      if (response.status === 429) { await response.body?.cancel(); throw new UpdateRequestError('O GitHub limitou as consultas de atualização. Aguarde alguns minutos e tente novamente.'); }
       if (response.status !== 200 || !response.body) { await response.body?.cancel(); throw new UpdateRequestError('O GitHub não respondeu à consulta de atualizações. Tente novamente mais tarde.'); }
       const length = response.headers.get('content-length');
       if (length !== null && (!/^\d+$/.test(length) || Number(length) > maximum)) { await response.body.cancel(); throw invalidManifest(); }
@@ -193,6 +242,7 @@ export class GitHubUpdateClient {
       let text: string;
       try { text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts)); } catch { throw invalidManifest(); }
       const value = parseJson(text);
+      this.requireCredential(token);
       const etag = response.headers.get('etag');
       if (metadata && api && etag && etag.length <= 512) this.responses.set(url, { etag, value });
       return value;

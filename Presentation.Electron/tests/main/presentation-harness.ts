@@ -27,7 +27,7 @@ const fixtureSnapshot:ManagerSnapshot={...snapshot(),revision:'1',collections:[{
   {...example,id:'77777777-7777-7777-7777-777777777777',friendlyName:'Modo de concentração',path:'C:\\FixtureIsolada\\Foco.ahk',hotkeys:[{chord:'Ctrl + Alt + F',normalizedChord:'^!F',origin:'Manual',context:null,sourcePath:null,line:null,isRemap:false,possibleConflict:true}]},
 ],issues:[{code:'PartialAnalysis',detail:'FIXTURE ISOLADA — dados de teste; nenhum script real.',scriptId:null}],activity:[{id:'88888888-8888-8888-8888-888888888888',timestamp:new Date().toISOString(),scriptId,operation:'Start',outcome:'Confirmed',code:'None',detail:'Fixture de apresentação; nenhum processo foi iniciado.'}],runningCount:1,problemCount:2};
 let state:HostState={snapshot:fixtureSnapshot,connection:'ready',error:null,busy:false,authorityMode:'Normal',administrationPending:false};
-let updates:UpdateState={...emptyUpdateState(),currentVersion:'1.1.0'};
+let updates:UpdateState={...emptyUpdateState(),currentVersion:'1.2.1'};
 const currentTheme=():ThemeState=>({dark:nativeTheme.shouldUseDarkColors,accent:`#${systemPreferences.getAccentColor().slice(0,6)}`,highContrast:nativeTheme.shouldUseHighContrastColors,reducedMotion:!systemPreferences.getAnimationSettings().shouldRenderRichAnimation,material});
 const write=(name:string,value:unknown)=>{const file=path.join(output,name);fs.writeFileSync(file+'.tmp',JSON.stringify(value,null,2));fs.renameSync(file+'.tmp',file);};
 function report(){write('state.json',{pid:process.pid,hwnd:window.getNativeWindowHandle().readBigUInt64LE().toString(),bounds:window.getBounds(),contentBounds:window.getContentBounds(),visible:window.isVisible(),focused:window.isFocused(),fixture:true,theme:currentTheme(),versions:process.versions,backend:null});}

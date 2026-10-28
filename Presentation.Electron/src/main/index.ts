@@ -141,7 +141,7 @@ async function configureUpdates():Promise<void> {
   network.setPermissionCheckHandler(()=>false);
   network.webRequest.onBeforeRequest((details,callback)=>{
     let allowed=false;
-    try { const url=new URL(details.url);allowed=url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&(url.hostname==='api.github.com'&&url.pathname.startsWith('/repos/bezoro/Bezoro.AhkManager/releases')||['release-assets.githubusercontent.com','objects.githubusercontent.com'].includes(url.hostname)); } catch { /* Only the fixed update origin is permitted. */ }
+    try { const url=new URL(details.url);allowed=url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&(url.hostname==='api.github.com'&&url.pathname.startsWith('/repos/bezoro/ahk-manager/releases')||['release-assets.githubusercontent.com','objects.githubusercontent.com'].includes(url.hostname)); } catch { /* Only the fixed update origin is permitted. */ }
     callback({cancel:!allowed});
   });
   network.webRequest.onBeforeSendHeaders((details,callback)=>{
@@ -153,7 +153,7 @@ async function configureUpdates():Promise<void> {
   updateStore=new UpdateStore(root,{available:()=>safeStorage.isEncryptionAvailable(),encrypt:value=>safeStorage.encryptString(value),decrypt:value=>safeStorage.decryptString(value)});
   const client=new GitHubUpdateClient(network.fetch.bind(network) as typeof fetch);
   updates=new UpdateService({
-    version:app.getVersion(),store:updateStore,releases:token=>client.releases(token),download:downloadRelease,
+    version:app.getVersion(),store:updateStore,releases:token=>client.releases(token),resolve:(id,token)=>client.resolve(id,token),download:downloadRelease,
     preflight:(operationId,phase)=>{
       const lease=documentLease;
       return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>!!lease&&!!guard?.current(lease)&&!!window?.isFocused()&&!window.isDestroyed()&&!quitting&&!updateApplying&&!adoptionPending&&!administration?.active&&!stopExit.active&&!controller?.state.busy&&!controller?.state.administrationPending);

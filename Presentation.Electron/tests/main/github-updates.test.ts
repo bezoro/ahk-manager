@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assetUrl, compareVersions, GitHubUpdateClient, validUpdateVersion } from '../../src/main/github-updates.js';
 
-const API = 'https://api.github.com/repos/bezoro/Bezoro.AhkManager';
+const API = 'https://api.github.com/repos/bezoro/ahk-manager';
 const LIST = `${API}/releases?per_page=100&page=1`;
 const TOKEN = 'github_pat_private_value_1234567890';
 const DATE = '2026-10-28T12:00:00.000Z';
@@ -49,7 +49,9 @@ test('only complete stable protocol releases are offered, sorted by version, usi
   const result = await client.releases(TOKEN);
   assert.deepEqual(result.map(item => item.version), ['1.2.10', '1.2.9']);
   assert.deepEqual(result[0], { id: 'github:20', version: '1.2.10', publishedAt: DATE, notes: newest.manifest.notes, commit: COMMIT, assetId: 201, sha256: 'b'.repeat(64), sha512: SHA512, bytes: 123456, installerName: newest.manifest.installer.name });
-  assert.deepEqual(calls.map(call => call.url), [LIST, assetUrl(100), assetUrl(200)]);
+  assert.equal(result[1]!.metadataOnly, true);
+  assert.equal(result[1]!.sha256, '');
+  assert.deepEqual(calls.map(call => call.url), [LIST, assetUrl(200)]);
   for (const call of calls) {
     const headers = new Headers(call.init.headers);
     assert.equal(headers.get('authorization'), `Bearer ${TOKEN}`);
@@ -100,6 +102,68 @@ test('ETag revalidation avoids downloading immutable manifests again and changin
   assert.equal(assets, 1);
   assert.deepEqual(await client.releases(null), first);
   assert.equal(lists, 3); assert.equal(assets, 2);
+});
+
+test('a public history of one hundred versions fetches only the newest manifest and resolves a previous version on demand', async () => {
+  const history = Array.from({ length: 100 }, (_, index) => fixture(`1.2.${index}`, index + 1));
+  const manifests = new Map(history.map(item => [assetUrl(item.release.assets[0]!.id), item.manifest]));
+  const { client, calls } = clientFor((url, init) => {
+    assert.equal(new Headers(init.headers).has('authorization'), false);
+    if (url === LIST) return json(history.map(item => ({ ...item.release, body: `Notas públicas ${item.manifest.version}` })));
+    if (url === `${API}/releases?per_page=100&page=2`) return json([]);
+    return json(manifests.get(url));
+  });
+  const result = await client.releases(null);
+  assert.equal(result.length, 100);
+  assert.equal(result[0]!.version, '1.2.99');
+  assert.equal(result[0]!.metadataOnly, undefined);
+  assert.equal(result.filter(item => item.metadataOnly).length, 99);
+  assert.equal(result[1]!.notes, 'Notas públicas 1.2.98');
+  assert.equal(result[1]!.commit, COMMIT);
+  assert.equal(result[1]!.sha256, '');
+  assert.equal(result[1]!.sha512, '');
+  assert.deepEqual(calls.map(call => call.url), [LIST, `${API}/releases?per_page=100&page=2`, assetUrl(1000)]);
+  const older = await client.resolve('github:99', null);
+  assert.equal(older.version, '1.2.98');
+  assert.equal(older.sha256, 'b'.repeat(64));
+  assert.equal(older.metadataOnly, undefined);
+  assert.equal(calls.at(-1)!.url, assetUrl(990));
+  const count = calls.length;
+  assert.deepEqual(await client.resolve('github:99', null), older);
+  assert.equal(calls.length, count, 'A resolved immutable manifest is reused');
+});
+
+test('older manifests are checked before installation while unknown IDs and credential changes cannot select arbitrary assets', async () => {
+  const latest = fixture('1.2.8', 20), previous = fixture('1.2.7', 10);
+  const { client, calls } = clientFor(url => url === LIST ? json([
+    latest.release, { ...previous.release, target_commitish: 'main', body: 'a'.repeat(8100) + '\0' },
+  ]) : json(url === assetUrl(200) ? latest.manifest : { ...previous.manifest, installer: { ...previous.manifest.installer, sha256: 'bad' } }));
+  await assert.rejects(client.resolve('github:10', null), /histórico consultado/);
+  assert.equal(calls.length, 0);
+  const history = await client.releases(null);
+  assert.equal(history[1]!.metadataOnly, true);
+  assert.equal(history[1]!.notes.length, 8000);
+  assert.equal(history[1]!.commit, '');
+  await assert.rejects(client.resolve('github:10', null), /inválidas/);
+  const count = calls.length;
+  for (const id of ['github:999', assetUrl(100), '../installer.exe']) await assert.rejects(client.resolve(id, null), /histórico consultado/);
+  assert.equal(calls.length, count);
+  await assert.rejects(client.resolve('github:20', TOKEN), /histórico consultado/);
+  assert.equal(calls.length, count, 'A credential change requires a fresh authenticated catalog');
+});
+
+test('an in-flight response from an older credential cannot repopulate the new credential cache', async () => {
+  const { release, manifest } = fixture();
+  let finish!: (response: Response) => void;
+  const { client, calls } = clientFor(url => url === LIST && calls.length === 1 ? new Promise<Response>(resolve => { finish = resolve; }) : url === LIST ? json([release]) : json(manifest));
+  const older = client.releases(TOKEN);
+  await client.releases(null);
+  const rejected = assert.rejects(older, /mudou durante a consulta/);
+  finish(json([release]));
+  await rejected;
+  const resolved = await client.resolve('github:10', null);
+  assert.equal(resolved.version, release.tag_name.slice(1));
+  assert.equal(calls.filter(call => call.url === assetUrl(100)).length, 1);
 });
 
 test('replacement asset IDs cause the manifest to be fetched and checked again', async () => {

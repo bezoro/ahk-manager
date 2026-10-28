@@ -8,6 +8,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Release-Limits.psm1') -Force
 if (-not [IO.Path]::IsPathFullyQualified($InstallerPath) -or -not [IO.Path]::IsPathFullyQualified($ManifestPath)) { throw 'Release paths must be absolute.' }
 if ([IO.Path]::GetFileName($ManifestPath) -cne 'ahk-manager-release.json') { throw 'Unexpected release manifest name.' }
 $manifestFile = Get-Item -LiteralPath $ManifestPath
@@ -40,7 +41,7 @@ if ($manifest.schemaVersion -ne 1 -or $manifest.updateProtocol -ne 1 -or $manife
 $date = [DateTimeOffset]::MinValue
 if ($manifest.publishedAt -isnot [string] -or $manifest.publishedAt -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$' -or -not [DateTimeOffset]::TryParse($manifest.publishedAt, [ref]$date)) { throw 'Invalid publication timestamp.' }
 $installer = Get-Item -LiteralPath $InstallerPath
-if ($installer.PSIsContainer -or $installer.Name -cne $manifest.installer.name -or $installer.Name -cne "AHK-Manager-$($manifest.version)-Setup-x64.exe" -or $installer.Length -ne $manifest.installer.bytes -or $installer.Length -le 0 -or $installer.Length -gt 2147483647) { throw 'Release installer identity or size mismatch.' }
+if ($installer.PSIsContainer -or $installer.Name -cne $manifest.installer.name -or $installer.Name -cne "AHK-Manager-$($manifest.version)-Setup-x64.exe" -or $installer.Length -ne $manifest.installer.bytes -or -not (Test-ReleaseInstallerLength $installer.Length)) { throw 'Release installer identity or size mismatch; installers must be at most 1 GiB.' }
 $sha256 = (Get-FileHash -LiteralPath $InstallerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $sha512 = [Convert]::ToBase64String([Convert]::FromHexString((Get-FileHash -LiteralPath $InstallerPath -Algorithm SHA512).Hash))
 if ($manifest.installer.sha256 -cne $sha256 -or $manifest.installer.sha512 -cne $sha512) { throw 'Release installer hash mismatch.' }

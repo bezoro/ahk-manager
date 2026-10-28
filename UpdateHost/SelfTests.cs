@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.AccessControl;
+using System.Security.Principal;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
@@ -40,6 +42,12 @@ internal static class SelfTests
         var receipt = new UpdateReceipt(1, 1, plan.Version, packageHash.ToUpperInvariant(), new FileInfo(plan.InstallerPath).Length);
         await File.WriteAllBytesAsync(receiptPath, JsonSerializer.SerializeToUtf8Bytes(receipt, UpdateProtocol.Json));
         using (var verified = new PackageLease(plan.InstallerPath, plan.Version, packageHash, root)) Check(verified.Installer.Length > 0, "cached package accepts matching protocol receipt and uppercase NSIS checksum");
+        Check(PackageLease.MaximumInstallerBytes == 1024L * 1024 * 1024, "installer size contract is one GiB independently of the snapshot file limit");
+        string overLimit = Path.Combine(root, "oversized-inert-package.exe");
+        using (var sparse = new FileStream(overLimit, FileMode.CreateNew, FileAccess.Write, FileShare.None)) sparse.SetLength(PackageLease.MaximumInstallerBytes + 1);
+        bool oversized = false; try { using var invalid = FileLease.Open(overLimit, PackageLease.MaximumInstallerBytes); } catch (InvalidDataException) { oversized = true; }
+        Check(oversized, "an installer exceeding one GiB is refused before hashing or execution");
+        using (var fixture = new FileStream(overLimit, FileMode.Open, FileAccess.Write, FileShare.None)) fixture.SetLength(0);
         foreach (var changedReceipt in new[] { receipt with { UpdateProtocol = 0 }, receipt with { Version = "1.2.0" }, receipt with { Bytes = 1 }, receipt with { Sha256 = new string('b', 64) } })
         {
             await File.WriteAllBytesAsync(receiptPath, JsonSerializer.SerializeToUtf8Bytes(changedReceipt, UpdateProtocol.Json));
@@ -65,6 +73,47 @@ internal static class SelfTests
         await File.WriteAllTextAsync(Path.Combine(copy, "foreign-user-file.txt"), "changed after backup");
         bool changedCopy = false; try { InstallationSnapshot.Verify(copy, manifest); } catch (IOException) { changedCopy = true; }
         Check(changedCopy, "a modified backup cannot authorize restoration");
+        string aclParent = Path.Combine(root, "permission-parent"); Directory.CreateDirectory(aclParent);
+        var parentAcl = new DirectoryInfo(aclParent).GetAccessControl();
+        parentAcl.AddAccessRule(new(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null), FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(aclParent).SetAccessControl(parentAcl);
+        string secured = Path.Combine(aclParent, "original"), aclBackup = Path.Combine(root, "permission-backup"), staging = Path.Combine(aclParent, "restoration-staging");
+        SnapshotSecurity.CreatePrivateDirectory(secured);
+        var rootAcl = new DirectoryInfo(secured).GetAccessControl();
+        rootAcl.AddAccessRule(new(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null), FileSystemRights.ReadAndExecute, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(secured).SetAccessControl(rootAcl);
+        Directory.CreateDirectory(Path.Combine(secured, "inherited"));
+        SnapshotSecurity.CreatePrivateDirectory(Path.Combine(secured, "protected"));
+        await File.WriteAllTextAsync(Path.Combine(secured, "inherited", "inherited.txt"), "inherited read access");
+        string privateFile = Path.Combine(secured, "inherited", "protected-file.txt"); await File.WriteAllTextAsync(privateFile, "explicit private access");
+        var fileAcl = new FileInfo(privateFile).GetAccessControl(); fileAcl.SetAccessRuleProtection(true, false);
+        using (var identity = WindowsIdentity.GetCurrent()) fileAcl.AddAccessRule(new(identity.User!, FileSystemRights.FullControl, AccessControlType.Allow));
+        new FileInfo(privateFile).SetAccessControl(fileAcl);
+        var aclManifest = await InstallationSnapshot.Copy(secured, aclBackup);
+        _ = await InstallationSnapshot.Copy(aclBackup, staging);
+        InstallationSnapshot.VerifyPrivate(aclBackup, aclManifest); InstallationSnapshot.VerifyPrivate(staging, aclManifest);
+        Check(SnapshotSecurity.Read(staging, true) != aclManifest.RootDacl, "backup and staging remain private under a parent granting Users full control");
+        InstallationSnapshot.RestoreSecurity(staging, aclManifest); InstallationSnapshot.VerifySecurity(staging, aclManifest);
+        Check(true, "restoration preserves root directory file and protected child DACLs with original inheritance flags");
+        string published = Path.Combine(aclParent, "restored"); Directory.Move(staging, published); InstallationSnapshot.VerifySecurity(published, aclManifest);
+        Check(true, "publishing the restored directory does not broaden its original DACLs");
+        string refusedStaging = Path.Combine(aclParent, "refused-staging"); _ = await InstallationSnapshot.Copy(aclBackup, refusedStaging);
+        parentAcl.AddAccessRule(new(new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null), FileSystemRights.ReadAndExecute, InheritanceFlags.None, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(aclParent).SetAccessControl(parentAcl);
+        bool changedParent = false; try { InstallationSnapshot.RestoreSecurity(refusedStaging, aclManifest); } catch (IOException) { changedParent = true; }
+        InstallationSnapshot.VerifyPrivate(refusedStaging, aclManifest);
+        Check(changedParent, "changed parent permissions refuse recovery while staging still has its private DACL");
+        string unrestricted = Path.Combine(root, "unrestricted-empty-fixture"); SnapshotSecurity.CreatePrivateDirectory(unrestricted);
+        string privateDacl = SnapshotSecurity.Read(unrestricted, true);
+        try
+        {
+            SnapshotSecurity.Write(unrestricted, true, "D:NO_ACCESS_CONTROL");
+            bool untrusted = false, notPrivate = false;
+            try { ProfileOwnership.Verify(unrestricted); } catch (UnauthorizedAccessException) { untrusted = true; }
+            try { SnapshotSecurity.VerifyPrivate(unrestricted, true); } catch (UnauthorizedAccessException) { notPrivate = true; }
+            Check(untrusted && notPrivate, "a null DACL granting everyone access is never mistaken for an empty private DACL");
+        }
+        finally { SnapshotSecurity.Write(unrestricted, true, privateDacl); }
         string link = Path.Combine(original, "linked.txt");
         if (!Native.CreateHardLink(link, Path.Combine(original, "foreign-user-file.txt"), 0)) throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
         bool linked = false; try { await InstallationSnapshot.Copy(original, Path.Combine(root, "refused-link-copy")); } catch (IOException) { linked = true; }

@@ -8,7 +8,7 @@ Abra **Atualizações**, confira a versão e pressione **Atualizar**. O download
 
 O histórico reúne Releases compatíveis e instaladores preservados neste computador. **Voltar para esta versão** usa o mesmo processo de verificação e instalação, permitindo downgrade somente após uma escolha explícita. Os dados do perfil e os scripts permanecem atuais; o retorno troca o aplicativo, sem desfazer edições feitas pelo usuário.
 
-Releases de um repositório público podem ser consultadas e baixadas sem autenticação. Esse é o fluxo padrão. Se o repositório estiver privado ou o GitHub limitar as consultas, o acesso avançado aceita opcionalmente um token com acesso a `bezoro/Bezoro.AhkManager` e permissão **Contents: Read-only**. A credencial fica cifrada por `safeStorage`, que usa a proteção do Windows. O aplicativo recusa armazenamento sem criptografia. O renderer só recebe a indicação de que o acesso foi configurado; não recebe o token salvo. **Remover acesso** apaga a credencial.
+Releases de um repositório público podem ser consultadas e baixadas sem autenticação. Esse é o fluxo padrão. Se o repositório estiver privado ou o GitHub limitar as consultas, o acesso avançado aceita opcionalmente um token com acesso a `bezoro/ahk-manager` e permissão **Contents: Read-only**. A credencial fica cifrada por `safeStorage`, que usa a proteção do Windows. O aplicativo recusa armazenamento sem criptografia. O renderer só recebe a indicação de que o acesso foi configurado; não recebe o token salvo. **Remover acesso** apaga a credencial.
 
 ## Publicação e integridade
 

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Badge, Button, Input, ProgressBar, Spinner } from '@fluentui/react-components';
 import { ArrowClockwiseRegular, ArrowDownloadRegular, HistoryRegular } from '@fluentui/react-icons';
-import type { UpdateRelease, UpdateState } from '../../shared/updates.js';
+import { isEarlierUpdateVersion, type UpdateRelease, type UpdateState } from '../../shared/updates.js';
 import { text } from '../resources/pt-BR.js';
 
 interface Props {
@@ -15,6 +15,11 @@ function date(value: string | null): string {
   if (!value) return text.updateDateUnavailable;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? text.updateDateUnavailable : parsed.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+
+function checkedAt(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? text.updateDateUnavailable : parsed.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
 export function Updates({ state, onState, installBlockedReason, recovery }: Props): React.ReactElement {
@@ -49,7 +54,7 @@ export function Updates({ state, onState, installBlockedReason, recovery }: Prop
     <div className="updates-summary" aria-labelledby="updates-current-title">
       <div><p className="muted" id="updates-current-title">{text.updateCurrentVersion}</p><h2>{state.currentVersion || text.updateLoadingVersion}</h2>
         <p className="updates-availability">{state.availableVersion ? `${text.updateAvailableVersion} ${state.availableVersion}` : state.error ? text.updateLatestUnknown : state.lastCheckedAt ? text.updateCurrent : text.updateNotChecked}</p>
-        <p className="muted">{state.lastCheckedAt ? `${text.updateLastChecked} ${date(state.lastCheckedAt)}` : text.updateAutomaticHint}</p>
+        <p className="muted">{state.lastCheckedAt ? `${text.updateLastChecked} ${checkedAt(state.lastCheckedAt)}` : text.updateAutomaticHint}</p>
       </div>
       <div className="updates-summary-actions">
         {available && install(available, text.updateInstall, true)}
@@ -71,7 +76,7 @@ export function Updates({ state, onState, installBlockedReason, recovery }: Prop
             {release.installed ? <Badge appearance="tint" color="success">{text.updateInstalled}</Badge> : release.version === state.availableVersion ? <Badge appearance="tint" color="brand">{text.updateNew}</Badge> : null}
           </div>
           <p className="update-release-notes selectable">{release.notes || text.updateNoNotes}</p>
-          <div className="update-release-actions">{!release.installed && install(release, release.version === state.availableVersion ? text.updateInstallVersion : text.updateRollback)}
+          <div className="update-release-actions">{!release.installed && install(release, isEarlierUpdateVersion(release.version, state.currentVersion) ? text.updateRollback : text.updateInstallVersion)}
             <span className="muted">{release.cached ? text.updateCached : !release.canInstall && !release.installed ? text.updateInstallerUnavailable : ''}</span>
           </div>
         </li>)}</ol> : <p className="update-history-empty">{text.updateNoHistory}</p>}

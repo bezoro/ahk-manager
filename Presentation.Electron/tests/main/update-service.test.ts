@@ -13,6 +13,7 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(e
 const hash = 'a'.repeat(64);
 const cached = (version: string): CachedInstaller => ({ version, installerPath: `/fixture/${version}/installer.exe`, sha256: hash, bytes: 123 });
 const release = (version = '1.2.10', id = `github:${version}`): RemoteUpdateRelease => ({ id, version, publishedAt: '2026-10-28T00:00:00Z', notes: `Fixture release ${version}`, commit: 'b'.repeat(40), assetId: 42, sha256: hash, sha512: Buffer.alloc(64, 7).toString('base64'), bytes: 123, installerName: `AHK-Manager-${version}-Setup-x64.exe` });
+const metadata = (version = '1.2.0'): RemoteUpdateRelease => ({ ...release(version), metadataOnly: true, sha256: '', sha512: '', commit: '' });
 
 class Store implements UpdateStorePort {
   items: CachedInstaller[] = [];
@@ -39,12 +40,14 @@ function fixture() {
   const store = new Store();
   const notifications: UpdateState[] = [];
   const queriedTokens: Array<string | null> = [];
+  const resolved: Array<{ id: string; token: string | null }> = [];
   const downloaded: RemoteUpdateRelease[] = [];
   const applied: Array<{ operationId: string; target: CachedInstaller }> = [];
   const preflights: Array<{ operationId: string; phase: 'begin' | 'commit' }> = [];
   const confirmed: string[] = [];
   const hooks = {
     releases: async (_token: string | null): Promise<RemoteUpdateRelease[]> => [release()],
+    resolve: async (_id: string, _token: string | null): Promise<RemoteUpdateRelease> => release('1.2.0'),
     download: async (_item: RemoteUpdateRelease, _token: string | null, progress: (value: number) => void): Promise<string> => { progress(60); return '/fixture/downloaded.exe'; },
     preflight: async (_operationId: string, _phase: 'begin' | 'commit'): Promise<boolean> => true,
     confirm: async (): Promise<boolean> => true,
@@ -53,13 +56,14 @@ function fixture() {
   const boundary: UpdateBoundary = {
     version: '1.2.2', store,
     releases: async token => { queriedTokens.push(token); return hooks.releases(token); },
+    resolve: async (id, token) => { resolved.push({ id, token }); return hooks.resolve(id, token); },
     download: async (item, token, progress) => { downloaded.push(item); return hooks.download(item, token, progress); },
     preflight: async (operationId, phase) => { preflights.push({ operationId, phase }); return hooks.preflight(operationId, phase); },
     confirm: async item => { confirmed.push(item.id); return hooks.confirm(); },
     apply: async (operationId, target) => { applied.push({ operationId, target }); await hooks.apply(); },
     changed: state => { notifications.push(state); },
   };
-  return { service: new UpdateService(boundary), store, hooks, notifications, queriedTokens, downloaded, applied, preflights, confirmed };
+  return { service: new UpdateService(boundary), boundary, store, hooks, notifications, queriedTokens, resolved, downloaded, applied, preflights, confirmed };
 }
 
 test('update checks order numeric versions and expose local rollback history without downloading or applying', async () => {
@@ -219,4 +223,106 @@ test('unavailable history identity cannot download or install a different releas
   const f = fixture(); await f.service.check(); const state = await f.service.install('github:removed-or-forged');
   assert.equal(state.phase, 'error'); assert.match(state.error!, /não está mais disponível/);
   assert.deepEqual(f.preflights, []); assert.deepEqual(f.downloaded, []); assert.equal(f.applied.length, 0);
+});
+
+test('public history checking leaves older manifests lazy and never resolves or downloads them automatically', async () => {
+  const f = fixture(); f.hooks.releases = async () => [release(), metadata('1.2.0'), metadata('1.2.1')];
+  const state = await f.service.check();
+  assert.deepEqual(state.releases.map(item => item.version), ['1.2.10', '1.2.2', '1.2.1', '1.2.0']);
+  assert.equal(state.availableVersion, '1.2.10'); assert.equal(state.accessConfigured, false);
+  assert.deepEqual(f.queriedTokens, [null]); assert.deepEqual(f.resolved, []);
+  assert.deepEqual(f.downloaded, []); assert.equal(f.applied.length, 0);
+});
+
+test('explicitly selecting an older metadata-only release resolves that exact version before download and commit', async () => {
+  const f = fixture(); f.hooks.releases = async () => [release(), metadata()];
+  await f.service.check(); const state = await f.service.install(metadata().id);
+  assert.deepEqual(f.resolved, [{ id: metadata().id, token: null }]);
+  assert.equal(f.downloaded.length, 1); assert.deepEqual(f.downloaded[0], release('1.2.0'));
+  assert.equal(f.applied.length, 1); assert.equal(f.applied[0]!.target.version, '1.2.0');
+  assert.equal(f.applied[0]!.target.sha256, hash); assert.equal(state.phase, 'installing');
+  assert.deepEqual(f.preflights.map(item => item.phase), ['begin', 'commit']);
+  assert.equal(f.preflights[0]!.operationId, f.preflights[1]!.operationId);
+});
+
+test('missing lazy resolver or a failed manifest request cannot reach download, cache or apply', async () => {
+  for (const missing of [true, false]) {
+    const f = fixture(); f.hooks.releases = async () => [metadata()];
+    if (missing) delete f.boundary.resolve;
+    else f.hooks.resolve = async () => { throw new Error('Fixture manifest unavailable.'); };
+    await f.service.check(); const state = await f.service.install(metadata().id);
+    assert.equal(state.phase, 'error'); assert.equal(state.progress, null); assert.equal(f.service.busy, false);
+    assert.equal(f.resolved.length, missing ? 0 : 1); assert.deepEqual(f.downloaded, []); assert.deepEqual(f.store.cachedSources, []);
+    assert.equal(f.applied.length, 0); assert.deepEqual(f.preflights.map(item => item.phase), ['begin']);
+  }
+});
+
+test('resolved manifest must retain release id, version, asset id, byte count and complete metadata', async () => {
+  const complete = release('1.2.0');
+  for (const changed of [
+    { ...complete, id: 'github:another-release' },
+    { ...complete, version: '1.2.1' },
+    { ...complete, assetId: complete.assetId + 1 },
+    { ...complete, bytes: complete.bytes + 1 },
+    { ...complete, metadataOnly: true },
+  ]) {
+    const f = fixture(); f.hooks.releases = async () => [metadata()]; f.hooks.resolve = async () => changed;
+    await f.service.check(); const state = await f.service.install(metadata().id);
+    assert.equal(state.phase, 'error'); assert.match(state.error!, /identidade/);
+    assert.deepEqual(f.downloaded, []); assert.deepEqual(f.store.cachedSources, []); assert.equal(f.applied.length, 0);
+    assert.deepEqual(f.preflights.map(item => item.phase), ['begin']);
+  }
+});
+
+test('a verified complete local installer stays usable offline without requesting a remote manifest', async () => {
+  const f = fixture(); f.store.items = [cached('1.2.0')];
+  f.hooks.releases = async () => { throw new Error('Fixture offline.'); };
+  f.hooks.resolve = async () => { throw new Error('A cached local choice must not contact the API.'); };
+  await f.service.initialize(); await f.service.check(); const state = await f.service.install('local:1.2.0');
+  assert.equal(state.phase, 'installing'); assert.deepEqual(f.resolved, []); assert.deepEqual(f.downloaded, []);
+  assert.equal(f.applied.length, 1); assert.deepEqual(f.applied[0]!.target, cached('1.2.0'));
+});
+
+test('metadata-only GitHub history preserves a complete cached rollback even when the next network check fails', async () => {
+  const f = fixture(); f.store.items = [cached('1.2.0')]; f.hooks.releases = async () => [metadata()];
+  f.hooks.resolve = async () => { throw new Error('Fixture offline after history was listed.'); };
+  await f.service.initialize(); const listed = await f.service.check();
+  assert.equal(listed.releases.find(item => item.id === metadata().id)?.cached, true);
+  f.hooks.releases = async () => { throw new Error('Fixture offline.'); };
+  assert.equal((await f.service.check()).phase, 'error');
+  const state = await f.service.install(metadata().id);
+  assert.equal(state.phase, 'installing'); assert.deepEqual(f.resolved, []); assert.deepEqual(f.downloaded, []);
+  assert.equal(f.applied.length, 1); assert.deepEqual(f.applied[0]!.target, cached('1.2.0'));
+});
+
+test('a corrupt installer behind metadata-only history resolves its manifest and downloads a verified replacement', async () => {
+  const f = fixture(); f.store.items = [cached('1.2.0')]; f.store.corrupt.add('1.2.0'); f.hooks.releases = async () => [metadata()];
+  await f.service.check(); const state = await f.service.install(metadata().id);
+  assert.equal(state.phase, 'installing'); assert.deepEqual(f.resolved, [{ id: metadata().id, token: null }]);
+  assert.equal(f.downloaded.length, 1); assert.deepEqual(f.downloaded[0], release('1.2.0'));
+  assert.equal(f.store.cachedSources.length, 1); assert.equal(f.store.corrupt.has('1.2.0'), false);
+  assert.equal(f.applied.length, 1); assert.equal(f.applied[0]!.target.sha256, hash);
+});
+
+test('a corrupt cached historical installer cannot bypass unavailable lazy metadata while offline', async () => {
+  const f = fixture(); f.store.items = [cached('1.2.0')]; f.store.corrupt.add('1.2.0'); f.hooks.releases = async () => [metadata()];
+  f.hooks.resolve = async () => { throw new Error('Fixture historical manifest offline.'); };
+  await f.service.check(); const state = await f.service.install(metadata().id);
+  assert.equal(state.phase, 'error'); assert.equal(f.service.busy, false); assert.equal(f.resolved.length, 1);
+  assert.deepEqual(f.downloaded, []); assert.deepEqual(f.store.cachedSources, []); assert.equal(f.applied.length, 0);
+  assert.equal(f.store.corrupt.has('1.2.0'), true);
+});
+
+test('a pending lazy manifest resolution owns the installation operation and cannot be duplicated or replaced by a check', async () => {
+  const f = fixture(); f.hooks.releases = async () => [metadata()]; await f.service.check();
+  const gate = deferred<RemoteUpdateRelease[]>(); const entered = deferred<void>();
+  f.hooks.resolve = async () => { entered.resolve(undefined); return (await gate.promise)[0]!; };
+  const first = f.service.install(metadata().id); await entered.promise;
+  assert.equal(f.service.busy, true); assert.equal(f.service.snapshot.phase, 'downloading');
+  await f.service.install(metadata().id); await f.service.check();
+  await f.service.setToken('ghp_fixture_during_resolution_not_a_real_credential');
+  assert.equal(f.resolved.length, 1); assert.equal(f.queriedTokens.length, 1); assert.deepEqual(f.store.saved, []);
+  assert.deepEqual(f.downloaded, []); assert.equal(f.applied.length, 0);
+  gate.resolve([release('1.2.0')]); await first;
+  assert.equal(f.resolved.length, 1); assert.equal(f.downloaded.length, 1); assert.equal(f.applied.length, 1);
 });

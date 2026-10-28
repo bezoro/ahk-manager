@@ -28,6 +28,7 @@ internal static class Program
             UpdatePaths.NoRedirects(plan.InstallDirectory);
             if (plan.InstallDirectory.Equals(Path.GetPathRoot(plan.InstallDirectory), StringComparison.OrdinalIgnoreCase) || UpdatePaths.Equal(plan.InstallDirectory, root) || plan.InstallDirectory.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || root.StartsWith(plan.InstallDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Installation and update cache overlap.");
             ProfileOwnership.Verify(plan.InstallDirectory);
+            ProfileOwnership.Verify(Path.GetDirectoryName(plan.InstallDirectory)!);
             using var once = new FileStream(Path.Combine(operation, "apply.lock"), FileMode.CreateNew, FileAccess.Write, FileShare.Read);
             trustedOperation = operation; trustedPlan = plan;
             log = new OperationLog(operation); log.Write("Validating pinned installer and installation ownership.");

@@ -2,6 +2,7 @@
 param([Parameter(Mandatory = $true)][string]$OutputRoot)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Release-Limits.psm1') -Force
 if (-not [IO.Path]::IsPathFullyQualified($OutputRoot) -or (Test-Path -LiteralPath $OutputRoot)) { throw 'Use an absolute, fresh test output directory.' }
 [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
 $checks = [Collections.Generic.List[string]]::new()
@@ -19,10 +20,10 @@ function Invoke-RestMethod {
     $fixture = $global:AhkReleaseToolingFixture
     $fixture.Calls.Add("$Method $Uri")
     if ($Method -eq 'Get' -and $Uri -match '/tags/') { return $fixture.Release }
-    if ($Method -eq 'Post' -and $Uri -eq 'https://api.github.com/repos/bezoro/Bezoro.AhkManager/releases') {
+    if ($Method -eq 'Post' -and $Uri -eq 'https://api.github.com/repos/bezoro/ahk-manager/releases') {
         $request = $Body | ConvertFrom-Json
         if (-not $request.draft -or $request.make_latest -ne 'false') { throw 'Release must initially remain a draft.' }
-        $fixture.Release = [pscustomobject]@{ id = 41; tag_name = 'v1.2.99'; target_commitish = ('a' * 40); draft = $true; assets = @(); html_url = 'https://github.com/bezoro/Bezoro.AhkManager/releases/tag/v1.2.99' }
+        $fixture.Release = [pscustomobject]@{ id = 41; tag_name = 'v1.2.99'; target_commitish = ('a' * 40); draft = $true; assets = @(); html_url = 'https://github.com/bezoro/ahk-manager/releases/tag/v1.2.99' }
         return $fixture.Release
     }
     if ($Method -eq 'Post' -and $Uri -match '^https://uploads.github.com/') {
@@ -44,6 +45,9 @@ function Invoke-RestMethod {
 
 try {
     Write-Host 'Release tooling checks use in-process HTTP mocks. No GitHub release is created.'
+    foreach ($boundary in @(@{ bytes = -1L; accepted = $false }, @{ bytes = 0L; accepted = $false }, @{ bytes = 1L; accepted = $true }, @{ bytes = 1GB; accepted = $true }, @{ bytes = 1GB + 1L; accepted = $false })) {
+        Assert-Check ((Test-ReleaseInstallerLength $boundary.bytes) -eq $boundary.accepted) "shared installer length bound: $($boundary.bytes) bytes"
+    }
     $frontend = Join-Path $OutputRoot 'frontend'
     [IO.Directory]::CreateDirectory($frontend) | Out-Null
     [IO.File]::WriteAllText((Join-Path $frontend 'build-info.json'), '{"versions":{"node":"fixture"},"build":"production"}')
@@ -52,21 +56,21 @@ try {
     Assert-Check ($info.version -eq '1.2.99' -and $info.commit -eq $commit -and $info.updateProtocol -eq 1 -and $info.versions.node -eq 'fixture') 'build provenance preserves version commit protocol and existing fields'
     [IO.File]::WriteAllBytes($installer, [byte[]](1..255))
     & (Join-Path $PSScriptRoot 'New-ReleaseManifest.ps1') -InstallerPath $installer -OutputPath $manifestPath -Version '1.2.99' -Commit $commit -Notes 'Teste: atualização e recuperação.'
-    & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository 'bezoro/Bezoro.AhkManager' -Commit $commit -ValidateOnly
+    & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository 'bezoro/ahk-manager' -Commit $commit -ValidateOnly
     Assert-Check ($global:AhkReleaseToolingFixture.Calls.Count -eq 0) 'manifest validation checks SHA256 SHA512 and size without network access'
     $isoManifest = Join-Path $OutputRoot 'iso-notes/ahk-manager-release.json'
     & (Join-Path $PSScriptRoot 'New-ReleaseManifest.ps1') -InstallerPath $installer -OutputPath $isoManifest -Version '1.2.99' -Commit $commit -Notes '2026-10-28T00:00:00Z'
-    & $publisher -InstallerPath $installer -ManifestPath $isoManifest -Repository 'bezoro/Bezoro.AhkManager' -Commit $commit -ValidateOnly
+    & $publisher -InstallerPath $installer -ManifestPath $isoManifest -Repository 'bezoro/ahk-manager' -Commit $commit -ValidateOnly
     Assert-Check ($global:AhkReleaseToolingFixture.Calls.Count -eq 0) 'ISO-looking release notes retain their JSON string type'
     $original = [IO.File]::ReadAllBytes($installer)
     [IO.File]::WriteAllBytes($installer, [byte[]](1,2,3))
     $refused = $false
-    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository 'bezoro/Bezoro.AhkManager' -Commit $commit -ValidateOnly } catch { $refused = $true }
+    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository 'bezoro/ahk-manager' -Commit $commit -ValidateOnly } catch { $refused = $true }
     Assert-Check $refused 'modified installer is rejected before publication'
     [IO.File]::WriteAllBytes($installer, $original)
 
     $env:GITHUB_ACTIONS = 'true'; $env:GITHUB_EVENT_NAME = 'pull_request'; $env:GITHUB_REF = 'refs/heads/main'
-    $env:GITHUB_REPOSITORY = 'bezoro/Bezoro.AhkManager'; $env:GITHUB_SHA = $commit
+    $env:GITHUB_REPOSITORY = 'bezoro/ahk-manager'; $env:GITHUB_SHA = $commit
     $env:GITHUB_TOKEN = 'fixture-only-not-a-credential'
     $refused = $false
     try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }

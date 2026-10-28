@@ -1,6 +1,6 @@
 ## Electron 1.1.0, revisão e CI no Windows em 28/10/2026
 
-A [execução Windows CI 40680309200](https://github.com/bezoro/Bezoro.AhkManager/actions/runs/40680309200), no commit `192aba8`, passou com 382 verificações de backend, 365 de core, 36 regressões nativas, 179 testes Node sem skips e 64 verificações de interface. Restore travado, typecheck, bundle de produção, publicação do backend e compilação do instalador NSIS também passaram. O runner foi Windows Server 2025 x64, com .NET SDK 10.0.402 e Node 24.22.0.
+A [execução Windows CI 40680309200](https://github.com/bezoro/ahk-manager/actions/runs/40680309200), no commit `192aba8`, passou com 382 verificações de backend, 365 de core, 36 regressões nativas, 179 testes Node sem skips e 64 verificações de interface. Restore travado, typecheck, bundle de produção, publicação do backend e compilação do instalador NSIS também passaram. O runner foi Windows Server 2025 x64, com .NET SDK 10.0.402 e Node 24.22.0.
 
 A revisão e a implementação usaram agentes separados para inicialização, serviços de execução, recuperação, interface e integração dos testes. Foram corrigidos os valores padrão e a migração de perfis antigos, o registro administrativo por tarefa agendada, a preservação da intenção de login após elevação, a descoberta do VS Code, a observação de processos externos e o tratamento de continuações inválidas. Testes verificam falhas de registro, nova tentativa com as mesmas preferências, consentimento, identidade de processos e preservação dos arquivos inválidos durante a recuperação.
 

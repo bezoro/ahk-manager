@@ -523,11 +523,11 @@ export async function previewPreferences(): Promise<AssertionRecord[]> {
 
 function updateFixture(): UpdateState {
   return {
-    currentVersion: '1.1.0', phase: 'idle', availableVersion: '1.2.0', lastCheckedAt: '2026-10-28T11:30:00Z', error: null, accessConfigured: false, progress: null,
+    currentVersion: '1.2.1', phase: 'idle', availableVersion: '1.2.2', lastCheckedAt: '2026-10-28T11:30:00Z', error: null, accessConfigured: false, progress: null,
     releases: [
-      { id: 'fixture-new', version: '1.2.0', publishedAt: '2026-10-28T10:00:00Z', notes: 'Melhora o início dos scripts e a organização das preferências.\nNotas de exemplo da fixture.', commit: 'a'.repeat(40), installed: false, canInstall: true, cached: false },
-      { id: 'fixture-installed', version: '1.1.0', publishedAt: '2026-10-25T10:00:00Z', notes: 'Versão instalada nesta fixture.', commit: 'b'.repeat(40), installed: true, canInstall: false, cached: true },
-      { id: 'fixture-cached', version: '1.0.4', publishedAt: '2026-10-19T10:00:00Z', notes: 'Versão anterior disponível neste computador. <img src=x onerror=alert(1)>', commit: 'c'.repeat(40), installed: false, canInstall: true, cached: true },
+      { id: 'fixture-new-122', version: '1.2.2', publishedAt: '2026-10-28T10:00:00Z', notes: 'Melhora o início dos scripts e a organização das preferências.\nNotas de exemplo da fixture.', commit: 'a'.repeat(40), installed: false, canInstall: true, cached: false },
+      { id: 'fixture-installed-121', version: '1.2.1', publishedAt: '2026-10-25T10:00:00Z', notes: 'Versão instalada nesta fixture.', commit: 'b'.repeat(40), installed: true, canInstall: false, cached: true },
+      { id: 'fixture-cached-120', version: '1.2.0', publishedAt: '2026-10-19T10:00:00Z', notes: 'Versão anterior disponível neste computador. <img src=x onerror=alert(1)>', commit: 'c'.repeat(40), installed: false, canInstall: true, cached: true },
     ],
   };
 }
@@ -560,13 +560,20 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
   });
   await check('rollback remains available with no backend and dispatches one opaque release ID', async () => {
     await window.fixtureHarness.setState({ snapshot: null, connection: 'failed', error: 'Fixture de falha da biblioteca.', busy: false, authorityMode: null, administrationPending: false });
-    await window.fixtureHarness.setUpdates({ ...updates, availableVersion: null, phase: 'error', error: 'Sem conexão com o GitHub.' }); await tick(); button(text.updates).click(); await tick();
-    const rollback = button(text.updateRollback);
+    await window.fixtureHarness.setUpdates({ ...updates, availableVersion: null, phase: 'error', error: 'Sem conexão com o GitHub.', releases: updates.releases.filter(release => release.cached) }); await tick(); button(text.updates).click(); await tick();
+    const cachedCard = [...document.querySelectorAll<HTMLElement>('.update-release')].find(card => card.querySelector('h3')?.textContent === '1.2.0');
+    assert(cachedCard, 'Cached rollback version is missing');
+    const rollback = button(text.updateRollback, cachedCard);
     assert(!rollback.disabled && document.querySelector('.update-recovery-notice')?.textContent === text.updateRecoveryHint, 'Backend failure disabled recovery');
     await window.fixtureHarness.clearCalls(); await window.fixtureHarness.setResponse('installUpdate', { pending: true }); outstanding.add('installUpdate');
     rollback.click(); rollback.click(); await untilCall('installUpdate'); await tick();
     const calls = (await window.fixtureHarness.calls()).filter(call => call.method === 'installUpdate');
-    assert(calls.length === 1 && calls[0]!.args[0] === 'fixture-cached' && rollback.disabled, 'Rollback used a URL or repeated its request');
+    assert(calls.length === 1, 'Rollback repeated its request');
+    assert(calls[0]!.args[0] === 'fixture-cached-120', 'Rollback did not send the cached opaque release ID');
+    assert(rollback.disabled, 'Pending rollback action remains enabled');
+    assert(document.querySelector('.updates-availability')?.textContent === text.updateLatestUnknown, 'Failed check falsely reports the installed version as latest');
+    const checked = new Date(updates.lastCheckedAt!).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    assert(document.querySelector('.updates-summary')?.textContent?.includes(checked), 'Last successful check lost its date and time');
     const guard = window.fixtureHarness.readGuard(); assert(guard && !guard.dirtyDrafts && !guard.dialogOpen && !guard.pendingWork, 'Install button pending state blocks its own host preflight');
     await window.fixtureHarness.resolveResponse('installUpdate', { value: updates }); outstanding.delete('installUpdate'); await tick();
   });

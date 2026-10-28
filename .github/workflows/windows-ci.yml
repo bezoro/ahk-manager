@@ -272,7 +272,7 @@ jobs:
   publish-release:
     name: Publish approved main release
     needs: windows-checks
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'bezoro/Bezoro.AhkManager' && needs.windows-checks.result == 'success' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'bezoro/ahk-manager' && needs.windows-checks.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
