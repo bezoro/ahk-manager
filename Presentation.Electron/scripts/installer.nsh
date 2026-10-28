@@ -2,7 +2,7 @@
 !include "$%AHK_PACKAGE_OUT%\owned-files.nsh"
 !include "StrFunc.nsh"
 !ifndef BUILD_UNINSTALLER
-  ${Using:StrFunc} StrCase
+  ${StrCase}
 !endif
 
 Var /GLOBAL ahkUpdateRoot
@@ -130,7 +130,8 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
   !insertmacro validateDirectoryChain "$ahkUpdateRoot" 1
   !insertmacro rejectRegisteredInstallation HKLM
   SetRegView 32
-  !insertmacro rejectRegisteredInstallation HKCU
+  ; HKCU\Software is shared across views on supported Windows versions.
+  ; The same per-user installation was validated exactly above.
   !insertmacro rejectRegisteredInstallation HKLM
   SetRegView 64
 !macroend

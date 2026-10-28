@@ -107,6 +107,13 @@ function Check-Installation([string]$ExpectedVersion, [string]$ExpectedInstaller
         Assert-Check ($key.GetValue('UpdateProtocol') -eq 1) 'installation advertises update protocol 1'
     }
     finally { if ($null -ne $key) { $key.Dispose() } }
+    $view32 = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, [Microsoft.Win32.RegistryView]::Registry32)
+    $sharedKey = $null
+    try {
+        $sharedKey = $view32.OpenSubKey($installKey)
+        Assert-Check ($null -ne $sharedKey -and $sharedKey.GetValue('InstallLocation') -eq $installRoot) 'the shared HKCU 32-bit view identifies the same owned installation'
+    }
+    finally { if ($null -ne $sharedKey) { $sharedKey.Dispose() }; $view32.Dispose() }
     $key = $registry.OpenSubKey($uninstallKey)
     try { Assert-Check ($null -ne $key -and $key.GetValue('DisplayVersion') -eq $ExpectedVersion) "installed version is $ExpectedVersion" }
     finally { if ($null -ne $key) { $key.Dispose() } }

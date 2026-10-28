@@ -46,7 +46,8 @@ test('updated invocation requires protocol-one exact per-user destination before
   assert.match(authorization,/ReadRegDWORD \$R1 HKCU "\$\{INSTALL_REGISTRY_KEY\}" "UpdateProtocol"[\s\S]*\$R1 != 1[\s\S]*abortManualUpdate/);
   assert.match(authorization,/GetDParameter \$R3[\s\S]*GetFullPathName \$R2 "\$R3"[\s\S]*\$R2 != \$ahkUpdateRoot/);
   assert.match(authorization,/ReadRegStr \$R0 HKCU "\$\{UNINSTALL_REGISTRY_KEY\}" "UninstallString"/);
-  assert.match(authorization,/validateDirectoryChain[\s\S]*rejectRegisteredInstallation HKLM[\s\S]*SetRegView 32[\s\S]*rejectRegisteredInstallation HKCU/);
+  assert.match(authorization,/validateDirectoryChain[\s\S]*rejectRegisteredInstallation HKLM[\s\S]*SetRegView 32[\s\S]*rejectRegisteredInstallation HKLM[\s\S]*SetRegView 64/);
+  assert.doesNotMatch(authorization,/rejectRegisteredInstallation HKCU/);
   assert.match(macro('preInit'),/\$\{If\} \$\{isUpdated\}[\s\S]*validateUpdatedInstallation "installer"[\s\S]*\$\{Else\}[\s\S]*rejectRegisteredInstallation HKCU[\s\S]*rejectRegisteredInstallation HKLM[\s\S]*prepareInstallerCache/);
   assert.match(macro('customUnInit'),/guardUninstallUpdate/);
   assert.match(macro('guardUninstallUpdate'),/\$\{If\} \$\{isUpdated\}[\s\S]*validateUpdatedInstallation "uninstaller"/);
