@@ -295,7 +295,9 @@ internal static class WindowsStartupTaskStore
     internal static string TaskName(string sid) => "Bezoro.AhkManager.Electron." + sid;
     static readonly XNamespace Ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
     static void Release(object? value) { if (value is not null && Marshal.IsComObject(value)) Marshal.ReleaseComObject(value); }
-    static bool Missing(COMException ex) => ex.ErrorCode is unchecked((int)0x80070002) or unchecked((int)0x8004130F);
+    // COM interop can translate ERROR_FILE_NOT_FOUND to FileNotFoundException.
+    // Scheduler account/security failures do not establish that a task is absent.
+    internal static bool Missing(Exception ex) => ex.HResult == unchecked((int)0x80070002);
 
     internal static StartupTaskRegistration? Read(string sid)
     {
@@ -305,7 +307,7 @@ internal static class WindowsStartupTaskStore
             service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service") ?? throw new InvalidOperationException("Agendador de Tarefas indisponível."));
             ((dynamic)service!).Connect(); folder = ((dynamic)service).GetFolder("\\");
             try { task = ((dynamic)folder).GetTask(TaskName(sid)); }
-            catch (COMException ex) when (Missing(ex)) { return null; }
+            catch (Exception ex) when (Missing(ex)) { return null; }
             return Parse((string)((dynamic)task).Xml);
         }
         finally { Release(task); Release(folder); Release(service); }
@@ -318,7 +320,7 @@ internal static class WindowsStartupTaskStore
             service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service") ?? throw new InvalidOperationException("Agendador de Tarefas indisponível."));
             ((dynamic)service!).Connect(); folder = ((dynamic)service).GetFolder("\\");
             try { task = ((dynamic)folder).GetTask(TaskName(sid)); }
-            catch (COMException ex) when (Missing(ex)) { }
+            catch (Exception ex) when (Missing(ex)) { }
             var current = task is null ? null : Parse((string)((dynamic)task).Xml);
             if (current != expected) return false;
             if (expected is not null) ((dynamic)folder).DeleteTask(TaskName(sid), 0);

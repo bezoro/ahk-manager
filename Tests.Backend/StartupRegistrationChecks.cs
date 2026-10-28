@@ -14,6 +14,15 @@ internal static class StartupRegistrationChecks
 {
     internal static async Task RunAsync(string root, Action<bool, string> check)
     {
+        const int missingTask = unchecked((int)0x80070002);
+        const int accountInformationNotSet = unchecked((int)0x8004130F);
+        var translatedMissing = Marshal.GetExceptionForHR(missingTask)!;
+        check(translatedMissing is FileNotFoundException && WindowsStartupTaskStore.Missing(translatedMissing), "COM interop translated missing-file error establishes task absence");
+        check(WindowsStartupTaskStore.Missing(new FileNotFoundException()), "missing task recognizes FileNotFoundException by its HRESULT");
+        check(WindowsStartupTaskStore.Missing(new COMException("Missing task fixture.", missingTask)), "missing task recognizes the original COM HRESULT");
+        check(!WindowsStartupTaskStore.Missing(new UnauthorizedAccessException()) && !WindowsStartupTaskStore.Missing(new COMException("Denied task fixture.", unchecked((int)0x80070005))), "task access denial is never classified as absence");
+        check(!WindowsStartupTaskStore.Missing(new COMException("Account information fixture.", accountInformationNotSet)) && !WindowsStartupTaskStore.Missing(Marshal.GetExceptionForHR(accountInformationNotSet)!), "scheduler account information failure is never classified as absence");
+
         string host = Path.Combine(root, "manager with spaces.exe");
         var adapter = new TaskAdapter();
         var startup = new UserStartupService(adapter, host);
@@ -106,6 +115,9 @@ internal static class StartupRegistrationChecks
             check(StartupUninstallInspection.Classify(foreign, installedHost, sid) == 0, "read-only uninstall inspection preserves foreign identity source path or trigger");
         if (OperatingSystem.IsWindows())
         {
+            byte[] nonce = Guid.NewGuid().ToByteArray();
+            string absentSid = $"S-1-5-21-{BitConverter.ToUInt32(nonce, 0)}-{BitConverter.ToUInt32(nonce, 4)}-{BitConverter.ToUInt32(nonce, 8)}-{BitConverter.ToUInt32(nonce, 12)}";
+            check(WindowsStartupTaskStore.Read(absentSid) is null, "native Task Scheduler lookup of an absent random-SID task returns null without registration");
             InspectEmbeddedTaskProperties(sid, check);
             ValidateNativeTaskDefinition(specification, check);
         }

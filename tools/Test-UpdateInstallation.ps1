@@ -152,6 +152,33 @@ function Check-Preserved([hashtable]$ExpectedFiles) {
     finally { if ($null -ne $key) { $key.Dispose() } }
 }
 
+function Check-OwnedStartupInspection {
+    $backendPath = Local-Path (Join-Path $installRoot 'backend/AhkManager.Backend.exe') -File
+    $expectedHash = Hash $backendPath
+    $start = [Diagnostics.ProcessStartInfo]::new($backendPath)
+    $start.UseShellExecute = $false
+    $start.WorkingDirectory = $installRoot
+    $start.Arguments = '--inspect-owned-startup'
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $probe = [Diagnostics.Process]::Start($start)
+    try {
+        $stdout = $probe.StandardOutput.ReadToEndAsync()
+        $stderr = $probe.StandardError.ReadToEndAsync()
+        if (-not $probe.WaitForExit(30000)) {
+            $script:unknownInstaller = $true
+            throw 'Read-only startup inspection did not exit. Cleanup will not race a live backend.'
+        }
+        $result = [ordered]@{ exitCode = $probe.ExitCode; stdout = $stdout.GetAwaiter().GetResult(); stderr = $stderr.GetAwaiter().GetResult() }
+        foreach ($field in @('stdout', 'stderr')) { if ($result[$field].Length -gt 4096) { $result[$field] = $result[$field].Substring(0, 4096) } }
+        [IO.File]::WriteAllText((Join-Path $OutputRoot 'startup-uninstall-inspection.json'), ($result | ConvertTo-Json), $utf8)
+        Trace "Read-only startup inspection exitCode=$($result.exitCode); stderr=$($result.stderr)"
+        Assert-Check ($result.exitCode -eq 0) "an absent administrative task permits uninstall; inspectionExitCode=$($result.exitCode)"
+        Assert-Check ((Hash $backendPath) -eq $expectedHash) 'read-only startup inspection preserves the installed backend bytes'
+    }
+    finally { $probe.Dispose() }
+}
+
 try {
     $BaselineInstaller = Local-Path $BaselineInstaller -File
     $TargetInstaller = Local-Path $TargetInstaller -File
@@ -228,6 +255,7 @@ finally {
         }
         if ($script:installationObserved -and -not $script:unknownInstaller) {
             try {
+                Check-OwnedStartupInspection
                 $current = Read-Uninstaller
                 if ($current.path -ne $lastUninstaller.path -or $current.hash -ne $lastUninstaller.hash) { throw 'Uninstaller identity changed before cleanup.' }
                 $start = [Diagnostics.ProcessStartInfo]::new($current.path)
