@@ -45,7 +45,7 @@ internal static class SnapshotSecurity
         var trusted = new HashSet<string>([identity.User?.Value ?? throw new UnauthorizedAccessException(), "S-1-5-18", "S-1-5-32-544"], StringComparer.Ordinal);
         var security = directory ? (FileSystemSecurity)new DirectoryInfo(path).GetAccessControl(AccessControlSections.Owner | AccessControlSections.Access) : new FileInfo(path).GetAccessControl(AccessControlSections.Owner | AccessControlSections.Access);
         if (new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0).DiscretionaryAcl is null) throw new UnauthorizedAccessException("An unrestricted DACL cannot protect a recovery copy.");
-        if (!trusted.Contains(security.GetOwner(typeof(SecurityIdentifier)).Value)) throw new UnauthorizedAccessException("Recovery copy owner changed.");
+        if (security.GetOwner(typeof(SecurityIdentifier))?.Value is not { } owner || !trusted.Contains(owner)) throw new UnauthorizedAccessException("Recovery copy owner changed.");
         if (requireProtected && !security.AreAccessRulesProtected) throw new UnauthorizedAccessException("Recovery directory lost its protected DACL.");
         foreach (FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier)))
             if (rule.AccessControlType == AccessControlType.Allow && !trusted.Contains(rule.IdentityReference.Value)) throw new UnauthorizedAccessException("Recovery copy inherited access for another principal.");
