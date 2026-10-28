@@ -64,10 +64,11 @@ internal sealed class StartupContinuationStore(string root)
     internal async Task WriteAsync(StartupContinuationRecord record, StartupContinuationRecord? expected)
     {
         if (record is null) throw new InvalidDataException("Continuation absent.");
-        Validate(record, record.Ticket?.OperationId ?? Guid.Empty);
-        string path = FilePath(record.Ticket.OperationId); SafeJsonFiles.SafePath(path);
+        var ticket = record.Ticket ?? throw new InvalidDataException("Continuation ticket absent.");
+        Validate(record, ticket.OperationId);
+        string path = FilePath(ticket.OperationId); SafeJsonFiles.SafePath(path);
         byte[]? existing = await SafeJsonFiles.ReadAsync(path, CancellationToken.None).ConfigureAwait(false);
-        if (expected is null && existing is not null || expected is not null && (existing is null || !JsonSerializer.SerializeToUtf8Bytes(Parse(existing, record.Ticket.OperationId), Json.StartupContinuationRecord).AsSpan().SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(expected, Json.StartupContinuationRecord)))) throw new ConcurrentWriteException();
+        if (expected is null && existing is not null || expected is not null && (existing is null || !JsonSerializer.SerializeToUtf8Bytes(Parse(existing, ticket.OperationId), Json.StartupContinuationRecord).AsSpan().SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(expected, Json.StartupContinuationRecord)))) throw new ConcurrentWriteException();
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(record, Json.StartupContinuationRecord);
         if (bytes.Length > MaximumBytes) throw new InvalidDataException("Continuation exceeds limit.");
         await SafeJsonFiles.ReplaceAsync(path, bytes, existing is null ? null : SafeJsonFiles.Hash(existing), CancellationToken.None, false).ConfigureAwait(false);

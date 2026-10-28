@@ -8,7 +8,9 @@ Editar procura o VS Code instalado, preservando a seleção de outro editor e se
 
 As preferências de inicialização aparecem primeiro. As ações principais ficam juntas, ações secundárias estão em um menu e a recuperação de pendências funciona mesmo com a lista vazia. Registros de continuação inválidos podem ser preservados em quarentena após uma recuperação explícita, sem repetir execuções.
 
-A CI do Windows verifica backend, contratos, WMI, tipos e cenários de interface, captura temas claro/escuro, janelas estreitas e zoom de 200%, e compila o instalador. Logs, capturas e instalador ficam disponíveis nos artefatos da execução. Consulte [SAFE-TESTS.md](SAFE-TESTS.md) para o escopo e [VALIDATION.md](VALIDATION.md) para o histórico de versões anteriores.
+A CI do Windows verifica backend, contratos, WMI, tipos e cenários de interface, captura temas claro/escuro, janelas estreitas e zoom de 200%, e compila o instalador. Logs, capturas e instalador ficam disponíveis nos artefatos da execução. Consulte [SAFE-TESTS.md](SAFE-TESTS.md) para o escopo e [VALIDATION.md](VALIDATION.md) para os resultados e limites da validação atual.
+
+Para desinstalar uma instalação com tarefa administrativa ativa, abra o Manager como administrador e desative "Iniciar o Manager com Windows" antes de usar o desinstalador. Ele verifica a tarefa da instalação e interrompe a remoção enquanto ela estiver registrada. Perfis, backups e scripts são preservados.
 
 Os registros abaixo descrevem versões anteriores, inclusive políticas e instalações que mudaram na 1.1.0.
 
