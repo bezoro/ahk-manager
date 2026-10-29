@@ -269,3 +269,36 @@ test('local build CLI emits only the requested commit identity and does not writ
   assert.equal(identity.commit, sha);
   assert.equal(fs.existsSync(output), false);
 });
+
+test('a retried Windows build can calculate its own current attempt without cached job outputs', (t) => {
+  const fixture = repository(t);
+  const sha = fixture.commit('feat: publish a preview for this build attempt');
+  const cli = path.resolve(__dirname, '../../scripts/compute-release.cjs');
+  const output = path.join(fixture.cwd, 'workflow-output');
+  for (const attempt of [1, 2]) {
+    const args = [
+      cli,
+      '--repo',
+      fixture.cwd,
+      '--json',
+      '--sha',
+      sha,
+      '--test-pr',
+      '3',
+      '--test-run',
+      '22',
+      '--test-attempt',
+      String(attempt),
+    ];
+    const result = spawnSync(process.execPath, args, {
+      encoding: 'utf8',
+      env: { ...process.env, GITHUB_OUTPUT: output },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const identity = JSON.parse(result.stdout);
+    assert.equal(identity.version, `1.3.0-test.22.${attempt}.3`);
+    assert.equal(identity.commit, sha);
+    assert.match(identity.notes, new RegExp(`1\\.3\\.0-test\\.22\\.${attempt}\\.3`));
+    assert.equal(fs.existsSync(output), false);
+  }
+});

@@ -80,6 +80,7 @@ jobs:
       - name: Check out sources
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
@@ -104,24 +105,34 @@ jobs:
         run: |
           "CI_OUTPUT=$(Join-Path $env:RUNNER_TEMP 'ahk-manager-ci')" >> $env:GITHUB_ENV
 
-      - name: Set release identity
-        id: release-metadata
-        env:
-          RELEASE_VERSION: ${{ needs.release-identity.outputs.version }}
-          RELEASE_NOTES_BASE64: ${{ needs.release-identity.outputs.notes-base64 }}
-          RELEASE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          "AHK_RELEASE_VERSION=$env:RELEASE_VERSION" >> $env:GITHUB_ENV
-          "AHK_RELEASE_NOTES_BASE64=$env:RELEASE_NOTES_BASE64" >> $env:GITHUB_ENV
-          "AHK_SOURCE_COMMIT=$env:RELEASE_SOURCE_COMMIT" >> $env:GITHUB_ENV
-          "version=$env:RELEASE_VERSION" >> $env:GITHUB_OUTPUT
-
       - name: Install locked frontend dependencies
         id: frontend-dependencies
         working-directory: Presentation.Electron
         run: |
           npm.cmd ci --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
+
+      - name: Calculate this build attempt's release identity
+        id: release-metadata
+        working-directory: Presentation.Electron
+        env:
+          RELEASE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Rerunning only a failed Windows job keeps the Ubuntu job's old
+          # outputs. Calculate again so the package uses this run attempt.
+          $identityArgs = @('--json', '--sha', $env:RELEASE_SOURCE_COMMIT)
+          if ($env:GITHUB_EVENT_NAME -ceq 'pull_request') {
+            $identityArgs += @('--test-pr', $env:PR_NUMBER, '--test-run', $env:GITHUB_RUN_NUMBER, '--test-attempt', $env:GITHUB_RUN_ATTEMPT)
+          }
+          $identityJson = & node.exe scripts/compute-release.cjs @identityArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Release identity calculation failed.' }
+          $identity = $identityJson | ConvertFrom-Json
+          $notes = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($identity.notes))
+          "AHK_RELEASE_VERSION=$($identity.version)" >> $env:GITHUB_ENV
+          "AHK_RELEASE_NOTES_BASE64=$notes" >> $env:GITHUB_ENV
+          "AHK_SOURCE_COMMIT=$($identity.commit)" >> $env:GITHUB_ENV
+          "version=$($identity.version)" >> $env:GITHUB_OUTPUT
 
       - name: Check formatting and architecture boundaries
         if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
