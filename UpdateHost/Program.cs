@@ -53,11 +53,11 @@ internal static class Program
         }
         catch (OperationCanceledException)
         {
-            Refused("Failed", "A atualização foi cancelada antes de alterar a instalação."); Console.Error.WriteLine("update-host:cancelled-before-apply"); return 20;
+            Refused("Failed", "The update was cancelled before changing the installation."); Console.Error.WriteLine("update-host:cancelled-before-apply"); return 20;
         }
         catch (Exception ex) when (UpdateProtocol.Known(ex))
         {
-            Refused(ready ? "Unknown" : "Failed", ready ? "O resultado da atualização não pôde ser confirmado. As evidências e cópias disponíveis foram preservadas." : "A preparação da atualização foi recusada antes de alterar a instalação.");
+            Refused(ready ? "Unknown" : "Failed", ready ? "The update outcome could not be confirmed. Available evidence and recovery copies were preserved." : "Update preparation was refused before changing the installation.");
             Console.Error.WriteLine("update-host:refused:" + ex.GetType().Name); return 65;
         }
         finally { log?.Dispose(); }

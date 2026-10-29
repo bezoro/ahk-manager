@@ -3,7 +3,7 @@ import { Checkbox, Tooltip } from '@fluentui/react-components';
 import { DocumentRegular } from '@fluentui/react-icons';
 import type { ScriptSnapshot } from '../../shared/contracts.js';
 import { fileName, rowWindow, type RowPreference } from '../model.js';
-import { status, text } from '../resources/pt-BR.js';
+import { status, text } from '../resources/en-US.js';
 import { ReadableHotkey } from './Hotkeys.js';
 
 interface Props { rows: ScriptSnapshot[]; selectedId: string | null; onSelect(id: string): void; onContext(id: string, x: number, y: number): void; queryVersion: string; preferencesDisabled: boolean; pendingPreference: { scriptId: string; field: RowPreference } | null; onPreference(id: string, field: RowPreference, value: boolean): void }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, safeStorage, screen, session, shell, systemPreferences, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, net, screen, session, shell, systemPreferences, Tray } from 'electron';
 import { scriptFileStamp } from './script-files.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -6,10 +6,10 @@ import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
-import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupWithContinuation } from './lifecycle.js';
-import { AdministrationPreflight, ElevationCoordinator } from './elevation.js';
+import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupWithContinuation, configuredLoginElevation } from './lifecycle.js';
+import { AdministrationPreflight, ElevationCoordinator, administrationDocumentReady } from './elevation.js';
 import { createDiagnostics, type PageDiagnostics } from './diagnostics.js';
-import {hostText as t} from '../shared/host-pt-BR.js';
+import {hostText as t} from '../shared/host-en-US.js';
 import { APP_URL, assetFromUrl, CSP, DocumentGuard, packagedBackend, type DocumentLease } from './security.js';
 import { capturePlacement, restorePlacement } from './placement.js';
 import type { AdministrationUiGuard, ElevationStatus, ManagerSnapshot, OperationResult, StartupContinuationOffer, ThemeState, WindowPlacement } from '../shared/contracts.js';
@@ -17,10 +17,13 @@ import { activityQuery, array, assertActivityQuery, assertMetadata, assertOperat
 import { UpdateService } from './update-service.js';
 import { UpdateStore, type CachedInstaller } from './update-store.js';
 import { GitHubUpdateClient, compareVersions } from './github-updates.js';
+import { createElectronUpdateFetch } from './electron-update-fetch.js';
+import { configureUpdateNetwork } from './update-network-policy.js';
 import { downloadRelease, verifyCachedInstallerSignature } from './electron-update-download.js';
 import { prepareUpdate, updateRecoveryStatus, type PreparedUpdate } from './update-handoff.js';
 import { shutdownAndCommitUpdate } from './update-shutdown.js';
 
+app.commandLine.appendSwitch('lang', 'en-US');
 protocol.registerSchemesAsPrivileged([{scheme:'ahk-manager',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.setName(t.title);
 app.setAppUserModelId('Bezoro.AhkManager.Electron');
@@ -40,13 +43,15 @@ let rendererReady=false;
 let documentLease:DocumentLease|null=null;
 const initialAdministration=administrationCli(process.argv);
 const initialAdoption=startupAdoptionCli(process.argv);
+const quietAdoption=initialAdoption.descriptor!==null&&process.argv.includes('--background');
 let adoptionPending=initialAdoption.descriptor!==null||initialAdoption.invalid;
 let continuationOffer:StartupContinuationOffer|null=null;
 let administrativeCliPending=initialAdministration==='request';
-const lifecycle=new LifecycleIntent(!adoptionPending&&initialAdministration==='none'&&process.argv.includes('--login'),adoptionPending||initialAdministration!=='none'||process.argv.includes('--foreground'));
+const lifecycle=new LifecycleIntent(!adoptionPending&&initialAdministration==='none'&&process.argv.includes('--login'),(adoptionPending&&!quietAdoption)||initialAdministration!=='none'||process.argv.includes('--foreground'),quietAdoption);
 const preflight=new AdministrationPreflight();
 let administration:ElevationCoordinator|null=null;
 let administrationLease:DocumentLease|null=null;
+let quietStartupTransfer=false;
 const stopExit=new StopExitIntent();
 let stopExitProgress={done:0,total:0};
 let quitting=false;
@@ -61,8 +66,8 @@ const single=app.requestSingleInstanceLock();
 if(!single)app.quit();
 else {
   app.on('second-instance',(_event,argv)=>{
-    if(adoptionPending||argv.some(value=>value==='--startup-adoption'||value.startsWith('--startup-adoption='))){show();return;}
-    if(initialAdoption.descriptor!==null&&argv.includes('--login')){show();return;}
+    if(adoptionPending||argv.some(value=>value==='--startup-adoption'||value.startsWith('--startup-adoption='))){if(!argv.includes('--login')&&!argv.includes('--background')){lifecycle.requestExplicitActivation();show();}return;}
+    if(initialAdoption.descriptor!==null&&argv.includes('--login'))return;
     const administrative=administrationCli(argv);
     if(administrative!=='none'){lifecycle.requestExplicitActivation();show();if(administrative==='invalid')dialog.showErrorBox(t.title,t.administrationCliInvalid);else if(ready)void requestAdministration(true);else administrativeCliPending=true;return;}
     if(argv.includes('--login')){lifecycle.requestLogin();if(ready)void runLogin();}
@@ -71,7 +76,7 @@ else {
   app.on('activate',()=>{lifecycle.requestExplicitActivation();show();});
   app.on('before-quit',event=>{if(!quitComplete){event.preventDefault();void quit();}});
   app.on('window-all-closed',()=>{if(!quitting)void quit();});
-  void app.whenReady().then(start).catch(error=>{dialog.showErrorBox(t.title,safeError(error));quitComplete=true;app.quit();});
+  void app.whenReady().then(start).catch(error=>{if(!lifecycle.quietStartup)dialog.showErrorBox(t.title,safeError(error));quitComplete=true;app.quit();});
 }
 function safeError(error:unknown):string {return error instanceof Error?error.message.slice(0,4096):t.unknownError;}
 function theme():ThemeState {
@@ -139,28 +144,17 @@ function lockSession():void {
 async function configureUpdates():Promise<void> {
   // A dedicated Electron session retains OS proxy support and cannot grant renderer access.
   const network=session.fromPartition('electron-updater',{cache:false});
-  network.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
-  network.setPermissionCheckHandler(()=>false);
-  network.webRequest.onBeforeRequest((details,callback)=>{
-    let allowed=false;
-    try { const url=new URL(details.url);allowed=url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&(url.hostname==='api.github.com'&&url.pathname.startsWith('/repos/bezoro/ahk-manager/releases')||['release-assets.githubusercontent.com','objects.githubusercontent.com'].includes(url.hostname)); } catch { /* Only the fixed update origin is permitted. */ }
-    callback({cancel:!allowed});
-  });
-  network.webRequest.onBeforeSendHeaders((details,callback)=>{
-    const headers={...details.requestHeaders};
-    if(new URL(details.url).hostname!=='api.github.com')for(const name of Object.keys(headers))if(['authorization','cookie','proxy-authorization'].includes(name.toLowerCase()))delete headers[name];
-    callback({requestHeaders:headers});
-  });
+  configureUpdateNetwork(network);
   const root=path.join(process.env.LOCALAPPDATA??path.join(app.getPath('home'),'AppData','Local'),'Bezoro','AhkManagerElectron','Updates');
-  updateStore=new UpdateStore(root,{available:()=>safeStorage.isEncryptionAvailable(),encrypt:value=>safeStorage.encryptString(value),decrypt:value=>safeStorage.decryptString(value)});
-  const client=new GitHubUpdateClient(network.fetch.bind(network) as typeof fetch);
+  updateStore=new UpdateStore(root);
+  const client=new GitHubUpdateClient(createElectronUpdateFetch(network,options=>net.request(options)));
   updates=new UpdateService({
-    version:app.getVersion(),store:updateStore,releases:(token,channel)=>client.releases(token,channel),resolve:(id,token)=>client.resolve(id,token),download:downloadRelease,
+    version:app.getVersion(),store:updateStore,releases:channel=>client.releases(channel),resolve:id=>client.resolve(id),download:downloadRelease,
     preflight:(operationId,phase)=>{
       const lease=documentLease;
       return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>!!lease&&!!guard?.current(lease)&&!!window?.isFocused()&&!window.isDestroyed()&&!quitting&&!updateApplying&&!updateShutdownInFlight&&!adoptionPending&&!administration?.active&&!stopExit.active&&!controller?.state.busy&&!controller?.state.administrationPending);
     },
-    confirm:release=>confirm(compareVersions(release.version,app.getVersion())<0?'Voltar para a versão '+release.version+'?':'Atualizar para a versão '+release.version+'?','O Manager será fechado e reaberto. Os scripts que já estão em execução continuam funcionando, e suas configurações serão preservadas.'),
+    confirm:release=>confirm(compareVersions(release.version,app.getVersion())<0?'Return to version '+release.version+'?':'Update to version '+release.version+'?','The manager will close and reopen. Running scripts will keep running, and your settings will be preserved.'),
     apply:applyUpdate,changed:state=>guard?.send('manager:updates',state),recovery:()=>updateRecoveryStatus(updateStore!),
   });
   await updates.initialize();
@@ -168,14 +162,14 @@ async function configureUpdates():Promise<void> {
   const interval=setInterval(()=>{if(!quitting&&!updateApplying)void updates?.check();},15*60*1000);interval.unref();
 }
 async function applyUpdate(operationId:string,target:CachedInstaller):Promise<void> {
-  if(!updateStore||!window||updateApplying||updateShutdownInFlight||quitting||adoptionPending||administration?.active||stopExit.active)throw new Error('Aguarde as operações do Manager antes de atualizar.');
+  if(!updateStore||!window||updateApplying||updateShutdownInFlight||quitting||adoptionPending||administration?.active||stopExit.active)throw new Error('Wait for manager operations to finish before updating.');
   updateApplying=true;controller?.setAdministrationPending(true);
   let prepared:PreparedUpdate|null=null;
   let shutdownStarted=false;
   try {
     await verifyCachedInstallerSignature(target.installerPath);
     const created=app.getAppMetrics().find(metric=>metric.pid===process.pid)?.creationTime;
-    if(!created||!Number.isFinite(created))throw new Error('Não foi possível confirmar a sessão do Manager para atualizar.');
+    if(!created||!Number.isFinite(created))throw new Error('The manager session could not be verified for this update.');
     prepared=await prepareUpdate(updateStore,operationId,target,path.dirname(app.getPath('exe')),new Date(created).toISOString());
     shutdownStarted=true;
     await shutdownAndCommitUpdate({
@@ -193,9 +187,9 @@ async function applyUpdate(operationId:string,target:CachedInstaller):Promise<vo
     try{await prepared?.cancel();}catch(cancelError){cancellationError=cancelError;}
     finally{
       updateApplying=false;controller?.setAdministrationPending(false);
-      if(shutdownStarted&&backend)controller?.setConnection('failed','A atualização foi cancelada sem confirmação do encerramento. Aguarde e reconecte o backend antes de continuar.');
+      if(shutdownStarted&&backend)controller?.setConnection('failed','The update was cancelled without confirmed shutdown. Wait and reconnect the backend before continuing.');
     }
-    if(cancellationError)throw new Error(safeError(error)+' Não foi possível registrar o cancelamento da atualização.',{cause:cancellationError});
+    if(cancellationError)throw new Error(safeError(error)+' The update cancellation could not be recorded.',{cause:cancellationError});
     throw error;
   }
 }
@@ -237,9 +231,9 @@ async function start():Promise<void> {
   const native={files:pick,confirm,placement,alive,fileStamp:scriptFileStamp,trash:(target:string)=>shell.trashItem(path.win32.normalize(target))};
   controller=new ManagerController({request:()=>Promise.reject(new Error('Backend starting'))},native,state=>{guard?.send('manager:state',state);updateTheme();updateTray();});
   administration=new ElevationCoordinator({
-    eligible:()=>!adoptionPending&&!quitting&&!stopExit.active&&controller?.state.connection==='ready'&&controller.state.authorityMode==='Normal'&&!controller.state.busy&&!!backend?.ready,
+    eligible:()=>!adoptionPending&&!quitting&&!stopExit.active&&controller?.state.connection==='ready'&&controller.state.authorityMode==='Normal'&&!controller.state.busy&&(!quietStartupTransfer||(lifecycle.quietStartup&&configuredLoginElevation(controller.state.snapshot?.settings)&&controller.state.snapshot?.readOnly===false&&controller.state.snapshot.effectsAvailable))&&!!backend?.ready,
     confirm:()=>confirm(t.administrationTitle,t.administrationDetail),
-    preflight:(operationId,phase)=>{const lease=administrationLease;return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>!!lease&&!!guard?.current(lease)&&!!window?.isFocused()&&!window.isDestroyed());},
+    preflight:(operationId,phase)=>{const lease=administrationLease;return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>administrationDocumentReady({currentDocument:!!lease&&!!guard?.current(lease),windowAlive:!!window&&!window.isDestroyed(),focused:window?.isFocused()===true,quietStartup:quietStartupTransfer&&lifecycle.quietStartup&&configuredLoginElevation(controller?.state.snapshot?.settings)}));},
     quiesce:value=>controller?.setAdministrationPending(value),
     drain:async()=>{await controller?.drain();},persistPlacement:async()=>{await controller?.savePlacement(true);},
     request:(action,payload,timeoutMs)=>{if(!backend)throw new Error(t.backendUnavailable);return backend.request<ElevationStatus>(action,payload,timeoutMs);},
@@ -257,57 +251,126 @@ async function start():Promise<void> {
   const wantsAdministrator=controller.state.snapshot?.settings.launchManagerAsAdministrator===true;
   const canInitialize=!initialAdoption.descriptor&&!adoptionPending&&controller.state.connection==='ready'&&controller.state.snapshot?.readOnly===false&&controller.state.snapshot.effectsAvailable;
   let setupDeferred=false;
-  if(administrativeCliPending||canInitialize&&wantsAdministrator&&controller.state.authorityMode==='Normal'){
-    administrativeCliPending=false;show();
-    const result=await requestAdministration(true,lifecycle.loginRequested);
+  if(administrativeCliPending||canInitialize&&wantsAdministrator&&controller.state.authorityMode==='Normal'&&(!lifecycle.quietStartup||lifecycle.takeAutomaticElevation(controller.state.snapshot?.settings))){
+    administrativeCliPending=false;
+    const quiet=lifecycle.quietStartup;
+    if(!quiet)show();
+    const result=await requestAdministration(true,lifecycle.loginRequested,quiet);
     if(result.outcome==='Confirmed'){
       if(quitting||quitComplete)return;
     }else{
       setupDeferred=true;
-      if(window)await dialog.showMessageBox(window,{type:'warning',title:t.administrationTitle,message:t.administrationSetupDeferred,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+      if(window&&!quiet)await dialog.showMessageBox(window,{type:'warning',title:t.administrationTitle,message:t.administrationSetupDeferred,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
     }
   }
   if(canInitialize&&!setupDeferred&&backend?.ready){
     const result=await backend.request<OperationResult>('initializeStartup',{});
-    if(result.outcome!=='Confirmed'&&window){show();await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.startupSetupIncomplete,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}
+    if(result.outcome!=='Confirmed'&&window&&!lifecycle.quietStartup){show();await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.startupSetupIncomplete,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}
   }
   await runLogin();
   if(lifecycle.shouldShowAtStartup(controller.state.snapshot?.settings,trayRegistered,controller.state.connection!=='ready'||controller.state.snapshot?.readOnly===true,controller.state.snapshot?.issues))show();
   if(window.isVisible())diagnostics?.initialReady();
 }
-async function startBackend():Promise<void> {
-  if(administration?.active)throw new Error(t.administrationPending);
-  if(stopExit.active)throw new Error(t.stopExitBusy);
-  if(quitting)throw new Error(t.closing);
-  if(!controller)throw new Error('Controller unavailable');
-  if(backend&&!backend.exited)throw new Error(t.backendStillAlive(backend.pid));
-  backend=new BackendClient({executable:packagedBackend(path.dirname(process.execPath)),hostExecutable:process.execPath,...(initialAdoption.descriptor?{startupAdoption:initialAdoption.descriptor}:{})});
-  if(adoptionPending)controller.setAdministrationPending(true);
-  controller.setAuthority(backend);controller.setConnection('starting');
-  backend.on('snapshot',(snapshot:ManagerSnapshot)=>controller?.setSnapshot(snapshot));
-  backend.on('unavailable',(error:Error)=>{if(!quitting)controller?.setConnection('failed',error.message);});
-  try{
+async function startBackend(): Promise<void> {
+  if (administration?.active) throw new Error(t.administrationPending);
+  if (stopExit.active) throw new Error(t.stopExitBusy);
+  if (quitting) throw new Error(t.closing);
+  if (!controller) throw new Error('Controller unavailable');
+  if (backend && !backend.exited) throw new Error(t.backendStillAlive(backend.pid));
+  backend = new BackendClient({
+    executable: packagedBackend(path.dirname(process.execPath)),
+    hostExecutable: process.execPath,
+    ...(initialAdoption.descriptor ? { startupAdoption: initialAdoption.descriptor } : {}),
+  });
+  if (adoptionPending) controller.setAdministrationPending(true);
+  controller.setAuthority(backend);
+  controller.setConnection('starting');
+  backend.on('snapshot', (snapshot: ManagerSnapshot) => controller?.setSnapshot(snapshot));
+  backend.on('unavailable', (error: Error) => {
+    if (!quitting) controller?.setConnection('failed', error.message);
+  });
+  try {
     await backend.start();
     controller.setHostAuthority(backend.authorityMode);
-    if(backend.profileRoot&&!lifecycle.loginRequested){
-      const exists=await fs.access(path.join(backend.profileRoot,'settings.json')).then(()=>true,()=>false);
-      if(!exists&&window){
-        const choice=await dialog.showMessageBox(window,{type:'question',title:t.welcomeTitle,message:t.welcomeQuestion,detail:t.welcomeDetail,buttons:[t.newProfile,t.chooseWinUiProfile],defaultId:0,cancelId:0,noLink:true});
-        if(choice.response===1)await controller.migrateProfile(true);
+    if (backend.profileRoot && !lifecycle.loginRequested && !lifecycle.quietStartup) {
+      const exists = await fs.access(path.join(backend.profileRoot, 'settings.json')).then(
+        () => true,
+        () => false,
+      );
+      if (!exists && window) {
+        const choice = await dialog.showMessageBox(window, {
+          type: 'question',
+          title: t.welcomeTitle,
+          message: t.welcomeQuestion,
+          detail: t.welcomeDetail,
+          buttons: [t.newProfile, t.chooseWinUiProfile],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        if (choice.response === 1) await controller.migrateProfile(true);
       }
     }
-    controller.setSnapshot(await backend.request<ManagerSnapshot>('load',{}));
+    controller.setSnapshot(await backend.request<ManagerSnapshot>('load', {}));
     controller.setConnection('ready');
-    if(initialAdoption.descriptor){
-      const result=await backend.request<OperationResult>('adoptStartupContinuation',{},150000);
-      adoptionPending=startupAdoptionBlocksInteraction(result);controller.setAdministrationPending(adoptionPending);
-      show();if(window)await dialog.showMessageBox(window,{type:result.outcome==='Confirmed'?'info':'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+    if (initialAdoption.descriptor) {
+      const result = await backend.request<OperationResult>(
+        'adoptStartupContinuation',
+        {},
+        150000,
+      );
+      adoptionPending = startupAdoptionBlocksInteraction(result);
+      controller.setAdministrationPending(adoptionPending);
+      if (!lifecycle.quietStartup) show();
+      if (window && !lifecycle.quietStartup)
+        await dialog.showMessageBox(window, {
+          type: result.outcome === 'Confirmed' ? 'info' : 'warning',
+          title: t.loginResultTitle,
+          message: t.loginResultTitle,
+          detail: result.detail ?? t.loginFailure(result.code),
+          buttons: [t.confirm],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
     }
-  }catch(error){controller.setConnection('failed',safeError(error));show();}
+  } catch (error) {
+    controller.setConnection('failed', safeError(error));
+    if (!lifecycle.quietStartup) show();
+  }
 }
-async function reportLoginResult(result:OperationResult):Promise<void> {
-  try{continuationOffer=backend?.ready?await backend.request<StartupContinuationOffer|null>('startupContinuation',{}):null;}catch{continuationOffer=null;}updateTray();
-  await reportStartupWithContinuation(result,continuationOffer?.canResume===true,requestStartupContinuation,{show,warn:async value=>{if(window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:value.detail??t.loginFailure(value.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}});
+async function reportLoginResult(result: OperationResult): Promise<void> {
+  try {
+    continuationOffer = backend?.ready
+      ? await backend.request<StartupContinuationOffer | null>('startupContinuation', {})
+      : null;
+  } catch {
+    continuationOffer = null;
+  }
+  updateTray();
+  await reportStartupWithContinuation(
+    result,
+    continuationOffer?.canResume === true &&
+      (!lifecycle.quietStartup || configuredLoginElevation(controller?.state.snapshot?.settings)),
+    () => requestStartupContinuation(lifecycle.quietStartup),
+    {
+      show,
+      warn: async (value) => {
+        if (window)
+          await dialog.showMessageBox(window, {
+            type: 'warning',
+            title: t.loginResultTitle,
+            message: t.loginResultTitle,
+            detail: value.detail ?? t.loginFailure(value.code),
+            buttons: [t.confirm],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          });
+      },
+    },
+    lifecycle.quietStartup,
+  );
 }
 async function checkStartupAdoption():Promise<void> {
   if(!adoptionPending||!backend?.ready||!controller||quitting)return;
@@ -317,30 +380,115 @@ async function checkStartupAdoption():Promise<void> {
     if(window)await dialog.showMessageBox(window,{type:result.outcome==='Confirmed'?'info':'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
   }catch{show();dialog.showErrorBox(t.loginResultTitle,t.administrationPending);}
 }
-async function requestStartupContinuation():Promise<boolean> {
-  if(adoptionPending||administration?.active||!backend?.ready||!controller||quitting)return false;
-  continuationOffer=await backend.request<StartupContinuationOffer|null>('startupContinuation',{});updateTray();
-  if(!continuationOffer?.canResume||!window)return false;
-  show();
-  const choice=await dialog.showMessageBox(window,{type:'warning',title:t.continuationTitle,message:t.continuationTitle,detail:t.continuationDetail(continuationOffer.scriptNames),buttons:[t.continuationContinue,t.continuationLater],defaultId:1,cancelId:1,noLink:true});
-  if(choice.response!==0)return false;
-  const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));
-  administrationLease=documentLease;
-  const result=await administration?.request(true,continuationOffer.operationId);
-  if(result&&result.outcome!=='Confirmed'&&window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
-  return result?.outcome==='Confirmed';
+async function requestStartupContinuation(quiet = false): Promise<boolean> {
+  if (adoptionPending || administration?.active || !backend?.ready || !controller || quitting)
+    return false;
+  if (quiet && !lifecycle.takeAutomaticElevation(controller.state.snapshot?.settings))
+    return false;
+  continuationOffer = await backend.request<StartupContinuationOffer | null>(
+    'startupContinuation',
+    {},
+  );
+  updateTray();
+  if (!continuationOffer?.canResume || !window) return false;
+  if (!quiet) {
+    show();
+    const choice = await dialog.showMessageBox(window, {
+      type: 'warning',
+      title: t.continuationTitle,
+      message: t.continuationTitle,
+      detail: t.continuationDetail(continuationOffer.scriptNames),
+      buttons: [t.continuationContinue, t.continuationLater],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (choice.response !== 0) return false;
+  }
+  const deadline = Date.now() + 3000;
+  while (!documentLease && !quitting && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  administrationLease = documentLease;
+  let result: OperationResult | undefined;
+  quietStartupTransfer = quiet;
+  try {
+    result = await administration?.request(true, continuationOffer.operationId, false, quiet);
+  } finally {
+    quietStartupTransfer = false;
+  }
+  if (result && result.outcome !== 'Confirmed' && window && !quiet)
+    await dialog.showMessageBox(window, {
+      type: 'warning',
+      title: t.loginResultTitle,
+      message: t.loginResultTitle,
+      detail: result.detail ?? t.loginFailure(result.code),
+      buttons: [t.confirm],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+  return result?.outcome === 'Confirmed';
 }
-async function runLogin():Promise<void> {
-  if(initialAdoption.descriptor!==null||adoptionPending||administration?.active||stopExit.active||quitting||!backend?.ready||!controller||!lifecycle.takeLogin())return;
-  try{await reportLoginResult(await controller.runLogin());}catch(error){controller.setConnection('failed',safeError(error));show();dialog.showErrorBox(t.loginResultTitle,safeError(error));}
+async function runLogin(): Promise<void> {
+  if (
+    initialAdoption.descriptor !== null ||
+    adoptionPending ||
+    administration?.active ||
+    stopExit.active ||
+    quitting ||
+    !backend?.ready ||
+    !controller ||
+    !lifecycle.takeLogin()
+  )
+    return;
+  try {
+    await reportLoginResult(await controller.runLogin());
+  } catch (error) {
+    controller.setConnection('failed', safeError(error));
+    if (!lifecycle.quietStartup) {
+      show();
+      dialog.showErrorBox(t.loginResultTitle, safeError(error));
+    }
+  }
 }
-async function requestAdministration(explicitCli=false,resumeLogin=false){
-  if(adoptionPending)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
-  if(administration?.processing)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
-  if(controller?.state.authorityMode==='Administrator'){show();return {outcome:'Confirmed' as const,code:'None',detail:null,correlationId:null};}
-  if(explicitCli){const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));}
-  administrationLease=documentLease;
-  return administration?.request(explicitCli,undefined,resumeLogin)??{outcome:'CancelledBeforeDispatch' as const,code:'CapabilityUnverified',detail:null,correlationId:null};
+async function requestAdministration(explicitCli = false, resumeLogin = false, quiet = false) {
+  if (adoptionPending)
+    return {
+      outcome: 'CancelledBeforeDispatch' as const,
+      code: 'PendingOperation',
+      detail: null,
+      correlationId: null,
+    };
+  if (administration?.processing)
+    return {
+      outcome: 'CancelledBeforeDispatch' as const,
+      code: 'PendingOperation',
+      detail: null,
+      correlationId: null,
+    };
+  if (controller?.state.authorityMode === 'Administrator') {
+    if (!quiet) show();
+    return { outcome: 'Confirmed' as const, code: 'None', detail: null, correlationId: null };
+  }
+  if (explicitCli) {
+    const deadline = Date.now() + 3000;
+    while (!documentLease && !quitting && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  administrationLease = documentLease;
+  quietStartupTransfer = quiet;
+  try {
+    return (
+      (await administration?.request(explicitCli, undefined, resumeLogin)) ?? {
+        outcome: 'CancelledBeforeDispatch' as const,
+        code: 'CapabilityUnverified',
+        detail: null,
+        correlationId: null,
+      }
+    );
+  } finally {
+    quietStartupTransfer = false;
+  }
 }
 function createTray():void {
   try{
@@ -387,7 +535,7 @@ async function quit(administrativeAcknowledgement=false):Promise<void> {
   try{
     await Promise.race([orderly(),new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(t.shutdownDeadline(backend?.pid??null))),SHUTDOWN_DEADLINE_MS);})]);
     tray?.destroy();quitComplete=true;app.quit();
-  }catch(error){quitting=false;controller?.setConnection('failed',safeError(error));show();dialog.showErrorBox(t.shutdownUnconfirmed,safeError(error));}
+  }catch(error){quitting=false;controller?.setConnection('failed',safeError(error));if(!quietStartupTransfer){show();dialog.showErrorBox(t.shutdownUnconfirmed,safeError(error));}}
   finally{clearTimeout(timer);}
 }
 function registerIpc():void {
@@ -398,7 +546,7 @@ function registerIpc():void {
     ipcMain.handle(`manager:${name}`,async(event,envelope:unknown)=>{
       const {lease,body}=guard!.validate(event,envelope);requireValid(body,validate,`${name} request`);
       if(quitting&&name!=='getState'&&name!=='getTheme')throw new Error(t.closing);
-      if(updateApplying&&!['getState','getTheme','getUpdateState'].includes(name))throw new Error('A instalação da atualização está sendo preparada.');
+      if(updateApplying&&!['getState','getTheme','getUpdateState'].includes(name))throw new Error('The update installation is being prepared.');
       if(adoptionPending&&!['getState','getTheme','getActivity'].includes(name))throw new Error(t.administrationPending);
       if(controller!.state.administrationPending&&!['getState','getTheme','getActivity','requestAdministration'].includes(name))throw new Error(t.administrationPending);
       const value=await documentScope.run(()=>guard!.current(lease),()=>handler(body));
@@ -410,7 +558,6 @@ function registerIpc():void {
   bind('getUpdateState',none,()=>updates!.snapshot);
   bind('checkUpdates',none,()=>updates!.check());
   bind('installUpdate',shape({id:text(100)}),v=>updates!.install(v.id));
-  bind('setUpdateToken',shape({token:nullable(text(512))}),v=>updates!.setToken(v.token));
   bind('setUpdateChannel',shape({channel:oneOf('stable','test')}),v=>updates!.setChannel(v.channel));
   bind('requestAdministration',none,()=>requestAdministration());
   bind('refresh',none,()=>controller!.refresh());bind('addFiles',none,()=>controller!.add('scripts'));bind('addFolder',none,()=>controller!.add('folder'));
@@ -427,7 +574,7 @@ function registerIpc():void {
   bind('previewImport',none,()=>controller!.previewImport());bind('commitImport',shape({token:guid}),v=>controller!.commitImport(v.token));
   bind('migrateProfile',none,()=>controller!.migrateProfile());bind('transferStartup',none,()=>controller!.transferStartup());
   bind('restoreBackup',none,()=>controller!.restoreBackup());bind('recoverPending',none,()=>controller!.recoverPending());
-  bind('retryBackend',none,async()=>{if(updateShutdownInFlight)throw new Error('Aguarde a confirmação de encerramento do backend.');await startBackend();if(backend?.ready)await runLogin();});
+  bind('retryBackend',none,async()=>{if(updateShutdownInFlight)throw new Error('Wait for confirmed backend shutdown.');await startBackend();if(backend?.ready)await runLogin();});
   bind('copyText',shape({text:text(65536)}),v=>clipboard.writeText(v.text));
   ipcMain.on('manager:updateSelection',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);const selected=body===null?null:assertSelection(body);controller!.updateSelection(selected);diagnosticSelection=selected?.scriptId??null;diagnostics?.selectionCommitted(diagnosticSelection);}catch{/* Untrusted fire-and-forget messages cannot alter host authority. */}});
   ipcMain.on('manager:documentReady',(event,envelope:unknown)=>{try{const {lease,body}=guard!.validate(event,envelope);requireValid(body,none,'document ready');documentLease=lease;rendererReady=true;deliverPreferences();}catch{/* No authority for invalid readiness signals. */}});

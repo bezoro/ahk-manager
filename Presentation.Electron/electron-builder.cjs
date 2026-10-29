@@ -28,7 +28,7 @@ module.exports={
   electronFuses:{runAsNode:false,enableNodeOptionsEnvironmentVariable:false,enableNodeCliInspectArguments:false,enableEmbeddedAsarIntegrityValidation:true,onlyLoadAppFromAsar:true},
   forceCodeSigning:signed,
   win:{target:[{target:'nsis',arch:['x64']}],icon:path.join(frontend,'app.ico'),requestedExecutionLevel:'asInvoker',signAndEditExecutable:true,verifyUpdateCodeSignature:signed||publisherName!==null,...(publisherName!==null?{signtoolOptions:{publisherName:[publisherName]}}:{})},
-  nsis:{oneClick:false,perMachine:false,packElevateHelper:false,allowElevation:false,allowToChangeInstallationDirectory:true,deleteAppDataOnUninstall:false,createDesktopShortcut:false,createStartMenuShortcut:true,runAfterFinish:false,uninstallerIcon:path.join(frontend,'app.ico'),include:path.join(__dirname,'scripts/installer.nsh'),artifactName:'AHK-Manager-${version}-Setup-x64.${ext}',installerLanguages:['pt_BR'],language:'1046'},
+  nsis:{oneClick:false,perMachine:false,packElevateHelper:false,allowElevation:false,allowToChangeInstallationDirectory:true,deleteAppDataOnUninstall:false,createDesktopShortcut:false,createStartMenuShortcut:true,runAfterFinish:false,uninstallerIcon:path.join(frontend,'app.ico'),include:path.join(__dirname,'scripts/installer.nsh'),artifactName:'AHK-Manager-${version}-Setup-x64.${ext}',installerLanguages:['en_US'],language:'1033'},
   publish:{provider:'github',owner:'bezoro',repo:'ahk-manager',private:false,...(publisherName!==null?{publisherName:[publisherName]}:{})},
   afterSign:context=>writeOwnedFiles(context,output,path.join(frontend,'app.ico')),
 };

@@ -12,7 +12,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Bezoro.AhkManager.Backend;
 
-public sealed record ElevationFrame(string Kind, Guid OperationId, string Nonce, string? ReceiptHash = null, string? FileIdentity = null);
+public sealed record ElevationFrame(string Kind, Guid OperationId, string Nonce, string? ReceiptHash = null, string? FileIdentity = null, bool BackgroundStartup = false);
 public sealed record ElevationReceipt(int Version, Guid OperationId, Guid ReceiptId, string Nonce, ProcessStamp NormalBackend, ProcessStamp NormalHost, ProcessStamp Bootstrap, string BackendHash, string HostHash, string ArchiveHash, string ProfileRoot, string ChromiumRoot, DateTimeOffset ExpiresAt, StartupContinuationTicket? StartupContinuation = null, bool ResumeLogin = false);
 
 // State is retained for the lifetime of the normal backend. Mutating ticket calls never replay
@@ -29,7 +29,7 @@ internal sealed class ManagerElevation : IDisposable
     readonly Func<Process?>? dispatchBoundary;
     readonly Func<StartupContinuationTicket, Task<bool>>? commitStartup;
     StartupContinuationTicket? startupContinuation;
-    bool resumeLogin;
+    bool resumeLogin, backgroundStartup;
     Guid operationId, receiptId;
     long revision;
     ElevationState state;
@@ -105,7 +105,7 @@ internal sealed class ManagerElevation : IDisposable
                 cancelled = committed = dispatchStarted = false; receiptId = Guid.Empty; receiptHash = receiptIdentity = "";
                 ready = NewSignal(); ack = NewSignal();
             }
-            if (startingStartupId != id) startupContinuation = null;
+            if (startingStartupId != id) { startupContinuation = null; backgroundStartup = false; }
             this.resumeLogin = startupContinuation is null && resumeLogin;
             operationId = id;
             if (parent.AuthorityMode != AuthorityMode.Normal || !quiescent()) { Set(ElevationState.Failed, ReasonCode.PendingOperation, true); return Current(); }
@@ -117,7 +117,7 @@ internal sealed class ManagerElevation : IDisposable
         }
     }
     Guid startingStartupId;
-    internal ElevationStatus BeginStartup(Guid id, StartupContinuationTicket ticket)
+    internal ElevationStatus BeginStartup(Guid id, StartupContinuationTicket ticket, bool backgroundStartup = false)
     {
         lock (sync)
         {
@@ -125,6 +125,7 @@ internal sealed class ManagerElevation : IDisposable
             if (operationId == id) return Current();
             if (operationId != Guid.Empty && !canResume) throw new ProtocolException("PendingOperation");
             startupContinuation = ticket;
+            this.backgroundStartup = backgroundStartup;
             startingStartupId = id;
             try { return Begin(id); } finally { startingStartupId = Guid.Empty; }
         }
@@ -162,7 +163,7 @@ internal sealed class ManagerElevation : IDisposable
             { output.Write(receiptBytes); output.Flush(true); }
             using var input = PinReceipt(path, receiptBytes, out receiptHash, out receiptIdentity);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromSeconds(15));
-            await Send(pipe!, new("Commit", id, nonce, receiptHash, receiptIdentity), deadline.Token).ConfigureAwait(false);
+            await Send(pipe!, new("Commit", id, nonce, receiptHash, receiptIdentity, backgroundStartup), deadline.Token).ConfigureAwait(false);
             await ack.Task.WaitAsync(TimeSpan.FromSeconds(15), ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (Known(ex)) { lock (sync) if (state != ElevationState.CommitAcked) Set(ElevationState.Unknown, ReasonCode.LaunchUncertain); }
@@ -304,6 +305,7 @@ internal sealed class ManagerElevation : IDisposable
         var receipt = JsonSerializer.Deserialize(receiptLease, Protocol.Json.ElevationReceipt) ?? throw new ProtocolException("InvalidRequest");
         if (receipt.Version != 1 || receipt.OperationId != operation || receipt.Nonce != nonce || receipt.ReceiptId == Guid.Empty || receipt.NormalBackend != normalStamp || receipt.NormalHost != hostStamp || receipt.Bootstrap != own || receipt.BackendHash != files.BackendHash || receipt.HostHash != files.HostHash || receipt.ArchiveHash != files.ArchiveHash || !ProfileRootsMatch(receipt.ProfileRoot, receipt.ChromiumRoot) || receipt.ExpiresAt <= DateTimeOffset.UtcNow || receipt.ExpiresAt > DateTimeOffset.UtcNow.AddSeconds(120) || !files.Valid()) throw new ProtocolException("IdentityChanged");
         if (receipt.StartupContinuation is { } continuation && (continuation.OperationId == Guid.Empty || continuation.UserSid != own.Sid || continuation.SessionId != own.Session || !ScriptPaths.Equal(continuation.ProfileRoot, receipt.ProfileRoot) || continuation.ExpiresAt <= DateTimeOffset.UtcNow)) throw new ProtocolException("IdentityChanged");
+        if (commit.BackgroundStartup && receipt.StartupContinuation is null) throw new ProtocolException("InvalidRequest");
         using var adoption = receipt.StartupContinuation is { } continuationTicket ? new StartupAdoptionServer(continuationTicket, nonce, own, executable, hostPath, files.BackendHash) : null;
         // From here EOF/normal-parent exit is expected, including a lost Ack response.
         // Authenticated commit is pinned. Never revert to the pre-commit EOF rule.
@@ -327,7 +329,7 @@ internal sealed class ManagerElevation : IDisposable
         }
         bool Launch()
         {
-            using var launched = Process.Start(CommittedHostStartInfo(hostPath, adoption?.Descriptor.Encode(), receipt.ResumeLogin));
+            using var launched = Process.Start(CommittedHostStartInfo(hostPath, adoption?.Descriptor.Encode(), receipt.ResumeLogin, commit.BackgroundStartup));
             if (launched is null || !ProcessNative.GetProcessTimes(launched.SafeHandle, out long launchedAt, out _, out _, out _)) return false;
             using var delivered = new NativeProcessIdentity(launched.Id);
             bool valid = delivered.TryRead(out var stamp) && stamp.Created == launchedAt && ScriptPaths.Equal(stamp.Executable, hostPath) && stamp.Sid == own.Sid && stamp.Session == own.Session && delivered.TryReadSecurity(out var actual) && ParentGuard.TokenMode(actual) == AuthorityMode.Administrator;
@@ -340,19 +342,52 @@ internal sealed class ManagerElevation : IDisposable
             try { var continuationResult = await adoption.DeliverAsync().ConfigureAwait(false); result = continuationResult.Outcome == Outcome.Unknown ? 75 : 0; }
             catch (Exception ex) when (Known(ex)) { result = 75; }
         }
-        if (result != 0 && normal.Exited && host.Exited) ElevationNative.RecoveryError();
+        ReportActivationFailure(result, normal.Exited, host.Exited, receipt.ResumeLogin || commit.BackgroundStartup, ElevationNative.RecoveryError);
         return result;
     }
-    internal static ProcessStartInfo CommittedHostStartInfo(string hostPath, string? startupAdoption = null, bool resumeLogin = false)
+    internal static void ReportActivationFailure(
+        int result,
+        bool normalExited,
+        bool hostExited,
+        bool quietStartup,
+        Action report
+    )
     {
-        var start = new ProcessStartInfo(hostPath) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(hostPath)! };
+        if (result != 0 && normalExited && hostExited && !quietStartup)
+            report();
+    }
+
+    internal static ProcessStartInfo CommittedHostStartInfo(
+        string hostPath,
+        string? startupAdoption = null,
+        bool resumeLogin = false,
+        bool backgroundStartup = false
+    )
+    {
+        var start = new ProcessStartInfo(hostPath)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(hostPath)!,
+        };
         // This requests only window activation. Authority still comes from native token proof.
-        if (resumeLogin && startupAdoption is not null) throw new ProtocolException("InvalidRequest");
-        if (resumeLogin) { start.ArgumentList.Add("--login"); start.ArgumentList.Add("--background"); }
-        else start.ArgumentList.Add("--foreground");
-        if (startupAdoption is not null) start.ArgumentList.Add("--startup-adoption=" + startupAdoption);
+        if (resumeLogin && startupAdoption is not null)
+            throw new ProtocolException("InvalidRequest");
+        if (backgroundStartup && startupAdoption is null)
+            throw new ProtocolException("InvalidRequest");
+        if (resumeLogin)
+        {
+            start.ArgumentList.Add("--login");
+            start.ArgumentList.Add("--background");
+        }
+        else if (backgroundStartup)
+            start.ArgumentList.Add("--background");
+        else
+            start.ArgumentList.Add("--foreground");
+        if (startupAdoption is not null)
+            start.ArgumentList.Add("--startup-adoption=" + startupAdoption);
         return start;
     }
+
     // Called only after an authenticated Commit has been validated and pinned. It does not
     // inspect a pipe or parent liveness: EOF is expected after commit, even if Ack was lost.
     internal static async Task<int> ActivateCommitted(Func<TimeSpan, Task<bool>> waitExit, Func<TimeSpan, Task<bool>> waitLocks, Func<bool> valid, Func<bool> consume, Func<bool> launch)
@@ -440,7 +475,7 @@ internal static class ElevationNative
         try { var attributes = new SecurityAttributes { Length = Marshal.SizeOf<SecurityAttributes>(), Descriptor = descriptor }; if (!CreateDirectory(path, ref attributes)) throw new Win32Exception(Marshal.GetLastWin32Error()); }
         finally { ProcessNative.LocalFree(descriptor); }
     }
-    internal static void RecoveryError() => MessageBox(0, "Não foi possível concluir a abertura como administrador. Abra o AHK Manager normalmente para recuperar. Nenhum script foi encerrado.", "AHK Manager", 0x10);
+    internal static void RecoveryError() => MessageBox(0, "AHK Manager could not be reopened as administrator. Open it normally to recover. No scripts were stopped.", "AHK Manager", 0x10);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "MessageBoxW")] static extern int MessageBox(nint window, string text, string caption, uint kind);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text, uint revision, out nint descriptor, out uint size);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern SafePipeHandle CreateNamedPipe(string name, uint openMode, uint pipeMode, uint instances, uint output, uint input, uint timeout, ref SecurityAttributes attributes);

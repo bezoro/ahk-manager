@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Badge, Button, Input, ProgressBar, Select, Spinner } from '@fluentui/react-components';
+import { Badge, Button, ProgressBar, Select, Spinner } from '@fluentui/react-components';
 import { ArrowClockwiseRegular, ArrowDownloadRegular, HistoryRegular } from '@fluentui/react-icons';
 import {
   isEarlierUpdateVersion,
@@ -7,7 +7,7 @@ import {
   type UpdateRelease,
   type UpdateState,
 } from '../../shared/updates.js';
-import { text } from '../resources/pt-BR.js';
+import { text } from '../resources/en-US.js';
 
 interface Props {
   state: UpdateState;
@@ -21,14 +21,14 @@ function date(value: string | null): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime())
     ? text.updateDateUnavailable
-    : parsed.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+    : parsed.toLocaleDateString('en-US', { day: '2-digit', month: 'long', year: 'numeric' });
 }
 
 function checkedAt(value: string): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime())
     ? text.updateDateUnavailable
-    : parsed.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    : parsed.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' });
 }
 
 export function Updates({
@@ -37,11 +37,8 @@ export function Updates({
   installBlockedReason,
   recovery,
 }: Props): React.ReactElement {
-  const [token, setToken] = React.useState('');
   const [pending, setPending] = React.useState(false);
-  const [operation, setOperation] = React.useState<
-    'check' | 'install' | 'token' | 'channel' | null
-  >(null);
+  const [operation, setOperation] = React.useState<'check' | 'install' | 'channel' | null>(null);
   const [feedback, setFeedback] = React.useState<string | null>(null);
   const inFlight = React.useRef(false);
   const active = pending || ['checking', 'downloading', 'installing'].includes(state.phase);
@@ -59,16 +56,12 @@ export function Updates({
   const availablePreview = available?.version.includes('-test.') ?? false;
   const feedbackFailed =
     !!state.error ||
-    [
-      text.updateAccessFailed,
-      text.updateInstallFailed,
-      text.updateCheckFailed,
-      text.updateChannelFailed,
-    ].some((message) => message === feedback);
+    [text.updateInstallFailed, text.updateCheckFailed, text.updateChannelFailed].some(
+      (message) => message === feedback,
+    );
   async function request(
-    action: 'check' | 'install' | 'token' | 'channel',
+    action: 'check' | 'install' | 'channel',
     release?: UpdateRelease,
-    credential?: string | null,
     channel?: UpdateChannel,
   ): Promise<void> {
     if (
@@ -81,28 +74,21 @@ export function Updates({
     setPending(true);
     setOperation(action);
     setFeedback(null);
-    if (action === 'token') setToken('');
     try {
       const result =
         action === 'check'
           ? await window.ahkManager.checkUpdates()
           : action === 'install'
             ? await window.ahkManager.installUpdate(release!.id)
-            : action === 'channel'
-              ? await window.ahkManager.setUpdateChannel(channel!)
-              : await window.ahkManager.setUpdateToken(credential ?? null);
+            : await window.ahkManager.setUpdateChannel(channel!);
       onState(result);
-      if (action === 'token' && !result.error)
-        setFeedback(credential ? text.updateAccessSaved : text.updateAccessRemoved);
     } catch {
       setFeedback(
-        action === 'token'
-          ? text.updateAccessFailed
-          : action === 'install'
-            ? text.updateInstallFailed
-            : action === 'channel'
-              ? text.updateChannelFailed
-              : text.updateCheckFailed,
+        action === 'install'
+          ? text.updateInstallFailed
+          : action === 'channel'
+            ? text.updateChannelFailed
+            : text.updateCheckFailed,
       );
     } finally {
       inFlight.current = false;
@@ -176,7 +162,7 @@ export function Updates({
             aria-describedby="update-channel-hint"
             onChange={(_, data) => {
               if (data.value === 'stable' || data.value === 'test')
-                void request('channel', undefined, undefined, data.value);
+                void request('channel', undefined, data.value);
             }}
           >
             <option value="stable">{text.updateChannelStable}</option>
@@ -208,11 +194,9 @@ export function Updates({
               ? text.updateDownloading
               : state.phase === 'installing' || operation === 'install'
                 ? text.updateInstalling
-                : operation === 'token'
-                  ? text.updateSavingAccess
-                  : operation === 'channel'
-                    ? text.updateSavingChannel
-                    : text.updateChecking}
+                : operation === 'channel'
+                  ? text.updateSavingChannel
+                  : text.updateChecking}
           </span>
           {state.phase === 'downloading' && (
             <ProgressBar
@@ -288,44 +272,6 @@ export function Updates({
             <p className="update-history-empty">{text.updateNoHistory}</p>
           )}
         </section>
-        <details className="update-access">
-          <summary>{text.updateAccess}</summary>
-          <p className="muted">{text.updateAccessHint}</p>
-          <p className="update-access-state">
-            {state.accessConfigured ? text.updateAccessConfigured : text.updateAccessMissing}
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (token.trim()) void request('token', undefined, token.trim());
-            }}
-            autoComplete="off"
-          >
-            <label htmlFor="update-token">{text.updateToken}</label>
-            <Input
-              id="update-token"
-              type="password"
-              maxLength={512}
-              autoComplete="new-password"
-              value={token}
-              disabled={active}
-              onChange={(_, data) => setToken(data.value)}
-            />
-            <div className="update-access-actions">
-              <Button type="submit" disabled={active || !token.trim()}>
-                {text.updateSaveAccess}
-              </Button>
-              <Button
-                type="button"
-                appearance="subtle"
-                disabled={active || !state.accessConfigured}
-                onClick={() => void request('token', undefined, null)}
-              >
-                {text.updateRemoveAccess}
-              </Button>
-            </div>
-          </form>
-        </details>
       </div>
     </div>
   );

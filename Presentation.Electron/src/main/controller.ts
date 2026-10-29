@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { ActivityQuery, ActivitySnapshot, CatalogResult, HostState, ImportPreview, ManagerSettings, ManagerSnapshot, OperationResult, ProcessIdentity, RecyclePlan, RecycleAuthorization, ScriptFileIdentity, ScriptMetadata, ScriptOperation, ScriptSnapshot, SelectionContext, WindowPlacement } from '../shared/contracts.js';
 import type { PreparedOperation, ProfileMigrationPreview } from './backend.js';
 import { MAX_PENDING } from './backend.js';
-import {hostText as t} from '../shared/host-pt-BR.js';
+import {hostText as t} from '../shared/host-en-US.js';
 import {withinDeadline} from './lifecycle.js';
 
 export interface StopExitItem {scriptId:string;name:string;path:string;pid:number|null;outcome:'alreadyStopped'|'confirmed'|'untouched'|'unknown';reason:string}
@@ -36,9 +36,9 @@ export function selectionVisible(snapshot:ManagerSnapshot,selection:SelectionCon
   if(query.status==='Running'&&script.status!=='Running')return false;
   if(query.status==='Stopped'&&script.status!=='Stopped')return false;
   if(query.status==='Problems'&&!script.issues.length&&!['Unknown','Multiple','Missing','Blocked'].includes(script.status))return false;
-  const search=query.search.trim().toLocaleLowerCase('pt-BR');
+  const search=query.search.trim().toLocaleLowerCase('en-US');
   const description=script.headerDescription?.trim()?script.headerDescription:script.description;
-  return !search||`${script.friendlyName}\n${script.path}\n${description}`.toLocaleLowerCase('pt-BR').includes(search);
+  return !search||`${script.friendlyName}\n${script.path}\n${description}`.toLocaleLowerCase('en-US').includes(search);
 }
 export class ManagerController {
   state:HostState={snapshot:null,connection:'starting',error:null,busy:false,authorityMode:null,administrationPending:false};

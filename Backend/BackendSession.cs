@@ -63,7 +63,8 @@ internal sealed class BackendSession : IBackendSession
             var request = Read(payload, Protocol.Json.StartupElevationPayload);
             if (!loaded || administration is null || manager is not ManagerService continuationManager) throw new ProtocolException("InvalidRequest");
             var ticket = await continuationManager.GetPreparedStartupContinuationAsync(request.ContinuationId).ConfigureAwait(false);
-            return Pack(ticket is null ? new ElevationStatus(request.OperationId, 0, ElevationState.Failed, ReasonCode.IdentityChanged, null, true) : administration.BeginStartup(request.OperationId, ticket), Protocol.Json.ElevationStatus);
+            if (request.BackgroundStartup && (!continuationManager.Snapshot.Settings.LaunchManagerAtLogin || !continuationManager.Snapshot.Settings.LaunchManagerAsAdministrator)) ticket = null;
+            return Pack(ticket is null ? new ElevationStatus(request.OperationId, 0, ElevationState.Failed, ReasonCode.IdentityChanged, null, true) : administration.BeginStartup(request.OperationId, ticket, request.BackgroundStartup), Protocol.Json.ElevationStatus);
         }
         if (action is "beginAdministration" or "administrationStatus" or "commitAdministration" or "cancelAdministration")
         {

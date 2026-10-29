@@ -9,8 +9,7 @@ import { compareVersions, type RemoteUpdateRelease } from './github-updates.js';
 import type { CachedInstaller } from './update-store.js';
 
 export interface UpdateStorePort {
-  readToken(): Promise<string | null>;
-  saveToken(token: string | null): Promise<void>;
+  removeLegacyAccess(): Promise<void>;
   readChannel(): Promise<UpdateChannel>;
   saveChannel(channel: UpdateChannel): Promise<void>;
   cached(): Promise<CachedInstaller[]>;
@@ -20,13 +19,9 @@ export interface UpdateStorePort {
 export interface UpdateBoundary {
   version: string;
   store: UpdateStorePort;
-  releases(token: string | null, channel: UpdateChannel): Promise<RemoteUpdateRelease[]>;
-  resolve?(id: string, token: string | null): Promise<RemoteUpdateRelease>;
-  download(
-    release: RemoteUpdateRelease,
-    token: string | null,
-    progress: (percent: number) => void,
-  ): Promise<string>;
+  releases(channel: UpdateChannel): Promise<RemoteUpdateRelease[]>;
+  resolve?(id: string): Promise<RemoteUpdateRelease>;
+  download(release: RemoteUpdateRelease, progress: (percent: number) => void): Promise<string>;
   preflight(operationId: string, phase: 'begin' | 'commit'): Promise<boolean>;
   confirm(release: UpdateRelease): Promise<boolean>;
   apply(operationId: string, target: CachedInstaller): Promise<void>;
@@ -46,9 +41,7 @@ export class UpdateService {
   private state: UpdateState;
   private remote: RemoteUpdateRelease[] = [];
   private local: CachedInstaller[] = [];
-  private token: string | null = null;
   private installing = false;
-  private configuringCredential = false;
   private configuringChannel = false;
   private explicitTestOptIn = false;
   constructor(private readonly boundary: UpdateBoundary) {
@@ -59,7 +52,6 @@ export class UpdateService {
       availableVersion: null,
       lastCheckedAt: null,
       error: null,
-      accessConfigured: false,
       progress: null,
       releases: [],
     };
@@ -68,9 +60,7 @@ export class UpdateService {
     return structuredClone(this.state);
   }
   get busy(): boolean {
-    return (
-      this.installing || this.configuringCredential || this.configuringChannel || active(this.state)
-    );
+    return this.installing || this.configuringChannel || active(this.state);
   }
   private publish(patch: Partial<UpdateState> = {}): UpdateState {
     this.state = { ...this.state, ...patch };
@@ -82,7 +72,7 @@ export class UpdateService {
         id: `local:${cached.version}`,
         version: cached.version,
         publishedAt: null,
-        notes: 'Instalador preservado neste computador.',
+        notes: 'Installer preserved on this computer.',
         commit: null,
         installed: cached.version === this.boundary.version,
         canInstall: cached.version !== this.boundary.version,
@@ -111,7 +101,7 @@ export class UpdateService {
         id: 'installed',
         version: this.boundary.version,
         publishedAt: null,
-        notes: 'Versão em execução.',
+        notes: 'Currently running version.',
         commit: null,
         installed: true,
         canInstall: false,
@@ -148,26 +138,27 @@ export class UpdateService {
   }
   async initialize(): Promise<UpdateState> {
     try {
-      this.token = await this.boundary.store.readToken();
+      // Retired credentials are never read or decrypted. A cleanup failure must
+      // not prevent public update checks.
+      await this.boundary.store.removeLegacyAccess().catch(() => {});
       const channel = await this.boundary.store.readChannel();
-      if (!validUpdateChannel(channel)) throw new Error('O canal de atualização salvo é inválido.');
+      if (!validUpdateChannel(channel)) throw new Error('The saved update channel is invalid.');
       this.local = await this.boundary.store.cached();
       return this.publish({
         channel,
-        accessConfigured: this.token !== null,
         error: (await this.boundary.recovery?.()) ?? null,
       });
     } catch (error) {
       return this.publish({
         phase: 'error',
-        error: safeError(error, 'Não foi possível carregar o histórico de atualizações.'),
+        error: safeError(error, 'The update history could not be loaded.'),
       });
     }
   }
   async setChannel(channel: UpdateChannel): Promise<UpdateState> {
     if (this.busy) return this.snapshot;
     if (!validUpdateChannel(channel))
-      return this.publish({ phase: 'error', error: 'O canal de atualização é inválido.' });
+      return this.publish({ phase: 'error', error: 'The update channel is invalid.' });
     this.configuringChannel = true;
     // Discard catalog identities before the first await. A former-channel choice
     // must never remain selectable while its preference is being persisted.
@@ -180,35 +171,10 @@ export class UpdateService {
     } catch {
       return this.publish({
         phase: 'error',
-        error: 'Não foi possível salvar o canal de atualização. O canal anterior foi mantido.',
+        error: 'The update channel could not be saved. The previous channel was kept.',
       });
     } finally {
       this.configuringChannel = false;
-    }
-    return this.check();
-  }
-  async setToken(value: string | null): Promise<UpdateState> {
-    if (this.busy) return this.snapshot;
-    this.configuringCredential = true;
-    this.publish({ phase: 'checking', error: null });
-    try {
-      await this.boundary.store.saveToken(value);
-      this.token = value;
-      this.remote = [];
-      this.publish({
-        accessConfigured: value !== null,
-        error: null,
-        phase: 'idle',
-        lastCheckedAt: null,
-      });
-    } catch {
-      return this.publish({
-        phase: 'error',
-        error:
-          'Não foi possível salvar o acesso protegido ao GitHub. Confira o token e a proteção de credenciais do Windows.',
-      });
-    } finally {
-      this.configuringCredential = false;
     }
     return this.check();
   }
@@ -217,7 +183,7 @@ export class UpdateService {
     this.publish({ phase: 'checking', error: null, progress: null });
     try {
       this.local = await this.boundary.store.cached();
-      this.remote = await this.boundary.releases(this.token, this.state.channel);
+      this.remote = await this.boundary.releases(this.state.channel);
       const recovery = (await this.boundary.recovery?.()) ?? null;
       return this.publish({
         phase: recovery ? 'error' : 'idle',
@@ -227,10 +193,7 @@ export class UpdateService {
     } catch (error) {
       return this.publish({
         phase: 'error',
-        error: safeError(
-          error,
-          'Não foi possível consultar as atualizações. Tente novamente mais tarde.',
-        ),
+        error: safeError(error, 'Updates could not be checked. Try again later.'),
       });
     }
   }
@@ -240,7 +203,7 @@ export class UpdateService {
     if (!choice)
       return this.publish({
         phase: 'error',
-        error: 'Essa versão não está mais disponível no histórico. Verifique as atualizações.',
+        error: 'This version is no longer available in the history. Check for updates again.',
       });
     this.installing = true;
     const operationId = randomUUID();
@@ -248,7 +211,7 @@ export class UpdateService {
       if (!(await this.boundary.preflight(operationId, 'begin')))
         return this.publish({
           phase: 'error',
-          error: 'Salve ou descarte as alterações e aguarde as operações antes de atualizar.',
+          error: 'Save or discard your changes and wait for operations to finish before updating.',
         });
       if (!(await this.boundary.confirm(choice))) return this.snapshot;
       this.publish({ phase: 'downloading', error: null, progress: 0 });
@@ -270,8 +233,8 @@ export class UpdateService {
       }
       if (!target && remote?.metadataOnly) {
         if (!this.boundary.resolve)
-          throw new Error('Verifique as atualizações antes de instalar essa versão.');
-        const resolved = await this.boundary.resolve(id, this.token);
+          throw new Error('Check for updates before installing this version.');
+        const resolved = await this.boundary.resolve(id);
         if (
           resolved.id !== remote.id ||
           resolved.version !== remote.version ||
@@ -279,14 +242,14 @@ export class UpdateService {
           resolved.bytes !== remote.bytes ||
           resolved.metadataOnly
         )
-          throw new Error('A identidade dessa versão mudou. Verifique as atualizações novamente.');
+          throw new Error("This version's identity changed. Check for updates again.");
         remote = resolved;
         this.remote = this.remote.map((item) => (item.id === id ? resolved : item));
       }
       if (!target) {
         if (!remote)
-          throw new Error('O instalador dessa versão não está disponível neste computador.');
-        const file = await this.boundary.download(remote, this.token, (percent) =>
+          throw new Error('The installer for this version is not available on this computer.');
+        const file = await this.boundary.download(remote, (percent) =>
           this.publish({ progress: Math.max(0, Math.min(100, percent)) }),
         );
         target = await this.boundary.store.cache(remote.version, file, remote.sha256, remote.bytes);
@@ -298,7 +261,7 @@ export class UpdateService {
           phase: 'error',
           progress: null,
           error:
-            'O instalador foi preservado. Feche os diálogos, salve as alterações e tente instalar novamente.',
+            'The installer has been preserved. Close any dialogs, save your changes, and try installing again.',
         });
       this.publish({ phase: 'installing', progress: 100 });
       await this.boundary.apply(operationId, target);
@@ -309,7 +272,7 @@ export class UpdateService {
         progress: null,
         error: safeError(
           error,
-          'A atualização não foi concluída. A instalação e os registros de recuperação foram preservados.',
+          'The update did not finish. The installation and recovery records have been preserved.',
         ),
       });
     } finally {

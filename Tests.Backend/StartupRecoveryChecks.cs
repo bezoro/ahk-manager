@@ -78,7 +78,7 @@ internal static class StartupRecoveryChecks
         await File.WriteAllBytesAsync(file, bytes);
         bool known = false;
         try { _ = await new StartupContinuationStore(data).ReadAsync(id); }
-        catch (InvalidDataException ex) { known = ex.Message.Contains(file, StringComparison.Ordinal) && ex.Message.Contains("preservado", StringComparison.Ordinal); }
+        catch (InvalidDataException ex) { known = ex.Message.Contains(file, StringComparison.Ordinal) && ex.Message.Contains("preserved", StringComparison.Ordinal); }
         check(known, "malformed continuation remains a named known recovery failure: " + name);
         check((await File.ReadAllBytesAsync(file)).SequenceEqual(bytes), "invalid continuation evidence stays byte identical: " + name);
     }
@@ -173,7 +173,7 @@ internal static class StartupRecoveryChecks
                     check((await store.ReadAsync(valid.Ticket.OperationId))!.Phase == StartupContinuationPhase.Recovered && await manager.GetPreparedStartupContinuationAsync(valid.Ticket.OperationId) is null, "explicit recovery closes valid uncertain evidence without reconstructing continuation authority");
                     var copies = Directory.EnumerateFiles(Path.Combine(data, "startup-continuations", "quarantine"), "*-" + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() + ".json", SearchOption.AllDirectories).ToArray();
                     check(copies.Length == 1 && (await File.ReadAllBytesAsync(copies[0])).SequenceEqual(bytes), "manager recovery preserves corrupt source bytes in a named quarantine copy");
-                    check(manager.Snapshot.Activity.Any(activity => activity.Operation == ScriptOperation.Recover && activity.Detail?.Contains("preservado", StringComparison.Ordinal) == true), "manager recovery records preserved evidence in activity");
+                    check(manager.Snapshot.Activity.Any(activity => activity.Operation == ScriptOperation.Recover && activity.Detail?.Contains("preserved", StringComparison.Ordinal) == true), "manager recovery records preserved evidence in activity");
                 }
                 else
                     check(!result.Succeeded && !manager.Snapshot.EffectsAvailable && (await File.ReadAllBytesAsync(invalid)).SequenceEqual(bytes) && !Directory.Exists(Path.Combine(data, "startup-continuations", "quarantine")), "unsafe observation or unresolved process request prevents any quarantine move: " + scenario);

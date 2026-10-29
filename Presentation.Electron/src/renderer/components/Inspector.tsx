@@ -4,7 +4,7 @@ import { ArrowClockwiseRegular, CopyRegular, DocumentRegular, EditRegular, Folde
 import type { HostState, ScriptOperation, ScriptSnapshot } from '../../shared/contracts.js';
 import { actionReason, changeDraft, changeManualDraft, effectiveDescription, type Draft } from '../model.js';
 import { date, duration, origin } from '../format.js';
-import { operation, outcome, reason, status, text } from '../resources/pt-BR.js';
+import { operation, outcome, reason, status, text } from '../resources/en-US.js';
 import { ReadableHotkey } from './Hotkeys.js';
 
 interface Props { host: HostState; script: ScriptSnapshot | null; draft: Draft | null; busy: boolean; onDraft(draft: Draft): void; onSave(): void; onDiscard(): void; onAction(action: ScriptOperation): void; onCopy(value: string): void; onLocate():void; onRemove():void; onDelete():void }

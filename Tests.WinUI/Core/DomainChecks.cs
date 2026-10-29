@@ -62,7 +62,7 @@ public static partial class CoreSuite
         Check((await new HotkeyAnalyzer().AnalyzeAsync(path)).Hotkeys.All(h => h.DeclaredGesture is null), "gesture lookalikes inside comments/strings/continuations ignored");
         await File.WriteAllTextAsync(path, string.Concat(Enumerable.Repeat("; @gesture malformed\n", 80)) + "F13::return\n");
         var bounded = await new HotkeyAnalyzer().AnalyzeAsync(path);
-        Check(bounded.Issues.Count(i => i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true) == 33 && bounded.Issues.Last().Detail == "Anotações @gesture adicionais omitidas: 48." && bounded.Hotkeys.Single().Chord == "F13", "annotation diagnostics retain32 plus accurate overflow and ordinary declarations");
+        Check(bounded.Issues.Count(i => i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true) == 33 && bounded.Issues.Last().Detail == "Additional @gesture annotations omitted: 48." && bounded.Hotkeys.Single().Chord == "F13", "annotation diagnostics retain32 plus accurate overflow and ordinary declarations");
         string gestureChild = Path.Combine(root, "gesture-child.ahk");
         await File.WriteAllTextAsync(gestureChild, "RButton::return\n");
         await File.WriteAllTextAsync(path, "; @gesture double-click\n#Include gesture-child.ahk\nLButton::return\n");
@@ -75,7 +75,7 @@ public static partial class CoreSuite
         await File.WriteAllTextAsync(gestureChild, string.Concat(Enumerable.Repeat("; @gesture malformed\n", 20)) + "F24::return\n");
         await File.WriteAllTextAsync(path, string.Concat(Enumerable.Repeat("; @gesture malformed\n", 20)) + "#Include gesture-child.ahk\nF13::return\n");
         var globalBudget = await new HotkeyAnalyzer().AnalyzeAsync(path);
-        Check(globalBudget.Issues.Count(i => i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true) == 33 && globalBudget.Issues.Last().Detail == "Anotações @gesture adicionais omitidas: 8." && globalBudget.Hotkeys.Select(h => h.Chord).SequenceEqual(new[] { "F24", "F13" }), "32 annotation diagnostics plus accurate overflow shared across parent and included file");
+        Check(globalBudget.Issues.Count(i => i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true) == 33 && globalBudget.Issues.Last().Detail == "Additional @gesture annotations omitted: 8." && globalBudget.Hotkeys.Select(h => h.Chord).SequenceEqual(new[] { "F24", "F13" }), "32 annotation diagnostics plus accurate overflow shared across parent and included file");
         await File.WriteAllTextAsync(path, "#Requires AutoHotkey v2.0\n; ^x:: comment\ntext := \"^z:: fake\"\n^!a::MsgBox 'ok'\n#HotIf WinActive('Example')\nF2::return\n#Include missing.ahk\nHotkey('F3', (*) => 0)\na::b\n");
         var result = await new HotkeyAnalyzer().AnalyzeAsync(path);
         Check(result.Hotkeys.Any(h => h.NormalizedChord == HotkeyAnalyzer.Normalize("!^a")), "static declaration detected");

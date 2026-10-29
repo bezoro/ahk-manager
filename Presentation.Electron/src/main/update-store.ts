@@ -14,11 +14,6 @@ export interface CachedInstaller {
   sha256: string;
   bytes: number;
 }
-export interface TokenEncryption {
-  available(): boolean;
-  encrypt(value: string): Buffer;
-  decrypt(value: Buffer): string;
-}
 const version = validUpdateVersion;
 const digest = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
@@ -26,11 +21,8 @@ const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.c
 
 /** Cache is outside the installation and the operational profile. No script is copied. */
 export class UpdateStore {
-  constructor(
-    readonly root: string,
-    private readonly encryption: TokenEncryption,
-  ) {
-    if (!path.isAbsolute(root)) throw new Error('Cache de atualização inválido.');
+  constructor(readonly root: string) {
+    if (!path.isAbsolute(root)) throw new Error('The update cache is invalid.');
   }
   async safeDirectory(directory: string, create = false): Promise<void> {
     const absolute = path.resolve(directory);
@@ -39,7 +31,7 @@ export class UpdateStore {
     try {
       const stat = await fs.lstat(absolute);
       if (!stat.isDirectory() || stat.isSymbolicLink())
-        throw new Error('A pasta de atualização foi redirecionada.');
+        throw new Error('The update directory has been redirected.');
     } catch (error) {
       if (!create || !missing(error)) throw error;
       try {
@@ -49,7 +41,7 @@ export class UpdateStore {
       }
       const stat = await fs.lstat(absolute);
       if (!stat.isDirectory() || stat.isSymbolicLink())
-        throw new Error('Pasta de atualização inválida.');
+        throw new Error('The update directory is invalid.');
     }
   }
   async regular(file: string, maximum = 1024 * 1024 * 1024): Promise<import('node:fs').Stats> {
@@ -62,7 +54,7 @@ export class UpdateStore {
       stat.size < 1 ||
       stat.size > maximum
     )
-      throw new Error('Arquivo de atualização inválido.');
+      throw new Error('The update file is invalid.');
     return stat;
   }
   async hash(file: string): Promise<string> {
@@ -77,28 +69,23 @@ export class UpdateStore {
       before.mtimeMs !== after.mtimeMs ||
       before.ctimeMs !== after.ctimeMs
     )
-      throw new Error('O arquivo de atualização mudou durante a verificação.');
+      throw new Error('The update file changed during verification.');
     return hash.digest('hex');
   }
   async writeNew(file: string, value: string | Buffer): Promise<void> {
     await this.safeDirectory(path.dirname(file), true);
     await fs.writeFile(file, value, { flag: 'wx', mode: 0o600 });
   }
-  async readToken(): Promise<string | null> {
+  /** Retire only an owned regular credential file; never follow redirected entries. */
+  async removeLegacyAccess(): Promise<void> {
     const file = path.join(this.root, 'github-token.bin');
     try {
-      await this.regular(file, 16384);
-      if (!this.encryption.available())
-        throw new Error('A proteção de credenciais do Windows está indisponível.');
-      const value = this.encryption.decrypt(await fs.readFile(file));
-      if (!/^[A-Za-z0-9_]{20,512}$/.test(value))
-        throw new Error('A credencial de atualização precisa ser configurada novamente.');
-      return value;
+      await this.safeDirectory(this.root);
+      const stat = await fs.lstat(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) return;
+      await fs.unlink(file);
     } catch (error) {
-      if (missing(error)) return null;
-      throw new Error(
-        'Não foi possível ler o acesso protegido ao GitHub. Configure o acesso novamente.',
-      );
+      if (!missing(error)) throw error;
     }
   }
   async readChannel(): Promise<UpdateChannel> {
@@ -118,11 +105,11 @@ export class UpdateStore {
       return value.channel;
     } catch (error) {
       if (missing(error)) return 'stable';
-      throw new Error('Não foi possível ler o canal de atualização. Selecione o canal novamente.');
+      throw new Error('The update channel could not be read. Select the channel again.');
     }
   }
   async saveChannel(channel: UpdateChannel): Promise<void> {
-    if (!validUpdateChannel(channel)) throw new Error('O canal de atualização é inválido.');
+    if (!validUpdateChannel(channel)) throw new Error('The update channel is invalid.');
     await this.safeDirectory(this.root, true);
     const file = path.join(this.root, 'update-channel.json');
     try {
@@ -130,39 +117,12 @@ export class UpdateStore {
       // still be repaired by atomically replacing our own regular, unlinked file.
       const existing = await fs.lstat(file);
       if (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1)
-        throw new Error('Arquivo de atualização inválido.');
+        throw new Error('The update file is invalid.');
     } catch (error) {
       if (!missing(error)) throw error;
     }
     const temporary = path.join(this.root, `channel-${randomUUID()}.tmp`);
     await this.writeNew(temporary, JSON.stringify({ schemaVersion: 1, channel }));
-    try {
-      await fs.rename(temporary, file);
-    } catch (error) {
-      await fs.unlink(temporary).catch(() => {});
-      throw error;
-    }
-  }
-  async saveToken(value: string | null): Promise<void> {
-    const file = path.join(this.root, 'github-token.bin');
-    await this.safeDirectory(this.root, true);
-    if (value === null) {
-      try {
-        await this.regular(file, 16384);
-        await fs.unlink(file);
-      } catch (error) {
-        if (!missing(error)) throw error;
-      }
-      return;
-    }
-    if (!/^[A-Za-z0-9_]{20,512}$/.test(value))
-      throw new Error('Informe um token do GitHub válido.');
-    if (!this.encryption.available())
-      throw new Error(
-        'O Windows não disponibilizou a proteção de credenciais. O token não foi salvo.',
-      );
-    const temporary = path.join(this.root, `credential-${randomUUID()}.tmp`);
-    await this.writeNew(temporary, this.encryption.encrypt(value));
     try {
       await fs.rename(temporary, file);
     } catch (error) {
@@ -217,14 +177,14 @@ export class UpdateStore {
         path.join(this.root, 'installers', installer.version, 'installer.exe') ||
       !digest(installer.sha256)
     )
-      throw new Error('Instalador fora do histórico de versões.');
+      throw new Error('The installer is outside the version history.');
     const stat = await this.regular(installer.installerPath);
     if (
       stat.size !== installer.bytes ||
       (await this.hash(installer.installerPath)) !== installer.sha256
     )
       throw new Error(
-        'A integridade do instalador não confere. Verifique as atualizações para baixar outra cópia.',
+        'The installer integrity check failed. Check for updates to download another copy.',
       );
   }
   async cache(
@@ -233,10 +193,9 @@ export class UpdateStore {
     sha256: string,
     bytes: number,
   ): Promise<CachedInstaller> {
-    if (!version(versionName) || !digest(sha256))
-      throw new Error('Versão de atualização inválida.');
+    if (!version(versionName) || !digest(sha256)) throw new Error('The update version is invalid.');
     if ((await this.regular(source)).size !== bytes || (await this.hash(source)) !== sha256)
-      throw new Error('O instalador baixado não passou na verificação de integridade.');
+      throw new Error('The downloaded installer failed its integrity check.');
     const directory = path.join(this.root, 'installers', versionName);
     await this.safeDirectory(directory, true);
     const installerPath = path.join(directory, 'installer.exe');
@@ -254,7 +213,7 @@ export class UpdateStore {
     const temporary = path.join(directory, `download-${randomUUID()}.tmp`);
     await fs.copyFile(source, temporary, 1);
     if ((await this.hash(temporary)) !== sha256)
-      throw new Error('O instalador mudou ao preparar a atualização.');
+      throw new Error('The installer changed while preparing the update.');
     try {
       await this.regular(installerPath);
       await fs.rename(installerPath, path.join(directory, `preserved-${randomUUID()}.exe`));

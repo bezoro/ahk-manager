@@ -110,7 +110,7 @@ internal static partial class SelfTests
             var effects = new FakeEffects("backup-failed", root) { ShutdownGate = () => UpdateShutdownGate.Wait(candidate, operation, () => probe.HasExited, () => probe.ExitCode, scenario == "live-parent" ? TimeSpan.Zero : TimeSpan.FromSeconds(1)) };
             var result = await ApplyEngine.Run(candidate, effects);
             Check(result.Outcome == "Failed" && effects.Backups == (scenario == "normal" ? 1 : 0) && effects.Installs == 0 && effects.Restores == 0, "production shutdown gate permits only committed normal exit before any snapshot or installer: " + scenario);
-            if (scenario is "cancel" or "cancel-abnormal-exit") Check(result.Detail.Contains("cancelada", StringComparison.Ordinal), "cancellation takes precedence over shutdown commit and native exit evidence: " + scenario);
+            if (scenario is "cancel" or "cancel-abnormal-exit") Check(result.Detail.Contains("cancelled", StringComparison.Ordinal), "cancellation takes precedence over shutdown commit and native exit evidence: " + scenario);
         }
 
         string original = Path.Combine(root, "original"), copy = Path.Combine(root, "copy"); Directory.CreateDirectory(original); Directory.CreateDirectory(Path.Combine(original, "empty"));

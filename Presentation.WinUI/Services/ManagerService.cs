@@ -136,9 +136,9 @@ public sealed partial class ManagerService : IManagerService
         }
         var global = storageIssues.AddRange(observed.Issues);
         if (!owner.Held || !owner.Trusted) global = global.Add(new(ReasonCode.EffectOwnerUnavailable));
-        if (!journal.Ready) global = global.Add(new(ReasonCode.PendingOperation, "O histórico de execuções não pôde ser lido. As ações de execução estão indisponíveis."));
+        if (!journal.Ready) global = global.Add(new(ReasonCode.PendingOperation, "The launch history could not be read. Launch actions are unavailable."));
         else foreach (var request in journal.Records.Where(OperationJournal.IsPending).Take(8)) global = global.Add(new(ReasonCode.PendingOperation, PendingRequestDetail(request)));
-        if (startupRecoveryPending) global = global.Add(new(ReasonCode.PendingOperation, "Não foi possível confirmar a continuação do início dos scripts. Novos inícios estão bloqueados para evitar duplicação."));
+        if (startupRecoveryPending) global = global.Add(new(ReasonCode.PendingOperation, "The startup continuation could not be verified. New launches are blocked to prevent duplicate instances."));
         var registration = startup.RegistrationStatus(document.Settings.LaunchManagerAtLogin, document.Settings.LaunchManagerAsAdministrator);
         if (registration != ReasonCode.None) global = global.Add(new(registration));
         ImmutableArray<ActivitySnapshot> recent;
@@ -150,8 +150,8 @@ public sealed partial class ManagerService : IManagerService
     string PendingRequestDetail(OperationRecord record)
     {
         string name = document.Scripts.FirstOrDefault(s => s.Id == record.ScriptId)?.FriendlyName ?? Path.GetFileNameWithoutExtension(record.ScriptPath);
-        string action = record.Operation switch { ScriptOperation.Start => "iniciar", ScriptOperation.Stop => "encerrar", ScriptOperation.Restart => "reiniciar", ScriptOperation.TogglePause => "alterar a pausa de", ScriptOperation.ToggleSuspend => "alterar a suspensão de", ScriptOperation.RecycleFile => "enviar à Lixeira", _ => "alterar" };
-        return $"Não foi possível confirmar o resultado de {action} {name}. O Manager não repetirá essa solicitação automaticamente.";
+        string action = record.Operation switch { ScriptOperation.Start => "starting", ScriptOperation.Stop => "stopping", ScriptOperation.Restart => "restarting", ScriptOperation.TogglePause => "changing the pause state of", ScriptOperation.ToggleSuspend => "changing the hotkey suspension state of", ScriptOperation.RecycleFile => "recycling", _ => "changing" };
+        return $"The outcome of {action} {name} could not be confirmed. Manager will not replay this request automatically.";
     }
     async Task<OperationResult> Commit(SettingsDocument next, Guid? scriptId, CancellationToken ct)
     {
@@ -258,7 +258,7 @@ public sealed partial class ManagerService : IManagerService
         if (saved.Succeeded && startupConsent && metadata.RunAtLogin == true)
         {
             var registered = document.Settings.LaunchManagerAsAdministrator && !processes.IsAdministrator
-                ? new OperationResult(Outcome.Failed, ReasonCode.ManualElevationRequired, "A preferência foi salva. Reabra o Manager como administrador para concluir o início com Windows.")
+                ? new OperationResult(Outcome.Failed, ReasonCode.ManualElevationRequired, "The preference was saved. Reopen Manager as administrator to finish configuring Windows startup.")
                 : await startup.SetEnabledAsync(true, true, document.Settings.LaunchManagerAsAdministrator, CancellationToken.None).ConfigureAwait(false);
             await Publish(false, CancellationToken.None).ConfigureAwait(false);
             if (!registered.Succeeded) return registered with { Outcome = Outcome.Partial };
@@ -324,7 +324,7 @@ public sealed partial class ManagerService : IManagerService
     public Task<RecycleAuthorization> AuthorizeRecycleAsync(Guid operationId, SelectionContext selection, bool confirmed, CancellationToken cancellationToken = default) => Exclusive(async () =>
     {
         bool stopped = false;
-        RecycleAuthorization Deny(ReasonCode code, string? detail = null, Outcome outcome = Outcome.Failed) => new(new(stopped && outcome != Outcome.Unknown ? Outcome.Partial : outcome, code, stopped ? "Execução encerrada. " + detail : detail, operationId), null, stopped);
+        RecycleAuthorization Deny(ReasonCode code, string? detail = null, Outcome outcome = Outcome.Failed) => new(new(stopped && outcome != Outcome.Unknown ? Outcome.Partial : outcome, code, stopped ? "The running instance was stopped. " + detail : detail, operationId), null, stopped);
         if (!recyclePlans.Remove(operationId, out var held) || DateTimeOffset.UtcNow - held.Time > TimeSpan.FromMinutes(2) || held.Plan.Selection != selection || !ValidSelection(selection, true)) return Deny(ReasonCode.StaleSelection);
         if (!confirmed) return Deny(ReasonCode.Cancelled, outcome: Outcome.CancelledBeforeDispatch);
         var plan = held.Plan;
@@ -369,7 +369,7 @@ public sealed partial class ManagerService : IManagerService
         if (receipt != Outcome.Confirmed)
         {
             var outcome = receipt == Outcome.Unknown ? Outcome.Unknown : record.RecycleStopped ? Outcome.Partial : Outcome.Failed;
-            var result = new OperationResult(outcome, receipt == Outcome.Unknown ? ReasonCode.PendingOperation : ReasonCode.DispatchFailed, (record.RecycleStopped ? "Execução encerrada. " : "") + detail, operationId);
+            var result = new OperationResult(outcome, receipt == Outcome.Unknown ? ReasonCode.PendingOperation : ReasonCode.DispatchFailed, (record.RecycleStopped ? "The running instance was stopped. " : "") + detail, operationId);
             var save = await journal.PutAsync(record with { Outcome = outcome, Code = result.Code }, CancellationToken.None).ConfigureAwait(false);
             await Log(record.ScriptId, ScriptOperation.RecycleFile, result, CancellationToken.None).ConfigureAwait(false);
             await Publish(false, CancellationToken.None).ConfigureAwait(false);
@@ -378,12 +378,12 @@ public sealed partial class ManagerService : IManagerService
         // Receipt is durable before catalog mutation; absence alone never reaches this branch.
         record = record with { RecycleReceipt = true };
         var received = await journal.PutAsync(record, CancellationToken.None).ConfigureAwait(false);
-        if (!received.Succeeded) return new(Outcome.Unknown, ReasonCode.StorageFailure, "Reciclagem confirmada; recibo não persistido.", operationId);
+        if (!received.Succeeded) return new(Outcome.Unknown, ReasonCode.StorageFailure, "The file was moved to the Recycle Bin, but its receipt could not be saved.", operationId);
         var script = document.Scripts.SingleOrDefault(s => s.Id == record.ScriptId);
         OperationResult committed;
-        if (File.Exists(record.ScriptPath) || script is null || !ScriptPaths.Equal(script.Path, record.ScriptPath) || !await store.VerifyLoadedAsync(CancellationToken.None).ConfigureAwait(false)) committed = new(Outcome.Partial, ReasonCode.ConcurrentSettingsChange, "Reciclagem confirmada; revise e remova o registro da lista.", operationId);
+        if (File.Exists(record.ScriptPath) || script is null || !ScriptPaths.Equal(script.Path, record.ScriptPath) || !await store.VerifyLoadedAsync(CancellationToken.None).ConfigureAwait(false)) committed = new(Outcome.Partial, ReasonCode.ConcurrentSettingsChange, "The file was moved to the Recycle Bin. Review and remove its entry from the list.", operationId);
         else committed = await Commit(document with { Scripts = document.Scripts.Where(s => s.Id != record.ScriptId).ToList() }, record.ScriptId, CancellationToken.None).ConfigureAwait(false);
-        var final = committed.Succeeded ? new OperationResult(Outcome.Confirmed, CorrelationId: operationId) : new(Outcome.Partial, committed.Code, "Reciclagem confirmada; registro preservado. Remova da lista após corrigir o armazenamento.", operationId);
+        var final = committed.Succeeded ? new OperationResult(Outcome.Confirmed, CorrelationId: operationId) : new(Outcome.Partial, committed.Code, "The file was moved to the Recycle Bin, but its entry was preserved. Remove it from the list after fixing storage.", operationId);
         var persisted = await journal.PutAsync(record with { Outcome = final.Outcome, Code = final.Code }, CancellationToken.None).ConfigureAwait(false);
         await Publish(false, CancellationToken.None).ConfigureAwait(false);
         return persisted.Succeeded ? final : new(Outcome.Unknown, ReasonCode.StorageFailure, final.Detail, operationId);
@@ -570,7 +570,7 @@ public sealed partial class ManagerService : IManagerService
         // A saved enabled preference is durable intent. Reconcile the actual Windows
         // registration on a later save too, including after a previous partial result.
         var registered = settings.LaunchManagerAtLogin && settings.LaunchManagerAsAdministrator && !processes.IsAdministrator
-            ? new OperationResult(Outcome.Failed, ReasonCode.ManualElevationRequired, "As preferências foram salvas. Confirme a permissão do Windows para concluir o início automático como administrador.")
+            ? new OperationResult(Outcome.Failed, ReasonCode.ManualElevationRequired, "The preferences were saved. Confirm Windows permission to finish configuring administrator autostart.")
             : await startup.SetEnabledAsync(settings.LaunchManagerAtLogin, startupConsent || document.Settings.LaunchManagerAtLogin, settings.LaunchManagerAsAdministrator, CancellationToken.None).ConfigureAwait(false);
         await Log(null, null, registered, CancellationToken.None).ConfigureAwait(false); await Publish(false, CancellationToken.None).ConfigureAwait(false);
         return registered.Succeeded ? saved : registered with { Outcome = Outcome.Partial };
@@ -579,7 +579,7 @@ public sealed partial class ManagerService : IManagerService
     {
         async Task<OperationResult> Abort(string stage, OperationResult result, ImmutableArray<Issue> issues = default)
         {
-            string detail = $"Início com Windows interrompido ao {stage}. {LoginReason(result.Code)}";
+            string detail = $"Windows startup stopped while {stage}. {LoginReason(result.Code)}";
             if (!issues.IsDefaultOrEmpty)
                 detail += "\n" + string.Join("\n", issues.Take(8).Select(issue => issue.Detail is { Length: > 0 } reason ? reason[..Math.Min(reason.Length, 240)] : LoginReason(issue.Code)));
             var explained = result with { Detail = detail };
@@ -588,17 +588,17 @@ public sealed partial class ManagerService : IManagerService
             return explained;
         }
         var registration = document.Settings.LaunchManagerAtLogin ? startup.RegistrationStatus(true, document.Settings.LaunchManagerAsAdministrator) : ReasonCode.StartupInactive;
-        if (registration != ReasonCode.None) return await Abort("conferir a configuração de início", new(Outcome.Failed, registration)).ConfigureAwait(false);
-        if (!owner.Held || !owner.Trusted || owner.LoginKey.Length == 0) return await Abort("obter permissão para gerenciar os scripts", new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable)).ConfigureAwait(false);
+        if (registration != ReasonCode.None) return await Abort("checking the startup configuration", new(Outcome.Failed, registration)).ConfigureAwait(false);
+        if (!owner.Held || !owner.Trusted || owner.LoginKey.Length == 0) return await Abort("obtaining permission to manage scripts", new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable)).ConfigureAwait(false);
         if (document.LastLoginKey == owner.LoginKey) return new(Outcome.Confirmed, ReasonCode.StartupAlreadyProcessed);
         StartupInspection inspection;
         try { inspection = await startup.InspectAsync(cancellationToken).ConfigureAwait(false); }
-        catch (OperationCanceledException) { return await Abort("conferir outras configurações de início", new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)).ConfigureAwait(false); }
-        if (!inspection.Complete) return await Abort("conferir outras configurações de início", new(Outcome.Failed, ReasonCode.ExternalStartupConflict), inspection.Issues).ConfigureAwait(false);
+        catch (OperationCanceledException) { return await Abort("checking other startup configurations", new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)).ConfigureAwait(false); }
+        if (!inspection.Complete) return await Abort("checking other startup configurations", new(Outcome.Failed, ReasonCode.ExternalStartupConflict), inspection.Issues).ConfigureAwait(false);
         OperationResult reserve;
         try { reserve = await Commit(document with { LastLoginKey = owner.LoginKey }, null, cancellationToken).ConfigureAwait(false); }
-        catch (OperationCanceledException) { return await Abort("salvar o controle desta sessão", new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)).ConfigureAwait(false); }
-        if (!reserve.Succeeded) return await Abort("salvar o controle desta sessão", reserve).ConfigureAwait(false);
+        catch (OperationCanceledException) { return await Abort("saving this session's startup record", new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)).ConfigureAwait(false); }
+        if (!reserve.Succeeded) return await Abort("saving this session's startup record", reserve).ConfigureAwait(false);
         int started = 0, running = 0, failed = 0; var details = new List<string>();
         var continuationCandidates = new List<ScriptRecord>();
         void Failure(ScriptRecord script, ReasonCode reason)
@@ -625,13 +625,13 @@ public sealed partial class ManagerService : IManagerService
             var execution = await ExecuteProcess(script, ScriptOperation.Start, null, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
             if (execution.Result.Succeeded) started++; else Failure(script, execution.Result.Code);
         }
-        string detail = $"Iniciados: {started}. Já em execução: {running}. Não iniciados ou não confirmados: {failed}.";
+        string detail = $"Started: {started}. Already running: {running}. Not started or unconfirmed: {failed}.";
         if (details.Count > 0) detail += "\n\n" + string.Join("\n", details);
-        if (failed > details.Count) detail += "\nConsulte a atividade para os demais resultados.";
+        if (failed > details.Count) detail += "\nSee Activity for the remaining results.";
         if (continuationCandidates.Count > 0 && !processes.IsAdministrator && !journal.Records.Any(OperationJournal.IsPending))
         {
-            try { await PrepareStartupContinuationCore(continuationCandidates).ConfigureAwait(false); detail += "\n\nÉ possível solicitar permissão ao Windows para verificar os processos e continuar somente os scripts normais que ainda não foram iniciados."; }
-            catch (Exception ex) when (SafeJsonFiles.Known(ex)) { detail += "\nNão foi possível continuar a inicialização com segurança."; }
+            try { await PrepareStartupContinuationCore(continuationCandidates).ConfigureAwait(false); detail += "\n\nYou can request Windows permission to inspect processes and continue only the standard-privilege scripts that have not been started."; }
+            catch (Exception ex) when (SafeJsonFiles.Known(ex)) { detail += "\nStartup could not be continued safely."; }
         }
         var summary = new OperationResult(failed > 0 ? Outcome.Partial : Outcome.Confirmed, Detail: detail);
         await Log(null, ScriptOperation.Start, summary, CancellationToken.None).ConfigureAwait(false);
@@ -640,23 +640,23 @@ public sealed partial class ManagerService : IManagerService
     }, cancellationToken);
     static string LoginReason(ReasonCode reason) => reason switch
     {
-        ReasonCode.ManualElevationRequired => "Início automático administrativo ignorado: o Manager está sem acesso de administrador. A execução manual ainda pode solicitar permissão ao Windows.",
-        ReasonCode.ObservationIncomplete => "O inventário de processos está incompleto; não é seguro iniciar outra instância.",
-        ReasonCode.PendingOperation => "Não iniciado: uma solicitação anterior ainda não teve o resultado confirmado. O Manager não repetirá a execução automaticamente.",
-        ReasonCode.LaunchUncertain => "O resultado da execução é incerto. Um novo início está bloqueado para evitar duplicação.",
-        ReasonCode.AccessDenied => "O Windows negou acesso ao arquivo ou ao processo.",
-        ReasonCode.MissingFile => "O arquivo não foi encontrado.",
-        ReasonCode.UnsupportedInterpreter => "O interpretador selecionado ou a versão exigida pelo script não é compatível.",
-        ReasonCode.ExternalStartupConflict => "Outra configuração de início automático pode duplicar este script.",
-        ReasonCode.LegacyGuard => "Uma proteção do catálogo ou o bloqueio de novas execuções impede o início.",
-        ReasonCode.Cancelled => "O início foi cancelado.",
-        ReasonCode.DispatchFailed => "O envio da execução falhou.",
-        ReasonCode.EffectOwnerUnavailable => "A autoridade para iniciar scripts não está disponível.",
-        ReasonCode.StartupInactive => "O início com Windows está desativado ou sem registro. Revise essa opção nas preferências.",
-        ReasonCode.StartupEntryConflict => "A entrada de início com Windows pertence a outra configuração. Revise-a nas preferências.",
-        ReasonCode.ConcurrentSettingsChange => "As configurações foram alteradas por outra instância. Atualize o estado antes de tentar novamente.",
-        ReasonCode.ReadOnlySettings or ReasonCode.StorageFailure => "Os dados precisam de recuperação antes de iniciar scripts.",
-        _ => $"Início indisponível ({reason}). Consulte a atividade."
+        ReasonCode.ManualElevationRequired => "Administrator autostart was skipped because Manager does not have administrator access. A manual launch can still request Windows permission.",
+        ReasonCode.ObservationIncomplete => "The process inventory is incomplete; starting another instance is unsafe.",
+        ReasonCode.PendingOperation => "Not started: the result of a previous request is still unconfirmed. Manager will not replay the launch automatically.",
+        ReasonCode.LaunchUncertain => "The launch outcome is unknown. A new launch is blocked to prevent duplicate instances.",
+        ReasonCode.AccessDenied => "Windows denied access to the file or process.",
+        ReasonCode.MissingFile => "The file was not found.",
+        ReasonCode.UnsupportedInterpreter => "The selected interpreter or the version required by the script is incompatible.",
+        ReasonCode.ExternalStartupConflict => "Another automatic startup configuration may launch a duplicate of this script.",
+        ReasonCode.LegacyGuard => "A catalog safeguard or launch block prevents this script from starting.",
+        ReasonCode.Cancelled => "The launch was cancelled.",
+        ReasonCode.DispatchFailed => "The launch request could not be dispatched.",
+        ReasonCode.EffectOwnerUnavailable => "The authority required to start scripts is unavailable.",
+        ReasonCode.StartupInactive => "Windows startup is disabled or unregistered. Review this option in Preferences.",
+        ReasonCode.StartupEntryConflict => "The Windows startup entry belongs to another configuration. Review it in Preferences.",
+        ReasonCode.ConcurrentSettingsChange => "Another instance changed the settings. Refresh the state before trying again.",
+        ReasonCode.ReadOnlySettings or ReasonCode.StorageFailure => "The data must be recovered before scripts can start.",
+        _ => $"Startup is unavailable ({reason}). See Activity."
     };
     public Task<ImmutableArray<ActivitySnapshot>> GetActivityAsync(ActivityQuery query, CancellationToken cancellationToken = default) => Exclusive(() => activity.ReadAsync(query, cancellationToken), cancellationToken);
     public async Task<ImportPreview> PreviewImportAsync(string sourcePath, CancellationToken cancellationToken = default)

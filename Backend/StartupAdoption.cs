@@ -87,7 +87,7 @@ internal sealed class StartupAdoption(StartupAdoptionDescriptor descriptor, Pare
             var authority = await manager.AcceptStartupContinuationAsync(ticket).ConfigureAwait(false);
             if (authority is null)
             {
-                var refused = new OperationResult(Outcome.Failed, ReasonCode.IdentityChanged, "A continuação não foi aceita: o estado mudou ou essa solicitação já foi recebida. Nenhum pedido foi repetido.");
+                var refused = new OperationResult(Outcome.Failed, ReasonCode.IdentityChanged, "The startup continuation was not accepted: the state changed or this request was already received. No request was replayed.");
                 await StartupAdoptionWire.Send(pipe, new("AdoptionRefused", descriptor.OperationId, descriptor.Nonce, TicketHash: descriptor.TicketHash, Result: refused), deadline.Token).ConfigureAwait(false);
                 finished = true; return refused;
             }
@@ -99,7 +99,7 @@ internal sealed class StartupAdoption(StartupAdoptionDescriptor descriptor, Pare
             using var executionDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(120));
             var result = await manager.ResumeNormalLoginAsync(authority, executionDeadline.Token).ConfigureAwait(false);
             var state = await manager.StartupContinuationStatusAsync(ticket.OperationId).ConfigureAwait(false);
-            if (state?.Phase is not (StartupContinuationPhase.Completed or StartupContinuationPhase.Partial)) result = new(Outcome.Unknown, ReasonCode.PendingOperation, "A continuação pode ter iniciado scripts. Consulte as pendências; o pedido não será repetido.");
+            if (state?.Phase is not (StartupContinuationPhase.Completed or StartupContinuationPhase.Partial)) result = new(Outcome.Unknown, ReasonCode.PendingOperation, "The startup continuation may have started scripts. Review pending operations; the request will not be replayed.");
             finished = result.Outcome != Outcome.Unknown;
             try { using var resultDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10)); await StartupAdoptionWire.Send(pipe, new("AdoptionResult", descriptor.OperationId, descriptor.Nonce, TicketHash: descriptor.TicketHash, Result: result), resultDeadline.Token).ConfigureAwait(false); }
             catch (Exception ex) when (ManagerElevation.Known(ex)) { }
@@ -110,7 +110,7 @@ internal sealed class StartupAdoption(StartupAdoptionDescriptor descriptor, Pare
             // Without a proved acceptance, this peer may not infer or recreate one
             // from the recovery file. After acceptance, any interruption is unknown.
             finished = !accepted;
-            return new(accepted ? Outcome.Unknown : Outcome.Failed, accepted ? ReasonCode.PendingOperation : ReasonCode.IdentityChanged, accepted ? "A continuação não pôde ser confirmada. Não repita o pedido; verifique as pendências." : "Não foi possível autenticar a continuação. Nenhum script foi iniciado por este pedido.");
+            return new(accepted ? Outcome.Unknown : Outcome.Failed, accepted ? ReasonCode.PendingOperation : ReasonCode.IdentityChanged, accepted ? "The startup continuation could not be confirmed. Do not repeat the request; review pending operations." : "The startup continuation could not be authenticated. This request did not start any scripts.");
         }
     }
 }

@@ -18,12 +18,12 @@ public sealed class HotkeyAnalyzer
         int total = 0, gestureIssues = 0, suppressedGestureIssues = 0; string? context = null, headerDescription = null;
         void GestureIssue(string path, int line)
         {
-            if (gestureIssues++ < 32) issues.Add(new(ReasonCode.PartialAnalysis, "Anotação @gesture inválida, sem declaração adjacente ou não suportada: " + path + ":" + line));
+            if (gestureIssues++ < 32) issues.Add(new(ReasonCode.PartialAnalysis, "Invalid or unsupported @gesture annotation, or no adjacent declaration: " + path + ":" + line));
             else suppressedGestureIssues++;
         }
         ImmutableArray<Issue> FinalIssues()
         {
-            if (suppressedGestureIssues > 0) issues.Add(new(ReasonCode.PartialAnalysis, $"Anotações @gesture adicionais omitidas: {suppressedGestureIssues}."));
+            if (suppressedGestureIssues > 0) issues.Add(new(ReasonCode.PartialAnalysis, $"Additional @gesture annotations omitted: {suppressedGestureIssues}."));
             return issues.ToImmutable();
         }
         try
@@ -47,7 +47,7 @@ public sealed class HotkeyAnalyzer
             if (depth == 0)
             {
                 var header = ReadHeader(text, ct); headerDescription = header.Description;
-                if (header.Partial) issues.Add(new(ReasonCode.PartialAnalysis, "Cabeçalho inválido ou limite de descrição excedido."));
+                if (header.Partial) issues.Add(new(ReasonCode.PartialAnalysis, "Invalid header or description limit exceeded."));
             }
             bool blockComment = false, continuation = false;
             int number = 0; bool pendingGesture = false, previousGestureMarker = false;

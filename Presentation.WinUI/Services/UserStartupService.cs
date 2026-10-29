@@ -35,7 +35,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
 {
     const string KeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     const string EntryName = "Bezoro.AhkManager.WinUI";
-    public string UserSid { get { using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query); return identity.User?.Value ?? throw new UnauthorizedAccessException("Não foi possível identificar o usuário atual."); } }
+    public string UserSid { get { using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query); return identity.User?.Value ?? throw new UnauthorizedAccessException("The current Windows user could not be identified."); } }
     public StartupTaskRegistration? ReadTask() => WindowsStartupTaskStore.Read(UserSid);
     public bool CompareExchangeTask(StartupTaskRegistration? expected, StartupTaskRegistration? replacement) => WindowsStartupTaskStore.CompareExchange(UserSid, expected, replacement);
     public string? ReadEntry()
@@ -57,19 +57,19 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
     internal Task<StartupInspection> InspectAsync(CancellationToken ct, string? trustedManagerCommand) => Task.Run(() =>
     {
         var paths = ImmutableArray.CreateBuilder<string>(); var issues = ImmutableArray.CreateBuilder<Issue>(); bool complete = true;
-        string origin = "Entradas de início do Windows";
+        string origin = "Windows startup entries";
         try
         {
             using var search = new ManagementObjectSearcher("SELECT Command FROM Win32_StartupCommand"); search.Options.Timeout = TimeSpan.FromSeconds(5);
             using var rows = search.Get();
             foreach (ManagementObject row in rows) using (row) { ct.ThrowIfCancellationRequested(); if (row["Command"] is string command) Inspect(command); }
-            origin = "Pastas de inicialização do Windows";
+            origin = "Windows startup folders";
             foreach (var directory in new[] { Environment.GetFolderPath(Environment.SpecialFolder.Startup), Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup) })
             {
                 if (!Directory.Exists(directory)) continue;
                 foreach (var file in Directory.EnumerateFiles(directory, "*.ahk")) { ct.ThrowIfCancellationRequested(); paths.Add(ScriptPaths.Canonical(file)); }
             }
-            origin = "Tarefas agendadas do Windows";
+            origin = "Windows scheduled tasks";
             using var scheduled = new ManagementObjectSearcher(new ManagementScope(@"\\.\root\Microsoft\Windows\TaskScheduler"), new ObjectQuery("SELECT Actions, Triggers, Settings FROM MSFT_ScheduledTask"));
             scheduled.Options.Timeout = TimeSpan.FromSeconds(5);
             using var tasks = scheduled.Get();
@@ -82,7 +82,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
                 if (task["Actions"] is not Array actions) continue;
                 foreach (var value in actions)
                 {
-                    if (value is not ManagementBaseObject action) { complete = false; AddIssue("Uma ação agendada não pôde ser interpretada. Revise as ações de início automático."); continue; }
+                    if (value is not ManagementBaseObject action) { complete = false; AddIssue("A scheduled action could not be read. Review the automatic startup actions."); continue; }
                     using (action)
                     {
                         if (ReadActionProperty(action, "Execute") is not string execute) continue;
@@ -97,13 +97,13 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
             complete = false;
             string reason = ex switch
             {
-                UnauthorizedAccessException => "acesso negado",
-                ManagementException management => $"consulta WMI: {management.ErrorCode}",
-                System.Runtime.InteropServices.COMException native => $"erro do Windows: 0x{native.ErrorCode:X8}",
-                IOException => "falha de leitura",
-                _ => "dados indisponíveis ou inválidos"
+                UnauthorizedAccessException => "access denied",
+                ManagementException management => $"WMI query: {management.ErrorCode}",
+                System.Runtime.InteropServices.COMException native => $"Windows error: 0x{native.ErrorCode:X8}",
+                IOException => "read failure",
+                _ => "unavailable or invalid data"
             };
-            AddIssue($"Não foi possível concluir a consulta ({reason}). Confira o acesso a essa origem e tente novamente.");
+            AddIssue($"The query could not be completed ({reason}). Check access to this source and try again.");
         }
         return new StartupInspection(complete, paths.Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray(), issues.ToImmutable());
         void Inspect(string command)
@@ -111,7 +111,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
             var inspected = InspectCommand(command, trustedManagerCommand);
             complete &= inspected.Complete;
             paths.AddRange(inspected.ScriptPaths);
-            foreach (var issue in inspected.Issues) AddIssue(issue.Detail ?? "Uma configuração de início não pôde ser interpretada.");
+            foreach (var issue in inspected.Issues) AddIssue(issue.Detail ?? "A startup configuration could not be read.");
         }
         void AddIssue(string detail) { if (issues.Count < 8) issues.Add(new(ReasonCode.ExternalStartupConflict, $"{origin}: {detail}")); }
     }, ct);
@@ -178,7 +178,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
         if (args.Length == 1 && args[0].EndsWith(".ahk", StringComparison.OrdinalIgnoreCase)) return new(true, [ScriptPaths.Canonical(args[0])], []);
         var script = args.Length > 0 ? ScriptPaths.ScriptFromCommand(command, args[0]) : null;
         return script is null ? Unresolved() : new(true, [script], []);
-        static StartupInspection Unresolved() => new(false, [], [new(ReasonCode.ExternalStartupConflict, "Uma entrada relacionada ao AutoHotkey não tem um caminho de script verificável. Revise a entrada e use caminhos explícitos para evitar duplicação.")]);
+        static StartupInspection Unresolved() => new(false, [], [new(ReasonCode.ExternalStartupConflict, "An AutoHotkey startup entry does not have a verifiable script path. Review the entry and use explicit paths to prevent duplicate instances.")]);
     }
 }
 
@@ -223,7 +223,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
             ct.ThrowIfCancellationRequested();
             originalEntry = adapter.ReadEntry(); originalTask = tasks?.ReadTask();
             if (originalEntry is not null && originalEntry != Command || originalTask is not null && (tasks is null || !Owned(originalTask, tasks))) return new OperationResult(Outcome.Failed, ReasonCode.StartupEntryConflict);
-            if (enabled && elevated && tasks is null) return new(Outcome.Failed, ReasonCode.CapabilityUnverified, "O adaptador de início não oferece tarefas administrativas.");
+            if (enabled && elevated && tasks is null) return new(Outcome.Failed, ReasonCode.CapabilityUnverified, "The startup adapter does not support administrator tasks.");
             bool correct = enabled ? elevated ? originalEntry is null && originalTask is not null && Desired(originalTask) : originalEntry == Command && originalTask is null : originalEntry is null && originalTask is null;
             if (correct) return new(Outcome.Confirmed);
             if (enabled && !consent) return new(Outcome.Failed, ReasonCode.StartupConsentRequired);
@@ -252,7 +252,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                 changed = true;
             }
             var final = RegistrationStatus(enabled, elevated);
-            return final == ReasonCode.None ? new(Outcome.Confirmed) : new(Outcome.Unknown, final, "O registro de início mudou durante a operação. Confira as preferências.");
+            return final == ReasonCode.None ? new(Outcome.Confirmed) : new(Outcome.Unknown, final, "The startup registration changed during the operation. Review your preferences.");
         }
         catch (OperationCanceledException) { return new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled); }
         catch (Exception ex) when (RegistrationException(ex))
@@ -260,8 +260,8 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
             bool restored = !changed || RestorePrevious();
             bool denied = ex is UnauthorizedAccessException || ex is COMException native && native.ErrorCode == unchecked((int)0x80070005);
             var code = ex is StartupRegistrationConflictException ? ReasonCode.StartupEntryConflict : denied ? elevated || originalTask is not null ? ReasonCode.ManualElevationRequired : ReasonCode.AccessDenied : ReasonCode.StorageFailure;
-            string detail = code is ReasonCode.AccessDenied or ReasonCode.ManualElevationRequired ? "O Windows negou a alteração do início automático. Reabra o Manager como administrador para configurar a tarefa com privilégios mais altos." : "Não foi possível concluir a alteração do início automático.";
-            detail += restored ? " O registro anterior foi preservado." : " O registro precisa ser conferido; a alteração ficou parcial.";
+            string detail = code is ReasonCode.AccessDenied or ReasonCode.ManualElevationRequired ? "Windows denied the automatic startup change. Reopen Manager as administrator to configure the task with elevated privileges." : "The automatic startup change could not be completed.";
+            detail += restored ? " The previous registration was preserved." : " The registration needs review; the change was only partially completed.";
             return new(restored ? Outcome.Failed : Outcome.Partial, code, detail);
         }
 
@@ -304,7 +304,7 @@ internal static class WindowsStartupTaskStore
         object? service = null, folder = null, task = null;
         try
         {
-            service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service") ?? throw new InvalidOperationException("Agendador de Tarefas indisponível."));
+            service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service") ?? throw new InvalidOperationException("Task Scheduler is unavailable."));
             ((dynamic)service!).Connect(); folder = ((dynamic)service).GetFolder("\\");
             try { task = ((dynamic)folder).GetTask(TaskName(sid)); }
             catch (Exception ex) when (Missing(ex)) { return null; }
@@ -317,7 +317,7 @@ internal static class WindowsStartupTaskStore
         object? service = null, folder = null, task = null;
         try
         {
-            service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service") ?? throw new InvalidOperationException("Agendador de Tarefas indisponível."));
+            service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service") ?? throw new InvalidOperationException("Task Scheduler is unavailable."));
             ((dynamic)service!).Connect(); folder = ((dynamic)service).GetFolder("\\");
             try { task = ((dynamic)folder).GetTask(TaskName(sid)); }
             catch (Exception ex) when (Missing(ex)) { }
@@ -326,7 +326,7 @@ internal static class WindowsStartupTaskStore
             if (expected is not null) ((dynamic)folder).DeleteTask(TaskName(sid), 0);
             if (replacement is not null)
             {
-                if (replacement.UserSid != sid || replacement.Source != UserStartupService.TaskSource || !replacement.InteractiveToken || !replacement.UserLogonOnly) throw new InvalidDataException("Especificação de tarefa inválida.");
+                if (replacement.UserSid != sid || replacement.Source != UserStartupService.TaskSource || !replacement.InteractiveToken || !replacement.UserLogonOnly) throw new InvalidDataException("Invalid task specification.");
                 // TASK_CREATE (2), never CREATE_OR_UPDATE: another entry wins a race.
                 object registered = ((dynamic)folder).RegisterTask(TaskName(sid), Xml(replacement), 2, sid, null, 3, null);
                 Release(registered);
@@ -338,7 +338,7 @@ internal static class WindowsStartupTaskStore
     internal static string Xml(StartupTaskRegistration registration)
     {
         var args = ScriptPaths.SplitCommand(registration.Command);
-        if (args.Length != 3 || args[1] != "--login" || args[2] != "--background") throw new InvalidDataException("Comando de início inválido.");
+        if (args.Length != 3 || args[1] != "--login" || args[2] != "--background") throw new InvalidDataException("Invalid startup command.");
         string executable = ScriptPaths.LocalPath(args[0]);
         XElement E(string name, object? content) => new(Ns + name, content);
         var xml = new XDocument(new XElement(Ns + "Task", new XAttribute("version", "1.4"),
