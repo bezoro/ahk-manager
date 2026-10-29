@@ -510,20 +510,8 @@ export function startManager(): void {
       }
     }
     if (canInitialize && !setupDeferred && backend?.ready) {
-      const result = await backend.request<OperationResult>('initializeStartup', {});
-      if (result.outcome !== 'Confirmed' && window && !lifecycle.quietStartup) {
-        show();
-        await dialog.showMessageBox(window, {
-          type: 'warning',
-          title: t.loginResultTitle,
-          message: t.startupSetupIncomplete,
-          detail: result.detail ?? t.loginFailure(result.code),
-          buttons: [t.confirm],
-          defaultId: 0,
-          cancelId: 0,
-          noLink: true,
-        });
-      }
+      // Startup configuration failures are already published in state and Activity.
+      await backend.request<OperationResult>('initializeStartup', {});
     }
     await runLogin();
     if (

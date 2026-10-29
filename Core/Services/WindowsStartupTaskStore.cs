@@ -223,6 +223,7 @@ internal static class WindowsStartupTaskStore
             string work = actions[0].Element(Ns + "WorkingDirectory")?.Value ?? "";
             bool validPath =
                 Path.IsPathFullyQualified(executable)
+                && ScriptPaths.Equal(executable, ScriptPaths.LocalPath(executable))
                 && ScriptPaths.Equal(Path.GetDirectoryName(executable), work);
             string command = validPath
                 ? ScriptPaths.QuoteArgument(ScriptPaths.LocalPath(executable)) + " " + arguments

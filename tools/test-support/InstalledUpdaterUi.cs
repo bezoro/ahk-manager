@@ -100,6 +100,15 @@ public static class InstalledUpdaterUi
     static extern bool SetForegroundWindow(IntPtr window);
 
     [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    static extern bool AttachThreadInput(uint first, uint second, bool attach);
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
     static extern bool ShowWindowAsync(IntPtr window, int command);
 
     static string Text(IntPtr window)
@@ -158,8 +167,25 @@ public static class InstalledUpdaterUi
                     dispatched |= PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero);
                 else
                 {
-                    ShowWindowAsync(window, 9);
-                    dispatched |= SetForegroundWindow(window);
+                    uint caller = GetCurrentThreadId();
+                    uint foreground = GetWindowThreadProcessId(
+                        GetForegroundWindow(),
+                        out uint foregroundPid
+                    );
+                    bool attached =
+                        foreground != 0
+                        && foreground != caller
+                        && AttachThreadInput(caller, foreground, true);
+                    try
+                    {
+                        ShowWindowAsync(window, 9);
+                        dispatched |= SetForegroundWindow(window);
+                    }
+                    finally
+                    {
+                        if (attached)
+                            AttachThreadInput(caller, foreground, false);
+                    }
                 }
                 return true;
             },
@@ -173,6 +199,38 @@ public static class InstalledUpdaterUi
 
     public static bool Close(int pid, string executable, DateTime started) =>
         MainWindow(pid, executable, started, close: true);
+
+    public static string[] Describe(int pid, string executable, DateTime started)
+    {
+        var result = new List<string>();
+        EnumWindows(
+            (window, _) =>
+            {
+                if (!Owned(window, pid, executable, started) || !IsWindowVisible(window))
+                    return true;
+                result.Add(
+                    $"window class={ClassName(window)}; enabled={IsWindowEnabled(window)}; foreground={GetForegroundWindow() == window}; text={Text(window)}"
+                );
+                EnumChildWindows(
+                    window,
+                    (child, state) =>
+                    {
+                        if (result.Count >= 100)
+                            return false;
+                        if (Owned(child, pid, executable, started))
+                            result.Add(
+                                $"child class={ClassName(child)}; enabled={IsWindowEnabled(child)}; text={Text(child)}"
+                            );
+                        return true;
+                    },
+                    IntPtr.Zero
+                );
+                return result.Count < 100;
+            },
+            IntPtr.Zero
+        );
+        return result.ToArray();
+    }
 
     // No generic dialog acceptance: require the exact version and the production
     // consent text, then post only the Confirm button belonging to this session.

@@ -182,6 +182,14 @@ function Evaluate([string]$Expression) {
     return $answer.result.value
 }
 
+function Save-WindowDiagnostics([string]$Name) {
+    if (-not $manager -or $manager.HasExited) { return }
+    $rendered = $null
+    try { $rendered = Evaluate '({ readyState: document.readyState, visibility: document.visibilityState, focused: document.hasFocus(), mainMounted: !!document.querySelector("main"), dialogOpen: !!document.querySelector("[role=dialog]"), text: document.body.innerText.slice(0,4096) })' }
+    catch { Trace "Renderer readiness diagnostics unavailable: $($_.Exception.GetType().Name)" }
+    Write-Json "$Name-windows.json" ([ordered]@{ rendered = $rendered; windows = [AhkManager.TestSupport.InstalledUpdaterUi]::Describe($manager.Id, $managerPath, $managerStarted) })
+}
+
 function Installed-Version {
     $key = $registry.OpenSubKey($uninstallKey)
     try { return $(if ($key) { $key.GetValue('DisplayVersion') }) }
@@ -324,10 +332,12 @@ try {
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($cached)) | Out-Null
     [IO.File]::Copy($TargetInstaller, $cached, $false)
     $targetHash = Hash $TargetInstaller
-    $receipt = @{ schemaVersion = 1; updateProtocol = 1; version = $targetVersion; sha256 = $targetHash; bytes = (Get-Item -LiteralPath $TargetInstaller).Length }
+    $receipt = [ordered]@{ schemaVersion = 1; updateProtocol = 1; version = $targetVersion; sha256 = $targetHash; bytes = (Get-Item -LiteralPath $TargetInstaller).Length }
     [IO.File]::WriteAllText((Join-Path ([IO.Path]::GetDirectoryName($cached)) 'receipt.json'), ($receipt | ConvertTo-Json -Compress), $utf8)
     [IO.File]::WriteAllText((Join-Path $updatesRoot 'update-channel.json'), '{"schemaVersion":1,"channel":"test"}', $utf8)
-    $startupCommand = '"' + $managerPath + '" --login --background'
+    # Preserve a genuinely unrelated, inert Run entry. Pointing another value at
+    # the Manager would itself introduce an external startup conflict.
+    $startupCommand = '"' + (Join-Path $env:WINDIR 'System32/cmd.exe') + '" /d /c exit 0'
     $key = $registry.CreateSubKey($runKey, $true)
     try { $key.SetValue($runValue, $startupCommand, [Microsoft.Win32.RegistryValueKind]::String); $script:startupWritten = $true }
     finally { $key.Dispose() }
@@ -399,11 +409,25 @@ try {
     } while ([DateTime]::UtcNow -lt $deadline)
     Write-Json 'installed-update-before.json' $updateState
     Assert-Check ($null -ne $choice) 'the real updater exposes the verified target through version history'
-    [AhkManager.TestSupport.InstalledUpdaterUi]::Focus($manager.Id, $managerPath, $managerStarted) | Out-Null
     Invoke-Cdp 'Page.bringToFront' | Out-Null
+    $readiness = [Collections.Generic.List[object]]::new()
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $activated = [AhkManager.TestSupport.InstalledUpdaterUi]::Focus($manager.Id, $managerPath, $managerStarted)
+        $rendered = Evaluate '({ complete: document.readyState === "complete", visible: document.visibilityState === "visible", focused: document.hasFocus(), mainMounted: !!document.querySelector("main"), dialogOpen: !!document.querySelector("[role=dialog]") })'
+        $readiness.Add([ordered]@{ at = [DateTimeOffset]::UtcNow.ToString('O'); activationAccepted = $activated; rendered = $rendered })
+        if ($rendered.complete -and $rendered.visible -and $rendered.focused -and $rendered.mainMounted -and -not $rendered.dialogOpen) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    Write-Json 'installed-renderer-readiness.json' $readiness.ToArray()
+    Save-WindowDiagnostics 'before-consent'
+    Assert-Check ($rendered.complete -and $rendered.visible -and $rendered.focused -and $rendered.mainMounted -and -not $rendered.dialogOpen) 'the actual rendered interface is mounted, visible and focused before update preflight'
+    # Let React publish its live busy/draft guard after the direct backend poll.
+    Evaluate 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))' | Out-Null
     $choiceJson = ConvertTo-Json -InputObject $choice.id -Compress
     Evaluate ("globalThis.__installedUpdaterResult = { pending: true }; void window.ahkManager.installUpdate($choiceJson).then(value => { globalThis.__installedUpdaterResult = { pending: false, value }; }, error => { globalThis.__installedUpdaterResult = { pending: false, error: String(error) }; }); true") | Out-Null
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $windowDiagnosticAt = [DateTime]::UtcNow.AddSeconds(3)
     $result = $null
     do {
         $manager.Refresh()
@@ -415,9 +439,14 @@ try {
         try { $result = Evaluate 'globalThis.__installedUpdaterResult' }
         catch { if ($manager.HasExited) { break }; throw }
         if ($result -and -not $result.pending) { break }
+        if ([DateTime]::UtcNow -ge $windowDiagnosticAt) {
+            Save-WindowDiagnostics 'pending-consent'
+            $windowDiagnosticAt = [DateTime]::MaxValue
+        }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     Save-AdmissionDiagnostics 'after-handoff'
+    Save-WindowDiagnostics 'after-handoff'
     Write-Json 'installed-update-result.json' $result
     Assert-Check $script:confirmed 'the real native update consent was obtained for the exact target'
     $operations = @(Get-ChildItem -LiteralPath (Join-Path $updatesRoot 'operations') -Directory -ErrorAction SilentlyContinue)
@@ -436,7 +465,13 @@ try {
             $outcome = Get-Content -LiteralPath (Join-Path $script:operation 'outcome.json') -Raw | ConvertFrom-Json
             Assert-Check ($outcome.outcome -ceq 'Failed' -and $null -eq $outcome.installerExitCode -and $null -eq $outcome.fallbackExitCode) 'the refused unregistered copy records no installer dispatch'
         }
-        else { Assert-Check ((Installed-Version) -ceq $baselineVersion) 'refusal retains the registered baseline version' }
+        else {
+            Assert-Check ((Installed-Version) -ceq $baselineVersion) 'refusal retains the registered baseline version'
+            if ($BaselineKind -eq 'Candidate' -and $PermissiveParent) {
+                $refusal = Get-Content -LiteralPath (Join-Path $script:operation 'helper-refusal.json') -Raw | ConvertFrom-Json
+                Assert-Check ($refusal.schemaVersion -eq 1 -and $refusal.operationId -eq $plan.operationId -and $refusal.exitCode -eq 65 -and $refusal.refusal.schemaVersion -eq 1 -and $refusal.refusal.phase -cin @('installation-ownership', 'installation-parent-ownership') -and $refusal.refusal.code -ceq 'access-denied') 'the candidate refuses the deliberate unsafe installation permissions through its native ownership checks'
+            }
+        }
         foreach ($path in $beforeImages.Keys) { Assert-Check ((Hash $path) -ceq $beforeImages[$path]) "refusal preserves $([IO.Path]::GetFileName($path))" }
         $script:settled = $true
     }

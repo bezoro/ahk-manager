@@ -16,6 +16,8 @@ The manager starts with Windows and requests administrator access by default. Th
 
 Automatic sign-in does not display Manager confirmation or warning dialogs. Windows UAC may still request elevation permission; the main window follows your visibility preferences. Startup issues remain available in the app.
 
+Moving Manager to its installed location repairs an existing Manager login task only when its product marker, current user, action and logon trigger establish ownership. Other tasks and unproven Run entries remain untouched. Startup configuration problems appear in the interface and Activity without a blocking dialog when the app opens.
+
 Closing the window can leave the app in the notification area. **Exit and keep scripts running** preserves script processes. **Stop scripts and exit** requests normal shutdown for verified processes and keeps the manager open if it cannot confirm the result.
 
 Adding or inspecting files does not execute them. AutoHotkey v2 must be installed separately to run scripts. The installer includes Electron and the self-contained backend; users do not need Node.js or .NET.

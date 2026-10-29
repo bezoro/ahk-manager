@@ -482,6 +482,7 @@ internal static class StartupRegistrationChecks
             InspectEmbeddedTaskProperties(sid, check);
             ValidateNativeTaskDefinition(specification, check);
         }
+        await StartupRelocationChecks.RunAsync(root, check);
     }
 
     static void ValidateNativeTaskDefinition(
