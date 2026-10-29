@@ -82,8 +82,18 @@ A confirmed installer failure or verified version mismatch preserves partial fil
 
 Installers and receipts are stored under `%LOCALAPPDATA%/Bezoro/AhkManagerElectron/Updates/installers/<version>`. Plans, bounded logs, results and snapshots are stored under `Updates/operations/<operationId>`. They survive uninstalling, along with profiles and scripts. Do not remove pending-operation evidence or version history during an installation.
 
+## Preparation refusals
+
+In-app updates require the per-user installation record created by Manager Setup. Running an executable directly from a development `publish` directory or an extracted package does not create that record. Run Setup once and open Manager from its installed shortcut to enable updates. The profile and scripts remain outside the installation directory.
+
+The native helper also verifies that the installation directory and its parent have trusted ownership and permissions. A shared repository or custom directory writable by other Windows users may be refused. The updater does not loosen those permissions or change a repository's ACLs. Use the default private installation location or review the custom directory's permissions.
+
+Each preparation attempt has its own directory under `Updates/operations`. A rejected attempt does not start the installer or publish a shutdown commit. The helper records the validation phase and a fixed error code; the app saves valid refusal metadata as `helper-refusal.json`. These records exclude exception messages, paths and stack traces. Older helpers can fail before creating `helper.log`, leaving only `plan.json` and `cancel.json`.
+
 ## Validation scope
 
 Node tests cover channel isolation, persisted selection, public feed validation, bounded redirects, integrity checks, failure handling, serialization, preflights and offline cache recovery. Publication tests use mocked HTTP to verify source identity and immutability. Native applicator tests isolate protocol and recovery effects.
 
 Windows CI runs the actual Electron network transport, renders the production interface, captures light/dark and narrow-window states, packages real installers, and exercises installation, updating, rollback and cleanup in temporary locations. These checks do not validate the user's interactive UAC prompt, personal Windows session or next real sign-in.
+
+The installed-updater jobs launch the published preview and the current packaged candidate on fresh Windows runners, drive the real app's update action, and verify native readiness, confirmed shutdown, installer application and preservation. Separate cases verify refusal for a permissive custom parent and an unregistered executable. Candidate identity is checked against the CI manifest and source commit; scoped desktop automation controls only the exact fixture process.

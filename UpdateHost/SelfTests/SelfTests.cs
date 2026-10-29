@@ -30,6 +30,7 @@ internal static partial class SelfTests
             new string('a', 64),
             "1.2.1"
         );
+        CheckAdmissionDiagnostics(Check);
         CheckProtocol(root, plan, Check);
         CheckReleaseVersions(root, plan, Check);
         CheckInstallerCommandLine(root, plan, Check);

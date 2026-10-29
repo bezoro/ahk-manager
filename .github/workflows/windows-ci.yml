@@ -365,10 +365,93 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  installed-updater:
+    name: Installed updater (${{ matrix.client }}, ${{ matrix.location }})
+    needs: windows-checks
+    runs-on: windows-2025
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [published-preview, candidate]
+        location: [private, permissive-parent]
+        include:
+          - client: candidate
+            location: unregistered
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out the exact tested source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download the installer produced by this CI attempt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ github.event_name == 'pull_request' && format('windows-installer-test-{0}', github.run_attempt) || 'windows-installer' }}
+          path: installed-updater-package
+
+      - name: Download pinned published installers
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'AHK-Manager-1.3.1-test.29.1.2-Setup-x64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/bezoro/ahk-manager/releases/download/v1.3.1-test.29.1.2/AHK-Manager-1.3.1-test.29.1.2-Setup-x64.exe' -OutFile $baseline -MaximumRedirection 3
+          if ((Get-Item -LiteralPath $baseline).Length -ne 165631742 -or (Get-FileHash -LiteralPath $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -cne '232ad40675af1eeb8f9b32867482c38766b79275139f9e0784f26ad1714a913f') { throw 'The published preview does not match its pinned identity.' }
+          $stable = Join-Path $env:RUNNER_TEMP 'AHK-Manager-1.3.2-Setup-x64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/bezoro/ahk-manager/releases/download/v1.3.2/AHK-Manager-1.3.2-Setup-x64.exe' -OutFile $stable -MaximumRedirection 3
+          if ((Get-Item -LiteralPath $stable).Length -ne 165632049 -or (Get-FileHash -LiteralPath $stable -Algorithm SHA256).Hash.ToLowerInvariant() -cne 'b4e92232a7422dc77ae8f308e9f7a4556e7f78d07d7c708ba8a7d57263fbd4b4') { throw 'The published stable installer does not match its pinned identity.' }
+
+      - name: Exercise the real installed application and native update helper
+        env:
+          TEST_LOCATION: ${{ matrix.location }}
+          TEST_CLIENT: ${{ matrix.client }}
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath 'installed-updater-package' -Filter '*Setup-x64.exe')
+          if ($installers.Count -ne 1) { throw 'Exactly one current installer is required.' }
+          $parameters = @{
+            BaselineInstaller = Join-Path $env:RUNNER_TEMP 'AHK-Manager-1.3.1-test.29.1.2-Setup-x64.exe'
+            TargetInstaller = $installers[0].FullName
+            OutputRoot = Join-Path $env:RUNNER_TEMP 'installed-updater-evidence'
+            ExpectedOutcome = 'Installed'
+          }
+          if ($env:TEST_CLIENT -ceq 'candidate') {
+            $parameters.BaselineInstaller = $installers[0].FullName
+            $parameters.BaselineKind = 'Candidate'
+            $parameters.BaselineManifest = Join-Path $installers[0].DirectoryName 'ahk-manager-release.json'
+            $parameters.BaselineCommit = $env:SOURCE_COMMIT
+            $parameters.TargetInstaller = Join-Path $env:RUNNER_TEMP 'AHK-Manager-1.3.2-Setup-x64.exe'
+          }
+          if ($env:TEST_LOCATION -ceq 'permissive-parent') {
+            $parameters.InstallationParent = Join-Path $env:RUNNER_TEMP 'custom-updater-parent'
+            $parameters.PermissiveParent = $true
+            $parameters.ExpectedOutcome = 'Refused'
+          }
+          if ($env:TEST_LOCATION -ceq 'unregistered') {
+            $parameters.UnregisteredCopy = $true
+            $parameters.ExpectedOutcome = 'Refused'
+          }
+          ./tools/Test-InstalledUpdater.ps1 @parameters
+
+      - name: Upload installed-app admission and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: installed-updater-${{ matrix.client }}-${{ matrix.location }}
+          path: |
+            ${{ runner.temp }}/installed-updater-evidence/**/*.json
+            ${{ runner.temp }}/installed-updater-evidence/**/*.log
+            ${{ runner.temp }}/installed-updater-evidence/**/*.txt
+            ${{ runner.temp }}/installed-updater-evidence/**/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
   publish-release:
     name: Publish approved main release
-    needs: windows-checks
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'bezoro/ahk-manager' && needs.windows-checks.result == 'success' }}
+    needs: [windows-checks, installed-updater]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'bezoro/ahk-manager' && needs.windows-checks.result == 'success' && needs.installed-updater.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

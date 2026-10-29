@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import type { CachedInstaller, UpdateStore } from './update-store.js';
+import { observeUpdateHost, updateHostRefusalMessage } from './update-host-diagnostics.js';
 
 const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 export interface PreparedUpdate {
@@ -173,18 +174,37 @@ export async function prepareUpdate(
     child = spawn(
       host,
       ['--plan', planPath, '--sha256', createHash('sha256').update(bytes).digest('hex')],
-      { detached: true, windowsHide: true, stdio: 'ignore', shell: false },
+      {
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe'],
+        shell: false,
+      },
     );
+    const diagnostics = observeUpdateHost(child);
     await new Promise<void>((resolve, reject) => {
       child!.once('error', reject);
       child!.once('spawn', resolve);
     });
     const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
-      if (child.exitCode !== null || child.signalCode !== null)
-        throw new Error(
-          'The update helper rejected the update. The installation has been preserved.',
-        );
+      if (child.exitCode !== null || child.signalCode !== null) {
+        const refusal = await diagnostics.refusal();
+        try {
+          await store.writeNew(
+            path.join(directory, 'helper-refusal.json'),
+            JSON.stringify({
+              schemaVersion: 1,
+              operationId,
+              exitCode: child.exitCode,
+              refusal,
+            }),
+          );
+        } catch {
+          /* Diagnostic persistence cannot replace the original preparation failure. */
+        }
+        throw new Error(updateHostRefusalMessage(refusal));
+      }
       try {
         const readyPath = path.join(directory, 'ready.json');
         await store.regular(readyPath, 4096);
