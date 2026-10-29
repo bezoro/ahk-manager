@@ -80,8 +80,12 @@ function plainNotes(markdown) {
 async function computeRelease({ cwd = repositoryRoot, sha = 'HEAD', test } = {}) {
   const preview = testIdentifiers(test);
   const commit = resolveCommit(cwd, sha);
-  const base = latestAncestorTag(cwd, commit);
-  const commits = commitsSince(cwd, base.tag, commit);
+  const base = preview ? latestStableTag(cwd) : latestAncestorTag(cwd, commit);
+  // A shared feature commit can already be released through a merge on main
+  // without that merge being an ancestor of the PR. Count only changes since
+  // their common ancestor so its feature bump is not applied a second time.
+  const from = preview ? git(cwd, ['merge-base', base.commit, commit]) : base.tag;
+  const commits = commitsSince(cwd, from, commit);
   const [{ default: createPreset }, { CommitParser }, { writeChangelogString }] = await Promise.all(
     [
       import('conventional-changelog-conventionalcommits'),
@@ -97,7 +101,7 @@ async function computeRelease({ cwd = repositoryRoot, sha = 'HEAD', test } = {})
   const releaseType = alreadyTagged ? null : ['major', 'minor', 'patch'][bump?.level ?? 2];
   // A PR can lag behind main. Its preview must still sort after the currently
   // published stable baseline without claiming that stable tag for itself.
-  const versionBase = preview ? latestStableTag(cwd).version : base.version;
+  const versionBase = base.version;
   const stableVersion = alreadyTagged ? base.version : semver.inc(versionBase, releaseType);
   const version = preview ? `${stableVersion}-test.${preview}` : stableVersion;
   if (!version) throw new Error('The next stable SemVer version could not be calculated.');

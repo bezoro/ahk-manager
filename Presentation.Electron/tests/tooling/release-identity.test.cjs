@@ -51,6 +51,30 @@ test('a conflicting next stable tag does not block an independent test release',
   assert.equal(release.version, '1.2.18-test.20.1.2');
 });
 
+test('a shared feature released through main is excluded from the remaining PR preview bump', async (t) => {
+  const fixture = repository(t);
+  git(fixture.cwd, ['checkout', '--quiet', '-b', 'bootstrap']);
+  fixture.commit('feat: enable the shared bootstrap channel');
+  git(fixture.cwd, ['checkout', '--quiet', '-b', 'remaining-pr']);
+  const head = fixture.commit('refactor: organize application responsibilities');
+  git(fixture.cwd, ['checkout', '--quiet', 'main']);
+  git(fixture.cwd, ['merge', '--quiet', '--no-ff', 'bootstrap', '-m', 'Merge bootstrap PR']);
+  git(fixture.cwd, ['tag', 'v1.3.0']);
+  const preview = await computeRelease({
+    ...fixture,
+    sha: head,
+    test: { pr: 2, run: 21, attempt: 1 },
+  });
+  assert.equal(preview.version, '1.3.1-test.21.1.2');
+  assert.equal(preview.baseTag, 'v1.3.0');
+  assert.equal(preview.releaseType, 'patch');
+  assert.equal(preview.commitCount, 1);
+  assert.doesNotMatch(preview.notes, /shared bootstrap channel/);
+  git(fixture.cwd, ['merge', '--quiet', '--no-ff', 'remaining-pr', '-m', 'Merge remaining PR']);
+  const stable = await computeRelease(fixture);
+  assert.equal(stable.version, preview.version.split('-')[0]);
+});
+
 test('test identity refuses partial, unbounded and noncanonical CI identifiers', async (t) => {
   const fixture = repository(t);
   fixture.commit('fix: preview');
