@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <AssemblyName>AhkManager.Core</AssemblyName>
+        <RootNamespace>Bezoro.AhkManager.Core</RootNamespace>
+        <Nullable>enable</Nullable>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+        <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="System.Management" Version="[10.0.13]" />
+        <InternalsVisibleTo Include="AhkManager.Backend" />
+        <InternalsVisibleTo Include="Tests.Backend" />
+        <InternalsVisibleTo Include="Bezoro.AhkManager.WinUI" />
+        <InternalsVisibleTo Include="Bezoro.AhkManager.WinUI.Tests" />
+    </ItemGroup>
+</Project>

@@ -6,7 +6,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using Bezoro.AhkManager.WinUI.Infrastructure;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Infrastructure;
+using Bezoro.AhkManager.Core.Models;
 using Bezoro.AhkManager.WinUI.ViewModels;
 using Bezoro.AhkManager.WinUI.Views;
 

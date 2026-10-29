@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Bezoro.AhkManager.WinUI.Infrastructure;
-using Bezoro.AhkManager.WinUI.Services;
+using Bezoro.AhkManager.Core.Infrastructure;
+using Bezoro.AhkManager.Core.Services;
 
 namespace Bezoro.AhkManager.WinUI;
 

@@ -1,11 +1,14 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
-using Bezoro.AhkManager.WinUI.Models;
-using Bezoro.AhkManager.WinUI.Services;
+using Bezoro.AhkManager.Core.Models;
+using Bezoro.AhkManager.Core.Services;
 
 namespace Bezoro.AhkManager.Backend;
 
-[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)]
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
+)]
 [JsonSerializable(typeof(RequestFrame))]
 [JsonSerializable(typeof(ResponseFrame))]
 [JsonSerializable(typeof(EmptyPayload))]

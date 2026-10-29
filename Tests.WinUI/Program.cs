@@ -1,3 +1,4 @@
+using Core = Tests.Backend.Core;
 using Microsoft.UI.Xaml;
 using System.Security.Principal;
 

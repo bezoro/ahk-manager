@@ -1,41 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
-    <RuntimeFrameworkVersion>10.0.13</RuntimeFrameworkVersion>
-    <AssemblyName>AhkManager.Backend</AssemblyName>
-    <RootNamespace>Bezoro.AhkManager.Backend</RootNamespace>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
-  </PropertyGroup>
-  <ItemGroup><PackageReference Include="System.Management" Version="[10.0.13]" /></ItemGroup>
-  <ItemGroup>
-    <Compile Include="../Presentation.WinUI/Models/ManagerContracts.cs" Link="Core/Models/ManagerContracts.cs" />
-    <Compile Include="../Presentation.WinUI/Models/StateDocuments.cs" Link="Core/Models/StateDocuments.cs" />
-    <Compile Include="../Presentation.WinUI/Services/SettingsStore.cs" Link="Core/Services/SettingsStore.cs" />
-    <Compile Include="../Presentation.WinUI/Services/LegacyImportService.cs" Link="Core/Services/LegacyImportService.cs" />
-    <Compile Include="../Presentation.WinUI/Services/ManagerService.cs" Link="Core/Services/ManagerService.cs" />
-    <Compile Include="../Presentation.WinUI/Services/ManagerStartupContinuation.cs" Link="Core/Services/ManagerStartupContinuation.cs" />
-    <Compile Include="../Presentation.WinUI/Services/StartupContinuationStore.cs" Link="Core/Services/StartupContinuationStore.cs" />
-    <Compile Include="../Presentation.WinUI/Services/OperationJournal.cs" Link="Core/Services/OperationJournal.cs" />
-    <Compile Include="../Presentation.WinUI/Services/ProcessManager.cs" Link="Core/Services/ProcessManager.cs" />
-    <Compile Include="../Presentation.WinUI/Services/AutoHotkeyDiscovery.cs" Link="Core/Services/AutoHotkeyDiscovery.cs" />
-    <Compile Include="../Presentation.WinUI/Services/AhkWindowControl.cs" Link="Core/Services/AhkWindowControl.cs" />
-    <Compile Include="../Presentation.WinUI/Services/ExternalEditorService.cs" Link="Core/Services/ExternalEditorService.cs" />
-    <Compile Include="../Presentation.WinUI/Services/ViewProjection.cs" Link="Core/Services/ViewProjection.cs" />
-    <Compile Include="../Presentation.WinUI/Services/HotkeyAnalyzer.cs" Link="Core/Services/HotkeyAnalyzer.cs" />
-    <Compile Include="../Presentation.WinUI/Services/ActivityStore.cs" Link="Core/Services/ActivityStore.cs" />
-    <Compile Include="../Presentation.WinUI/Services/UserStartupService.cs" Link="Core/Services/UserStartupService.cs" />
-    <Compile Include="../Presentation.WinUI/Infrastructure/NativeProcessIdentity.cs" Link="Core/Infrastructure/NativeProcessIdentity.cs" />
-    <Compile Include="../Presentation.WinUI/Infrastructure/EffectOwner.cs" Link="Core/Infrastructure/EffectOwner.cs" />
-    <Compile Include="../Presentation.WinUI/Infrastructure/ProcessObservation.cs" Link="Core/Infrastructure/ProcessObservation.cs" />
-    <Compile Include="../Presentation.WinUI/Infrastructure/NativeMethods.Process.cs" Link="Core/Infrastructure/NativeMethods.Process.cs" />
-    <Compile Include="../Presentation.WinUI/Infrastructure/UnelevatedProcessLauncher.cs" Link="Core/Infrastructure/UnelevatedProcessLauncher.cs" />
-    <Compile Include="../Presentation.WinUI/Infrastructure/ManualElevation.cs" Link="Core/Infrastructure/ManualElevation.cs" />
-  </ItemGroup>
-  <ItemGroup><InternalsVisibleTo Include="Tests.Backend" /></ItemGroup>
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <SelfContained>true</SelfContained>
+        <RuntimeFrameworkVersion>10.0.13</RuntimeFrameworkVersion>
+        <AssemblyName>AhkManager.Backend</AssemblyName>
+        <RootNamespace>Bezoro.AhkManager.Backend</RootNamespace>
+        <Nullable>enable</Nullable>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+        <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../Core/AhkManager.Core.csproj" />
+    </ItemGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="Tests.Backend" />
+    </ItemGroup>
 </Project>

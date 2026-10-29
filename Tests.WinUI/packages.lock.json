@@ -156,9 +156,16 @@
         "resolved": "9.0.0",
         "contentHash": "hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A=="
       },
+      "ahkmanager.core": {
+        "type": "Project",
+        "dependencies": {
+          "System.Management": "[10.0.13, 10.0.13]"
+        }
+      },
       "bezoro.ahkmanager.winui": {
         "type": "Project",
         "dependencies": {
+          "AhkManager.Core": "[1.0.0, )",
           "CommunityToolkit.Mvvm": "[8.4.2, 8.4.2]",
           "Microsoft.WindowsAppSDK": "[2.5.1, 2.5.1]",
           "System.Management": "[10.0.13, 10.0.13]"

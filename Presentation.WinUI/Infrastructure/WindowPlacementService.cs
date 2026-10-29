@@ -1,6 +1,6 @@
 using Microsoft.UI.Windowing;
 using Windows.Graphics;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Models;
 
 namespace Bezoro.AhkManager.WinUI.Infrastructure;
 

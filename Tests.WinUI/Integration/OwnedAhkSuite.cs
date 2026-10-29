@@ -1,10 +1,12 @@
+using Tests.Backend.Fixtures;
 using System.Diagnostics;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Security.Principal;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Models;
 using Bezoro.AhkManager.WinUI.Infrastructure;
-using Bezoro.AhkManager.WinUI.Services;
+using Bezoro.AhkManager.Core.Infrastructure;
+using Bezoro.AhkManager.Core.Services;
 
 namespace Bezoro.AhkManager.WinUI.Tests.Integration;
 
