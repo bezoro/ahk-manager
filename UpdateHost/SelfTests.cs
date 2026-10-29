@@ -6,7 +6,7 @@ using System.Diagnostics;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
-internal static class SelfTests
+internal static partial class SelfTests
 {
     internal static async Task<int> Run(string root)
     {
@@ -16,6 +16,8 @@ internal static class SelfTests
         Directory.CreateDirectory(root); int checks = 0;
         void Check(bool pass, string name) { if (!pass) throw new InvalidOperationException("FAIL " + name); checks++; Console.WriteLine("PASS " + name); }
         var plan = new UpdatePlan(1, Guid.NewGuid(), 42, DateTimeOffset.UtcNow, Path.Combine(root, "installation"), Path.Combine(root, "installers", "1.2.1", "installer.exe"), new string('a', 64), "1.2.1");
+        CheckReleaseVersions(root, plan, Check);
+        await CheckTestInstallerCache(root, Check);
         UpdateProtocol.Validate(plan); UpdatePaths.ValidatePlanLocation(Path.Combine(root, "operations", plan.OperationId.ToString("D"), "plan.json"), plan, root);
         Check(UpdateProtocol.Read<UpdatePlan>(JsonSerializer.SerializeToUtf8Bytes(plan, UpdateProtocol.Json)) == plan, "update plan strict JSON roundtrip preserves operation and parent identity");
         foreach (var invalid in new[] { plan with { SchemaVersion = 2 }, plan with { OperationId = Guid.Empty }, plan with { ParentPid = 0 }, plan with { Version = "1.2.0-beta" }, plan with { InstallerSha256 = new string('A', 64) }, plan with { InstallerPath = "https://example.invalid/installer.exe" }, plan with { InstallDirectory = @"\\host\share" } })

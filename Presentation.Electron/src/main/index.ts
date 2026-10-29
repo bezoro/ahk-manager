@@ -155,7 +155,7 @@ async function configureUpdates():Promise<void> {
   updateStore=new UpdateStore(root,{available:()=>safeStorage.isEncryptionAvailable(),encrypt:value=>safeStorage.encryptString(value),decrypt:value=>safeStorage.decryptString(value)});
   const client=new GitHubUpdateClient(network.fetch.bind(network) as typeof fetch);
   updates=new UpdateService({
-    version:app.getVersion(),store:updateStore,releases:token=>client.releases(token),resolve:(id,token)=>client.resolve(id,token),download:downloadRelease,
+    version:app.getVersion(),store:updateStore,releases:(token,channel)=>client.releases(token,channel),resolve:(id,token)=>client.resolve(id,token),download:downloadRelease,
     preflight:(operationId,phase)=>{
       const lease=documentLease;
       return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>!!lease&&!!guard?.current(lease)&&!!window?.isFocused()&&!window.isDestroyed()&&!quitting&&!updateApplying&&!updateShutdownInFlight&&!adoptionPending&&!administration?.active&&!stopExit.active&&!controller?.state.busy&&!controller?.state.administrationPending);
@@ -411,6 +411,7 @@ function registerIpc():void {
   bind('checkUpdates',none,()=>updates!.check());
   bind('installUpdate',shape({id:text(100)}),v=>updates!.install(v.id));
   bind('setUpdateToken',shape({token:nullable(text(512))}),v=>updates!.setToken(v.token));
+  bind('setUpdateChannel',shape({channel:oneOf('stable','test')}),v=>updates!.setChannel(v.channel));
   bind('requestAdministration',none,()=>requestAdministration());
   bind('refresh',none,()=>controller!.refresh());bind('addFiles',none,()=>controller!.add('scripts'));bind('addFolder',none,()=>controller!.add('folder'));
   bind('removeScript',shape({scriptId:guid,revision:decimal}),v=>controller!.remove(v.scriptId,v.revision));

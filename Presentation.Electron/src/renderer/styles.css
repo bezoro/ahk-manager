@@ -62,3 +62,31 @@
 .updates-page>*{flex-shrink:0}
 
 .nav-item>.nav-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:left}
+
+.update-channel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.update-channel-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.update-channel-field label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.update-channel-field .fui-Select {
+  max-width: 100%;
+}
+.update-channel > .muted {
+  max-width: 76ch;
+}
+.update-release-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}

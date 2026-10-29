@@ -14,8 +14,57 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  release-identity:
+    name: Conventional commits and SemVer identity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      notes-base64: ${{ steps.identity.outputs.notes-base64 }}
+      already-tagged: ${{ steps.identity.outputs.already-tagged }}
+    steps:
+      - name: Check out full history and tags
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.22.0'
+          cache: npm
+          cache-dependency-path: Presentation.Electron/package-lock.json
+
+      - name: Install locked release tooling
+        working-directory: Presentation.Electron
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Verify release identity policy with isolated Git repositories
+        working-directory: Presentation.Electron
+        run: npm run test:release
+
+      - name: Validate new conventional commits
+        working-directory: Presentation.Electron
+        run: npm run commits:check
+
+      - name: Calculate version and plain text release notes
+        id: identity
+        working-directory: Presentation.Electron
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            node scripts/compute-release.cjs --sha "$SOURCE_COMMIT" --test-pr "$PR_NUMBER" --test-run "$GITHUB_RUN_NUMBER" --test-attempt "$GITHUB_RUN_ATTEMPT"
+          else
+            node scripts/compute-release.cjs --sha "$SOURCE_COMMIT"
+          fi
+
   windows-checks:
     name: Build and isolated tests (Windows x64)
+    needs: release-identity
     runs-on: windows-2025
     timeout-minutes: 40
     outputs:
@@ -32,6 +81,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -51,11 +101,15 @@ jobs:
 
       - name: Set release identity
         id: release-metadata
+        env:
+          RELEASE_VERSION: ${{ needs.release-identity.outputs.version }}
+          RELEASE_NOTES_BASE64: ${{ needs.release-identity.outputs.notes-base64 }}
+          RELEASE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          $version = if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') { "1.2.$env:GITHUB_RUN_NUMBER" } else { '1.2.1' }
-          "AHK_RELEASE_VERSION=$version" >> $env:GITHUB_ENV
-          "AHK_SOURCE_COMMIT=$env:GITHUB_SHA" >> $env:GITHUB_ENV
-          "version=$version" >> $env:GITHUB_OUTPUT
+          "AHK_RELEASE_VERSION=$env:RELEASE_VERSION" >> $env:GITHUB_ENV
+          "AHK_RELEASE_NOTES_BASE64=$env:RELEASE_NOTES_BASE64" >> $env:GITHUB_ENV
+          "AHK_SOURCE_COMMIT=$env:RELEASE_SOURCE_COMMIT" >> $env:GITHUB_ENV
+          "version=$env:RELEASE_VERSION" >> $env:GITHUB_OUTPUT
 
       - name: Install locked frontend dependencies
         id: frontend-dependencies
@@ -130,6 +184,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ./tools/Test-ReleaseTooling.ps1 -OutputRoot "$env:CI_OUTPUT/release-tooling-tests"
+          ./tools/Test-TestReleaseTooling.ps1 -OutputRoot "$env:CI_OUTPUT/test-channel-tooling-tests"
 
       - name: Run Node tests with actual backend snapshot fixtures
         if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' && steps.backend-tests.outcome == 'success' }}
@@ -206,8 +261,7 @@ jobs:
         run: |
           $installers = @(Get-ChildItem -LiteralPath "$env:CI_OUTPUT/installer" -Filter '*Setup-x64.exe')
           if ($installers.Count -ne 1) { throw 'Exactly one target installer is required.' }
-          $notes = (git log -1 --format=%s).Trim()
-          if ($LASTEXITCODE -ne 0) { throw 'Commit notes are unavailable.' }
+          $notes = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AHK_RELEASE_NOTES_BASE64))
           ./tools/New-ReleaseManifest.ps1 -InstallerPath $installers[0].FullName -OutputPath "$env:CI_OUTPUT/installer/ahk-manager-release.json" -Version $env:AHK_RELEASE_VERSION -Commit $env:AHK_SOURCE_COMMIT -Notes $notes
           ./tools/Publish-GitHubRelease.ps1 -InstallerPath $installers[0].FullName -ManifestPath "$env:CI_OUTPUT/installer/ahk-manager-release.json" -Repository $env:GITHUB_REPOSITORY -Commit $env:AHK_SOURCE_COMMIT -ValidateOnly
 
@@ -245,6 +299,7 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/update-installation/*.json
             ${{ runner.temp }}/ahk-manager-ci/update-installation/*.log
             ${{ runner.temp }}/ahk-manager-ci/release-tooling-tests/*.json
+            ${{ runner.temp }}/ahk-manager-ci/test-channel-tooling-tests/*.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -265,7 +320,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-installer
+          name: ${{ github.event_name == 'pull_request' && format('windows-installer-test-{0}', github.run_attempt) || 'windows-installer' }}
           path: |
             ${{ runner.temp }}/ahk-manager-ci/installer/*Setup-x64.exe
             ${{ runner.temp }}/ahk-manager-ci/installer/SHA256.txt
@@ -287,13 +342,27 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Recognize an already published release without changing its assets
+        id: existing-release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.windows-checks.outputs.release-version }}
+        run: |
+          $status = ./tools/Get-ReleasePublicationStatus.ps1 -Repository $env:GITHUB_REPOSITORY -Version $env:RELEASE_VERSION -Commit $env:GITHUB_SHA
+          $published = $status -ceq 'Published'
+          Write-Host "Release v$env:RELEASE_VERSION status: $status."
+          "published=$($published.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
       - name: Download the installer approved by Windows CI
+        if: ${{ steps.existing-release.outputs.published != 'true' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: windows-installer
           path: release-artifacts
 
       - name: Publish immutable release assets
+        if: ${{ steps.existing-release.outputs.published != 'true' }}
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}

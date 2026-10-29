@@ -205,12 +205,16 @@ try {
         Set-Presentation $theme
         Invoke-Assertions 'updates' 'updates'
         Save-Capture "$theme-updates-1240"
+        Invoke-Assertions 'updates' 'updates' @{ testChannel = $true }
+        Save-Capture "$theme-updates-test-1240"
         Invoke-Assertions 'updates' 'updates' @{ recovery = $true }
         Save-Capture "$theme-updates-recovery-1240"
 
         Set-Presentation $theme 740 820
         Invoke-Assertions 'updates' 'updates'
         Save-Capture "$theme-updates-narrow-740"
+        Invoke-Assertions 'updates' 'updates' @{ testChannel = $true }
+        Save-Capture "$theme-updates-test-narrow-740"
 
         Set-Presentation $theme 1240 820 2
         Invoke-Assertions 'updates' 'updates' @{ recovery = $true }

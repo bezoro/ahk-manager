@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'This installation smoke test requires a disposable GitHub-hosted Windows runner.'
 }
@@ -61,8 +62,9 @@ function Local-Path([string]$Path, [switch]$File) {
 
 function Installer-Version([string]$Installer) {
     $raw = [Diagnostics.FileVersionInfo]::GetVersionInfo($Installer).ProductVersion
-    if ($raw -notmatch '^(\d+\.\d+\.\d+)(?:\.0)?$') { throw "Unexpected installer version: $raw" }
-    return $Matches[1]
+    if (Test-ReleaseVersion $raw) { return $raw }
+    if ($raw -match '\A(\d+\.\d+\.\d+)\.0\z' -and (Test-ReleaseVersion $Matches[1])) { return $Matches[1] }
+    throw "Unexpected installer version: $raw"
 }
 
 function Hash([string]$Path) { return (Get-FileHash -LiteralPath (Local-Path $Path -File) -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -136,6 +138,9 @@ function Check-Installation([string]$ExpectedVersion, [string]$ExpectedInstaller
     try { Assert-Check ($null -ne $key -and $key.GetValue('DisplayVersion') -eq $ExpectedVersion) "installed version is $ExpectedVersion" }
     finally { if ($null -ne $key) { $key.Dispose() } }
     Assert-Check (Test-Path -LiteralPath (Join-Path $installRoot 'Bezoro.AhkManager.exe') -PathType Leaf) 'manager executable exists without being launched'
+    $imageVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $installRoot 'Bezoro.AhkManager.exe'))
+    Assert-Check ([version]$imageVersion.ProductVersion -eq [version]($ExpectedVersion.Split('-')[0] + '.0')) 'installed Manager image ProductVersion matches the numeric release base'
+    Assert-Check ($imageVersion.FileVersion -ceq $ExpectedVersion) 'installed Manager image retains the exact stable or test FileVersion'
     Assert-Check (@(Get-Process -Name 'Bezoro.AhkManager' -ErrorAction SilentlyContinue).Count -eq 0) 'silent installation does not launch the Manager'
     $cached = Join-Path $profileRoot "Updates/installers/$ExpectedVersion/installer.exe"
     Assert-Check ((Hash $cached) -eq (Hash $ExpectedInstaller)) "cached installer for $ExpectedVersion preserves the exact downloaded bytes"
@@ -209,7 +214,7 @@ try {
     $baselineVersion = Installer-Version $BaselineInstaller
     $targetVersion = Installer-Version $TargetInstaller
     Assert-Check ($baselineVersion -ne $targetVersion) 'baseline and target fixtures have distinct versions'
-    Assert-Check ([version]$baselineVersion -ge [version]'1.2.0' -and [version]$targetVersion -ge [version]'1.2.0') 'both fixtures support the update protocol compatibility floor'
+    Assert-Check ([version]($baselineVersion.Split('-')[0]) -ge [version]'1.2.0' -and [version]($targetVersion.Split('-')[0]) -ge [version]'1.2.0') 'both fixtures support the update protocol compatibility floor'
     $startupCommand = '"' + (Join-Path $installRoot 'Bezoro.AhkManager.exe') + '" --login --background'
 
     Invoke-Installer $BaselineInstaller $false

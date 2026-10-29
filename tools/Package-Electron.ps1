@@ -7,12 +7,13 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $NpmPath) { $NpmPath = (Get-Command npm.cmd -ErrorAction Stop).Source }
 $repoRoot = Split-Path -Parent $PSScriptRoot
+Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
 $frontend = [IO.Path]::GetFullPath((Join-Path $BuildRoot 'frontend'))
 $backend = [IO.Path]::GetFullPath((Join-Path $BuildRoot 'backend'))
 $output = [IO.Path]::GetFullPath($OutputRoot)
 if (Test-Path -LiteralPath $output) { throw 'Use a fresh package output directory.' }
 $info = Get-Content -LiteralPath (Join-Path $frontend 'build-info.json') -Raw | ConvertFrom-Json
-if (-not $info.version -or -not $info.commit -or $info.updateProtocol -ne 1) { throw 'Rebuild the bundle with its release version, source commit and update protocol.' }
+if (-not (Test-ReleaseVersion $info.version) -or -not $info.commit -or $info.updateProtocol -ne 1) { throw 'Rebuild the bundle with its release version, source commit and update protocol.' }
 $previous = @{}
 foreach ($name in @('AHK_FRONTEND_DIST', 'AHK_BACKEND_DIST', 'AHK_PACKAGE_OUT', 'AHK_RELEASE_VERSION', 'AHK_SOURCE_COMMIT')) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 Push-Location -LiteralPath (Join-Path $repoRoot 'Presentation.Electron')

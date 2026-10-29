@@ -13,6 +13,7 @@ let guardProvider: (() => AdministrationUiGuard) | null = null;
 const api: AhkManagerApi = {
   getUpdateState: () => invoke('getUpdateState'), checkUpdates: () => invoke('checkUpdates'),
   installUpdate: id => invoke('installUpdate', id), setUpdateToken: token => invoke('setUpdateToken', token),
+  setUpdateChannel: channel => invoke('setUpdateChannel', channel),
   onUpdates: listener => listen('fixture:updates', listener),
   requestAdministration: () => invoke('requestAdministration'),
   onAdministrationPreflight: provider => { guardProvider = provider; return () => { if (guardProvider === provider) guardProvider = null; }; },

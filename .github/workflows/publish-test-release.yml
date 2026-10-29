@@ -1,0 +1,73 @@
+name: Publish test channel
+
+on:
+  workflow_run:
+    workflows: [Windows CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: test-channel-publication-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  candidates:
+    name: Find approved current PR builds
+    if: ${{ github.repository == 'bezoro/ahk-manager' && github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      runs: ${{ steps.candidates.outputs.runs }}
+    steps:
+      - name: Check out trusted default-branch release tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Select current successful builds and bootstrap backfill
+        id: candidates
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: ./tools/Get-TestReleaseCandidates.ps1 -TriggerRunId $env:TRIGGER_RUN_ID
+
+  publish:
+    name: Publish immutable PR preview
+    needs: candidates
+    if: ${{ needs.candidates.outputs.runs != '[]' }}
+    runs-on: windows-2025
+    timeout-minutes: 20
+    concurrency:
+      group: test-channel-run-${{ matrix.run-id }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        run-id: ${{ fromJSON(needs.candidates.outputs.runs) }}
+    steps:
+      - name: Check out trusted default-branch release tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Verify provenance, sign if configured and publish without executing the package
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TEST_RUN_ID: ${{ matrix.run-id }}
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          AHK_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}
+        run: ./tools/Publish-TestRelease.ps1 -RunId $env:TEST_RUN_ID
