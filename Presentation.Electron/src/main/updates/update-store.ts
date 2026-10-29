@@ -2,6 +2,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import {
+  validUpdateChannel,
+  validUpdateVersion,
+  type UpdateChannel,
+} from '../../shared/update-versions.js';
 
 export interface CachedInstaller {
   version: string;
@@ -14,8 +19,7 @@ export interface TokenEncryption {
   encrypt(value: string): Buffer;
   decrypt(value: Buffer): string;
 }
-const version = (value: unknown): value is string =>
-  typeof value === 'string' && /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/.test(value);
+const version = validUpdateVersion;
 const digest = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
 const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
@@ -95,6 +99,48 @@ export class UpdateStore {
       throw new Error(
         'Não foi possível ler o acesso protegido ao GitHub. Configure o acesso novamente.',
       );
+    }
+  }
+  async readChannel(): Promise<UpdateChannel> {
+    const file = path.join(this.root, 'update-channel.json');
+    try {
+      await this.regular(file, 1024);
+      const document: unknown = JSON.parse(await fs.readFile(file, 'utf8'));
+      if (!document || typeof document !== 'object' || Array.isArray(document))
+        throw new Error('Invalid channel preference.');
+      const value = document as Record<string, unknown>;
+      if (
+        Object.keys(value).length !== 2 ||
+        value.schemaVersion !== 1 ||
+        !validUpdateChannel(value.channel)
+      )
+        throw new Error('Invalid channel preference.');
+      return value.channel;
+    } catch (error) {
+      if (missing(error)) return 'stable';
+      throw new Error('Não foi possível ler o canal de atualização. Selecione o canal novamente.');
+    }
+  }
+  async saveChannel(channel: UpdateChannel): Promise<void> {
+    if (!validUpdateChannel(channel)) throw new Error('O canal de atualização é inválido.');
+    await this.safeDirectory(this.root, true);
+    const file = path.join(this.root, 'update-channel.json');
+    try {
+      // Size bounds protect reads. An empty or oversized corrupt preference can
+      // still be repaired by atomically replacing our own regular, unlinked file.
+      const existing = await fs.lstat(file);
+      if (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1)
+        throw new Error('Arquivo de atualização inválido.');
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
+    const temporary = path.join(this.root, `channel-${randomUUID()}.tmp`);
+    await this.writeNew(temporary, JSON.stringify({ schemaVersion: 1, channel }));
+    try {
+      await fs.rename(temporary, file);
+    } catch (error) {
+      await fs.unlink(temporary).catch(() => {});
+      throw error;
     }
   }
   async saveToken(value: string | null): Promise<void> {

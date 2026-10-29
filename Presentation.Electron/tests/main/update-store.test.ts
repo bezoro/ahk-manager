@@ -252,3 +252,69 @@ test('multiply linked credential and receipt files are never followed or removed
   );
   assert.deepEqual(await store.cached(), []);
 });
+
+test('channel preference defaults to stable and persists atomically independently of credentials and installers', async (t) => {
+  const { store } = await fixture(t);
+  assert.equal(await store.readChannel(), 'stable');
+  await store.saveChannel('test');
+  assert.equal(await store.readChannel(), 'test');
+  const reopened = new UpdateStore(store.root, encryption(false));
+  assert.equal(await reopened.readChannel(), 'test');
+  await store.saveChannel('stable');
+  assert.equal(await reopened.readChannel(), 'stable');
+  assert.deepEqual(
+    (await fs.readdir(store.root)).filter((name) => name.endsWith('.tmp')),
+    [],
+  );
+  assert.equal(await store.readToken(), null);
+  assert.deepEqual(await store.cached(), []);
+});
+
+test('invalid, redirected or multiply linked channel preferences never enable test releases or modify linked data', async (t) => {
+  const { store, root } = await fixture(t);
+  await store.saveChannel('stable');
+  const file = path.join(store.root, 'update-channel.json');
+  for (const content of [
+    'not-json',
+    '{}',
+    '{"schemaVersion":2,"channel":"test"}',
+    '{"schemaVersion":1,"channel":"beta"}',
+    '{"schemaVersion":1,"channel":"test","extra":true}',
+  ]) {
+    await fs.writeFile(file, content);
+    await assert.rejects(store.readChannel(), /canal de atualização/);
+  }
+  await store.saveChannel('test');
+  const retained = path.join(root, 'retained-channel.json');
+  await fs.link(file, retained);
+  const bytes = await fs.readFile(retained);
+  await assert.rejects(store.readChannel(), /canal de atualização/);
+  await assert.rejects(store.saveChannel('stable'), /inválido/);
+  assert.deepEqual(await fs.readFile(retained), bytes);
+});
+
+test('test installers retain their complete version as independent cache and receipt identities', async (t) => {
+  const { store, source, body } = await fixture(t);
+  const first = await store.cache('1.3.0-test.2.9.1', source, sha(body), body.length);
+  const next = await store.cache('1.3.0-test.2.10.1', source, sha(body), body.length);
+  const stable = await store.cache('1.3.0', source, sha(body), body.length);
+  assert.notEqual(first.installerPath, next.installerPath);
+  assert.notEqual(next.installerPath, stable.installerPath);
+  assert.deepEqual(
+    new Set((await store.cached()).map((item) => item.version)),
+    new Set(['1.3.0-test.2.9.1', '1.3.0-test.2.10.1', '1.3.0']),
+  );
+  for (const item of [first, next, stable]) await store.verify(item);
+});
+
+test('selecting a channel repairs an empty or oversized owned preference without requiring manual cleanup', async (t) => {
+  const { store } = await fixture(t);
+  await store.saveChannel('stable');
+  const file = path.join(store.root, 'update-channel.json');
+  for (const bytes of ['', 'x'.repeat(2048)]) {
+    await fs.writeFile(file, bytes);
+    await assert.rejects(store.readChannel(), /Selecione o canal novamente/);
+    await store.saveChannel('stable');
+    assert.equal(await store.readChannel(), 'stable');
+  }
+});

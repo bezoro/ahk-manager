@@ -21,6 +21,7 @@ const api: AhkManagerApi = {
   checkUpdates: () => invoke('checkUpdates'),
   installUpdate: (id) => invoke('installUpdate', id),
   setUpdateToken: (token) => invoke('setUpdateToken', token),
+  setUpdateChannel: (channel) => invoke('setUpdateChannel', channel),
   onUpdates: (listener) => listen('fixture:updates', listener),
   requestAdministration: () => invoke('requestAdministration'),
   onAdministrationPreflight: (provider) => {

@@ -12,7 +12,7 @@ import { APP_URL, DocumentGuard } from '../../src/main/security.js';
 import { AdministrationPreflight, ElevationCoordinator } from '../../src/main/elevation.js';
 import { ManagerController } from '../../src/main/controller.js';
 import type { ElevationStatus, OperationResult } from '../../src/shared/contracts.js';
-import { emptyUpdateState } from '../../src/shared/updates.js';
+import { emptyUpdateState, type UpdateChannel } from '../../src/shared/updates.js';
 import { snapshot } from './fixtures.js';
 
 class RecordedIpc implements IpcTransport {
@@ -86,6 +86,7 @@ function fixture() {
       check: async () => updateState,
       install: async () => updateState,
       setToken: async () => updateState,
+      setChannel: async () => updateState,
     },
     preflight: new AdministrationPreflight(),
     documentScope,
@@ -274,4 +275,55 @@ test('a validated copy request reaches only the injected clipboard port', async 
   const invoke = await f.connect();
   await invoke('copyText', { text: 'owned fixture text' });
   assert.deepEqual(f.copied, ['owned fixture text']);
+});
+
+test('channel requests authenticate the document and accept only the two explicit channels', async () => {
+  const f = fixture();
+  const requested: UpdateChannel[] = [];
+  f.context.updates.setChannel = async (channel) => {
+    requested.push(channel);
+    return { ...emptyUpdateState(), channel };
+  };
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  await assert.rejects(
+    f.ipc.invoke('manager:setUpdateChannel', f.event, {
+      token: 'forged',
+      body: { channel: 'test' },
+    }),
+    /Stale IPC document/,
+  );
+  for (const body of [
+    {},
+    { channel: 'beta' },
+    { channel: null },
+    { channel: 'test', repository: 'another/repository' },
+  ]) {
+    await assert.rejects(invoke('setUpdateChannel', body), /Invalid/);
+  }
+  assert.deepEqual(requested, []);
+  await invoke('setUpdateChannel', { channel: 'test' });
+  await invoke('setUpdateChannel', { channel: 'stable' });
+  assert.deepEqual(requested, ['test', 'stable']);
+});
+
+test('channel changes cannot bypass a pending application transition', async () => {
+  for (const phase of [
+    'quitting',
+    'updateApplying',
+    'adoptionPending',
+    'administrationPending',
+  ] as const) {
+    const f = fixture();
+    let requests = 0;
+    f.context.updates.setChannel = async () => {
+      requests++;
+      return emptyUpdateState();
+    };
+    f.setPolicy({ [phase]: true });
+    registerHandlers(f.context);
+    const invoke = await f.connect();
+    await assert.rejects(invoke('setUpdateChannel', { channel: 'test' }));
+    assert.equal(requests, 0);
+  }
 });

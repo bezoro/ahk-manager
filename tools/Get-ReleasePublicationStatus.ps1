@@ -1,12 +1,14 @@
 #requires -Version 7.0
 param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$')][string]$Repository,
-    [Parameter(Mandatory = $true)][ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')][string]$Version,
+    [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$Commit
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Release-GitTags.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
+if (-not (Test-ReleaseVersion $Version)) { throw 'Invalid release version.' }
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'The release status token is missing.' }
 $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'Bezoro-AhkManager-Release' }
 $tag = 'v' + $Version
@@ -26,7 +28,7 @@ catch {
     if ($null -ne $response -and $null -ne $response.Value -and [int]$response.Value.StatusCode -eq 404) { return 'Missing' }
     throw
 }
-if ($null -eq $release -or $release.tag_name -cne $tag -or $release.target_commitish -cne $Commit.ToLowerInvariant()) { throw 'The existing release belongs to a different commit or tag.' }
+if ($null -eq $release -or $release.tag_name -cne $tag -or $release.target_commitish -cne $Commit.ToLowerInvariant() -or $release.prerelease -isnot [bool] -or $release.prerelease -ne ((Get-ReleaseVersionChannel $Version) -ceq 'test')) { throw 'The existing release belongs to a different commit, tag or channel.' }
 if ($release.draft) { return 'Draft' }
 if ($null -eq $tagCommit) { throw 'The published release is missing its Git tag.' }
 foreach ($name in @("AHK-Manager-$Version-Setup-x64.exe", 'ahk-manager-release.json')) {

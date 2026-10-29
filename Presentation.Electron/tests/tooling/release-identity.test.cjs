@@ -8,6 +8,62 @@ const { computeRelease, git, plainNotes } = require('../../scripts/compute-relea
 const { commitRange, lintRange } = require('../../scripts/check-commits.cjs');
 const { commitTypes } = require('../../scripts/release-policy.cjs');
 
+test('test builds use chronological run, attempt and PR identifiers without reserving the stable tag', async (t) => {
+  const fixture = repository(t);
+  fixture.commit('feat: add test channel');
+  const first = await computeRelease({ ...fixture, test: { pr: 42, run: 19, attempt: 1 } });
+  const retried = await computeRelease({ ...fixture, test: { pr: 42, run: 19, attempt: 2 } });
+  const next = await computeRelease({ ...fixture, test: { pr: 2, run: 20, attempt: 1 } });
+  assert.equal(first.version, '1.3.0-test.19.1.42');
+  assert.equal(retried.version, '1.3.0-test.19.2.42');
+  assert.equal(next.version, '1.3.0-test.20.1.2');
+  assert.equal(require('semver').lt(first.version, retried.version), true);
+  assert.equal(require('semver').lt(retried.version, next.version), true);
+  assert.equal(git(fixture.cwd, ['tag', '--list', 'v1.3.0*']), '');
+});
+
+test('a PR behind main bases its preview on the highest stable tag, without claiming that stable identity', async (t) => {
+  const fixture = repository(t);
+  git(fixture.cwd, ['checkout', '--quiet', '-b', 'feature']);
+  const head = fixture.commit('fix: preview an isolated change');
+  git(fixture.cwd, ['checkout', '--quiet', 'main']);
+  fixture.commit('feat: ship bootstrap');
+  git(fixture.cwd, ['tag', 'v1.3.0']);
+  const release = await computeRelease({
+    ...fixture,
+    sha: head,
+    test: { pr: 2, run: 20, attempt: 1 },
+  });
+  assert.equal(release.version, '1.3.1-test.20.1.2');
+  assert.equal(release.baseVersion, '1.3.0');
+  assert.equal(release.commit, head);
+  assert.equal(release.alreadyTagged, false);
+});
+
+test('a conflicting next stable tag does not block an independent test release', async (t) => {
+  const fixture = repository(t);
+  git(fixture.cwd, ['checkout', '--quiet', '-b', 'unrelated']);
+  fixture.commit('fix: reserve stable patch');
+  git(fixture.cwd, ['tag', 'v1.2.17']);
+  git(fixture.cwd, ['checkout', '--quiet', 'main']);
+  fixture.commit('fix: preview the branch');
+  const release = await computeRelease({ ...fixture, test: { pr: 2, run: 20, attempt: 1 } });
+  assert.equal(release.version, '1.2.18-test.20.1.2');
+});
+
+test('test identity refuses partial, unbounded and noncanonical CI identifiers', async (t) => {
+  const fixture = repository(t);
+  fixture.commit('fix: preview');
+  for (const test of [
+    { pr: 2, run: 20 },
+    { pr: 0, run: 20, attempt: 1 },
+    { pr: 2, run: '01', attempt: 1 },
+    { pr: 2, run: 2147483648, attempt: 1 },
+    { pr: 2, run: 20, attempt: '1\n' },
+  ])
+    await assert.rejects(computeRelease({ ...fixture, test }), /positive integers/);
+});
+
 function repository(t) {
   const cwd = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'ahk-release-'));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));

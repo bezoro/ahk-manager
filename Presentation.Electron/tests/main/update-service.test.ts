@@ -10,7 +10,7 @@ import {
   type RemoteUpdateRelease,
 } from '../../src/main/updates/github-updates.js';
 import type { CachedInstaller } from '../../src/main/updates/update-store.js';
-import type { UpdateState } from '../../src/shared/updates.js';
+import type { UpdateChannel, UpdateState } from '../../src/shared/updates.js';
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -57,6 +57,17 @@ class Store implements UpdateStorePort {
   saved: Array<string | null> = [];
   cachedSources: string[] = [];
   token: string | null = null;
+  channel: UpdateChannel = 'stable';
+  channelSaveGate: Promise<void> | null = null;
+  savedChannels: UpdateChannel[] = [];
+  async readChannel(): Promise<UpdateChannel> {
+    return this.channel;
+  }
+  async saveChannel(channel: UpdateChannel): Promise<void> {
+    this.savedChannels.push(channel);
+    if (this.channelSaveGate) await this.channelSaveGate;
+    this.channel = channel;
+  }
   saveGate: Promise<void> | null = null;
   cacheError: Error | null = null;
   async readToken(): Promise<string | null> {
@@ -88,17 +99,21 @@ class Store implements UpdateStorePort {
   }
 }
 
-function fixture() {
+function fixture(version = '1.2.2') {
   const store = new Store();
   const notifications: UpdateState[] = [];
   const queriedTokens: Array<string | null> = [];
+  const queriedChannels: UpdateChannel[] = [];
   const resolved: Array<{ id: string; token: string | null }> = [];
   const downloaded: RemoteUpdateRelease[] = [];
   const applied: Array<{ operationId: string; target: CachedInstaller }> = [];
   const preflights: Array<{ operationId: string; phase: 'begin' | 'commit' }> = [];
   const confirmed: string[] = [];
   const hooks = {
-    releases: async (_token: string | null): Promise<RemoteUpdateRelease[]> => [release()],
+    releases: async (
+      _token: string | null,
+      _channel: UpdateChannel,
+    ): Promise<RemoteUpdateRelease[]> => [release()],
     resolve: async (_id: string, _token: string | null): Promise<RemoteUpdateRelease> =>
       release('1.2.0'),
     download: async (
@@ -114,11 +129,12 @@ function fixture() {
     apply: async (): Promise<void> => {},
   };
   const boundary: UpdateBoundary = {
-    version: '1.2.2',
+    version,
     store,
-    releases: async (token) => {
+    releases: async (token, channel) => {
       queriedTokens.push(token);
-      return hooks.releases(token);
+      queriedChannels.push(channel);
+      return hooks.releases(token, channel);
     },
     resolve: async (id, token) => {
       resolved.push({ id, token });
@@ -151,6 +167,7 @@ function fixture() {
     hooks,
     notifications,
     queriedTokens,
+    queriedChannels,
     resolved,
     downloaded,
     applied,
@@ -628,4 +645,211 @@ test('a pending lazy manifest resolution owns the installation operation and can
   assert.equal(f.resolved.length, 1);
   assert.equal(f.downloaded.length, 1);
   assert.equal(f.applied.length, 1);
+});
+
+test('stable defaults exclude test releases from both remote and preserved installer history', async () => {
+  const f = fixture();
+  const preview = '1.3.0-test.2.10.1';
+  f.store.items = [cached(preview), cached('1.2.0')];
+  f.hooks.releases = async () => [release(preview), release()];
+  await f.service.initialize();
+  const state = await f.service.check();
+  assert.equal(state.channel, 'stable');
+  assert.equal(state.availableVersion, '1.2.10');
+  assert.equal(
+    state.releases.some((item) => item.version === preview),
+    false,
+  );
+  await f.service.install(`local:${preview}`);
+  await f.service.install(release(preview).id);
+  assert.deepEqual(f.applied, []);
+  assert.deepEqual(f.downloaded, []);
+  assert.deepEqual(f.queriedChannels, ['stable']);
+});
+
+test('persisted test channel survives initialization and explicitly queries previews', async () => {
+  const f = fixture();
+  f.store.channel = 'test';
+  f.hooks.releases = async (_token, channel) =>
+    channel === 'test' ? [release('1.3.0-test.2.10.1')] : [release()];
+  assert.equal((await f.service.initialize()).channel, 'test');
+  assert.equal((await f.service.check()).availableVersion, '1.3.0-test.2.10.1');
+  assert.deepEqual(f.queriedChannels, ['test']);
+  assert.deepEqual(f.downloaded, []);
+});
+
+test('switching to stable offers the newest stable even below the installed test version and blocks all other previews', async () => {
+  const current = '1.3.0-test.2.9.1',
+    other = '1.3.0-test.2.10.1';
+  const f = fixture(current);
+  f.store.channel = 'test';
+  f.store.items = [cached(current), cached(other), cached('1.2.15')];
+  f.hooks.releases = async () => [release(other), release('1.2.16'), release('1.2.15')];
+  await f.service.initialize();
+  assert.equal((await f.service.check()).availableVersion, other);
+  const stable = await f.service.setChannel('stable');
+  assert.equal(stable.channel, 'stable');
+  assert.equal(stable.availableVersion, '1.2.16');
+  assert.deepEqual(
+    stable.releases.map((item) => item.version),
+    [current, '1.2.16', '1.2.15'],
+  );
+  assert.equal(stable.releases.find((item) => item.version === current)?.canInstall, false);
+  await f.service.install(release(other).id);
+  assert.equal(f.applied.length, 0);
+  await f.service.install(release('1.2.16').id);
+  assert.equal(f.applied[0]?.target.version, '1.2.16');
+  assert.deepEqual(f.queriedChannels, ['test', 'stable']);
+});
+
+test('channel persistence owns the operation before awaiting and clears former remote choices immediately', async () => {
+  const f = fixture();
+  await f.service.check();
+  const gate = deferred<void>();
+  f.store.channelSaveGate = gate.promise;
+  const switching = f.service.setChannel('test');
+  assert.equal(f.service.busy, true);
+  assert.equal(f.service.snapshot.phase, 'checking');
+  assert.equal(
+    f.service.snapshot.releases.some((item) => item.id === release().id),
+    false,
+  );
+  await f.service.setChannel('stable');
+  await f.service.check();
+  await f.service.setToken('ghp_fixture_during_channel_switch_not_a_real_credential');
+  await f.service.install(release().id);
+  assert.deepEqual(f.store.savedChannels, ['test']);
+  assert.deepEqual(f.store.saved, []);
+  assert.deepEqual(f.applied, []);
+  assert.deepEqual(f.queriedChannels, ['stable']);
+  gate.resolve(undefined);
+  const state = await switching;
+  assert.equal(state.channel, 'test');
+  assert.deepEqual(f.queriedChannels, ['stable', 'test']);
+});
+
+test('failed channel persistence retains the previous channel and cannot query an unsaved selection', async () => {
+  const f = fixture();
+  await f.service.check();
+  const gate = deferred<void>();
+  f.store.channelSaveGate = gate.promise;
+  const switching = f.service.setChannel('test');
+  gate.reject(new Error('Fixture settings write failed.'));
+  const failed = await switching;
+  assert.equal(failed.channel, 'stable');
+  assert.equal(failed.phase, 'error');
+  assert.match(failed.error!, /canal anterior foi mantido/);
+  assert.equal(f.service.busy, false);
+  assert.deepEqual(f.queriedChannels, ['stable']);
+  f.store.channelSaveGate = null;
+  const retried = await f.service.setChannel('test');
+  assert.equal(retried.channel, 'test');
+  assert.deepEqual(f.queriedChannels, ['stable', 'test']);
+});
+
+test('a pending check or installation rejects channel changes without changing persistence or selection', async () => {
+  const f = fixture();
+  const gate = deferred<RemoteUpdateRelease[]>();
+  f.hooks.releases = async () => gate.promise;
+  const checking = f.service.check();
+  await f.service.setChannel('test');
+  assert.deepEqual(f.store.savedChannels, []);
+  gate.resolve([release()]);
+  await checking;
+  const applyGate = deferred<void>(),
+    entered = deferred<void>();
+  f.hooks.apply = async () => {
+    entered.resolve(undefined);
+    await applyGate.promise;
+  };
+  const installing = f.service.install(release().id);
+  await entered.promise;
+  await f.service.setChannel('test');
+  assert.equal(f.service.snapshot.channel, 'stable');
+  assert.deepEqual(f.store.savedChannels, []);
+  applyGate.resolve(undefined);
+  await installing;
+});
+
+test('a new channel network failure cannot restore or install a release id from the previous channel', async () => {
+  const f = fixture();
+  f.store.channel = 'test';
+  f.hooks.releases = async () => [release('1.3.0-test.2.10.1')];
+  await f.service.initialize();
+  await f.service.check();
+  f.hooks.releases = async () => {
+    throw new Error('Fixture offline.');
+  };
+  const state = await f.service.setChannel('stable');
+  assert.equal(state.channel, 'stable');
+  assert.equal(state.phase, 'error');
+  assert.equal(
+    state.releases.some((item) => item.version === '1.3.0-test.2.10.1'),
+    false,
+  );
+  await f.service.install(release('1.3.0-test.2.10.1').id);
+  assert.deepEqual(f.applied, []);
+  assert.deepEqual(f.downloaded, []);
+});
+
+test('explicit test opt-in offers a published preview even below the installed stable bootstrap', async () => {
+  const f = fixture('1.3.0');
+  const preview = '1.3.0-test.18.1.2';
+  f.store.items = [cached('1.4.0-test.17.1.9')];
+  f.hooks.releases = async () => [release('1.3.0'), release(preview)];
+  const state = await f.service.setChannel('test');
+  assert.equal(
+    state.availableVersion,
+    preview,
+    'Published preview takes precedence over cached historical choices.',
+  );
+  assert.equal(state.channel, 'test');
+  assert.equal(state.releases.find((item) => item.version === preview)?.canInstall, true);
+  await f.service.install(release(preview).id);
+  assert.equal(f.applied[0]?.target.version, preview);
+});
+
+test('offline test opt-in can offer its preserved preview while stable never offers that cache', async () => {
+  const f = fixture('1.3.0');
+  const preview = '1.3.0-test.18.1.2';
+  f.store.items = [cached(preview)];
+  f.hooks.releases = async () => {
+    throw new Error('Fixture offline.');
+  };
+  await f.service.initialize();
+  assert.equal(f.service.snapshot.availableVersion, null);
+  assert.equal((await f.service.setChannel('test')).availableVersion, preview);
+  await f.service.install(`local:${preview}`);
+  assert.equal(f.applied[0]?.target.version, preview);
+  assert.deepEqual(f.downloaded, []);
+});
+
+test('a persisted test channel never cycles back into the old preview after accepting its stable release', async () => {
+  const preview = '1.3.0-test.18.1.2';
+  const before = fixture(preview);
+  before.store.channel = 'test';
+  before.hooks.releases = async () => [release(preview), release('1.3.0')];
+  await before.service.initialize();
+  assert.equal((await before.service.check()).availableVersion, '1.3.0');
+  await before.service.install(release('1.3.0').id);
+  assert.equal(before.applied[0]?.target.version, '1.3.0');
+  const restarted = fixture('1.3.0');
+  restarted.store.channel = 'test';
+  restarted.store.items = [cached(preview)];
+  restarted.hooks.releases = async () => [release(preview), release('1.3.0')];
+  await restarted.service.initialize();
+  const current = await restarted.service.check();
+  assert.equal(current.channel, 'test');
+  assert.equal(current.availableVersion, null);
+  assert.equal(
+    current.releases.find((item) => item.version === preview)?.canInstall,
+    true,
+    'Explicit history rollback remains available.',
+  );
+  await restarted.service.setChannel('stable');
+  assert.equal(
+    (await restarted.service.setChannel('test')).availableVersion,
+    preview,
+    'An explicit new opt-in can still choose the older bootstrap preview.',
+  );
 });

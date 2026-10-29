@@ -63,7 +63,7 @@ export async function createApplicationUpdates(
     ...boundary,
     version: app.getVersion(),
     store,
-    releases: (token) => client.releases(token),
+    releases: (token, channel) => client.releases(token, channel),
     resolve: (id, token) => client.resolve(id, token),
     download: downloadRelease,
     recovery: () => updateRecoveryStatus(store),

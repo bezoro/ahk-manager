@@ -10,7 +10,7 @@ Gerenciador de scripts AutoHotkey v2 para Windows 11 x64. A interface usa Electr
 - Inicie, reinicie e pare cada script, com privilégios normais ou administrativos.
 - Edite no VS Code detectado automaticamente ou configure outro editor e seus argumentos.
 - Consulte atalhos, atividade e problemas de observação dos processos.
-- Atualize pelo aplicativo e use o histórico para voltar a uma versão preservada.
+- Atualize pelo aplicativo, escolha o canal estável ou de testes e use o histórico para voltar a uma versão preservada.
 
 O Manager inicia com Windows e como administrador por padrão. As preferências são independentes e configuráveis. O primeiro uso administrativo solicita a confirmação do Windows. Scripts sem a opção administrativa continuam usando o privilégio padrão do usuário.
 
@@ -20,7 +20,9 @@ Adicionar e analisar arquivos não executa os scripts. AutoHotkey v2 é um requi
 
 ## Atualizações e dados
 
-O aplicativo consulta as Releases públicas ao abrir e a cada 15 minutos, sem exigir login. Cada alteração na `main` que passa pela CI publica uma versão. O download e a instalação dependem de uma ação do usuário. Perfis, scripts e preferências de inicialização são preservados; uma falha confirmada na instalação restaura a cópia anterior. Consulte [UPDATES.md](UPDATES.md) para assinatura, primeira atualização de versões antigas e recuperação.
+O aplicativo consulta as Releases públicas ao abrir e a cada 15 minutos, sem exigir login. O canal **Estável**, selecionado por padrão, recebe alterações da `main` que passaram pela CI. Em **Atualizações**, escolha **Testes** para receber prévias de pull requests antes do merge. Os dois canais usam o botão de atualização e permitem retornar pelo histórico. Voltar ao canal estável oferece a versão estável mais recente, mesmo quando ela é anterior à prévia instalada.
+
+O download e a instalação dependem de uma ação do usuário. Perfis, scripts e preferências de inicialização são preservados; uma falha confirmada na instalação restaura a cópia anterior. Versões sem o seletor de canais recebem primeiro uma atualização estável pelo botão existente. Consulte [UPDATES.md](UPDATES.md) para publicação, assinatura, primeira atualização de versões antigas e recuperação.
 
 Os dados operacionais ficam em `%LOCALAPPDATA%/Bezoro/AhkManagerElectron`. O armazenamento Chromium usa `%APPDATA%/Bezoro/AhkManagerElectron/Chromium`. A migração de um perfil anterior exige seleção, prévia e confirmação. A desinstalação preserva perfis e scripts.
 

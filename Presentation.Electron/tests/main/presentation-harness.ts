@@ -342,6 +342,16 @@ app
         return updates;
       }
       if (method === 'installUpdate') return { ...updates, phase: 'installing' };
+      if (method === 'setUpdateChannel') {
+        const channel = requireValid<'stable' | 'test'>(
+          args[0],
+          oneOf('stable', 'test'),
+          'fixture update channel',
+        );
+        updates = { ...updates, channel, phase: 'idle' };
+        window.webContents.send('fixture:updates', updates);
+        return updates;
+      }
       if (method === 'setUpdateToken') {
         updates = { ...updates, accessConfigured: args[0] !== null };
         window.webContents.send('fixture:updates', updates);
@@ -477,6 +487,8 @@ app
                 scenarios +
                   '\nAhkRendererScenarios.previewUpdates(' +
                   Boolean(command.recovery) +
+                  ', ' +
+                  Boolean(command.testChannel) +
                   ')',
               );
               write('updates-' + command.id + '.json', { assertions, fixture: true });

@@ -8,6 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $NpmPath) { $NpmPath = (Get-Command npm.cmd -ErrorAction Stop).Source }
 $repoRoot = Split-Path -Parent $PSScriptRoot
+Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
+if ($ReleaseVersion -and -not (Test-ReleaseVersion $ReleaseVersion)) { throw 'Invalid release version.' }
 $stageRoot = [IO.Path]::GetFullPath($OutputRoot)
 if (Test-Path -LiteralPath $stageRoot) { throw 'Use a fresh output directory.' }
 New-Item -ItemType Directory -Path $stageRoot | Out-Null
@@ -28,7 +30,7 @@ try {
         $identityJson = & node.exe 'scripts/compute-release.cjs' --json --sha $SourceCommit
         if ($LASTEXITCODE -ne 0) { throw 'Release identity is unavailable. Fetch Git tags or supply -ReleaseVersion explicitly.' }
         $ReleaseVersion = ($identityJson | ConvertFrom-Json).version
-        if (-not $ReleaseVersion) { throw 'The release identity did not contain a version.' }
+        if (-not (Test-ReleaseVersion $ReleaseVersion)) { throw 'The release identity did not contain a valid version.' }
         $env:AHK_RELEASE_VERSION = $ReleaseVersion
     }
     & node.exe 'node_modules/electron/install.js'

@@ -31,9 +31,11 @@ internal static partial class SelfTests
             "1.2.1"
         );
         CheckProtocol(root, plan, Check);
+        CheckReleaseVersions(root, plan, Check);
         CheckInstallerCommandLine(root, plan, Check);
         CheckSnapshotAclComparison(Check);
         await CheckInstallerCache(root, plan, Check);
+        await CheckTestInstallerCache(root, Check);
         await CheckApplyTransactions(root, plan, Check);
         await CheckShutdownAuthorization(root, plan, Check);
         string original = await CheckSnapshotContents(root, Check);

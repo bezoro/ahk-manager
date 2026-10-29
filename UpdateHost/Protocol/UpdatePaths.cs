@@ -89,7 +89,7 @@ internal static class UpdatePaths
     internal static void ValidateInstallerLocation(string path, string version, string updatesRoot)
     {
         if (
-            !UpdateProtocol.NumericVersion(version)
+            !UpdateProtocol.ReleaseVersion(version)
             || !Equal(
                 path,
                 Path.Combine(Local(updatesRoot), "installers", version, "installer.exe")

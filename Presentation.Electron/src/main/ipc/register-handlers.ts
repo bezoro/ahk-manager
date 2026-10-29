@@ -31,6 +31,7 @@ import type { ManagerController } from '../controller.js';
 import type { AdministrationPreflight } from '../elevation.js';
 import type { DocumentGuard, DocumentLease } from '../security.js';
 import type { UpdateService } from '../updates/update-service.js';
+import type { UpdateChannel } from '../../shared/updates.js';
 import { assertRequestAllowed, type RequestPolicy } from './request-policy.js';
 
 export interface IpcTransport {
@@ -46,7 +47,7 @@ export interface IpcContext {
   clipboard: { writeText(text: string): void };
   guard: Pick<DocumentGuard, 'connect' | 'validate' | 'current'>;
   controller: ManagerController;
-  updates: Pick<UpdateService, 'snapshot' | 'check' | 'install' | 'setToken'>;
+  updates: Pick<UpdateService, 'snapshot' | 'check' | 'install' | 'setToken' | 'setChannel'>;
   preflight: AdministrationPreflight;
   documentScope: AsyncLocalStorage<() => boolean>;
   policy(): RequestPolicy;
@@ -90,6 +91,11 @@ export function registerHandlers(context: IpcContext): void {
   );
   bind<{ token: string | null }>('setUpdateToken', shape({ token: nullable(text(512)) }), (value) =>
     updates.setToken(value.token),
+  );
+  bind<{ channel: UpdateChannel }>(
+    'setUpdateChannel',
+    shape({ channel: oneOf('stable', 'test') }),
+    (value) => updates.setChannel(value.channel),
   );
   bind('requestAdministration', none, () => context.requestAdministration());
   bind('refresh', none, () => controller.refresh());

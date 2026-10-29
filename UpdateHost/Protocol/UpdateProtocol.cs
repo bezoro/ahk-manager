@@ -30,21 +30,64 @@ internal static class UpdateProtocol
         value is { Length: > 0 and <= 64 }
         && Regex.IsMatch(
             value,
-            @"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){0,2}$",
+            @"\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){0,2}\z",
             RegexOptions.CultureInvariant
         )
         && System.Version.TryParse(value, out _);
 
+    internal static bool ReleaseVersion(string? value)
+    {
+        if (value is not { Length: > 0 and <= 64 })
+            return false;
+        var match = Regex.Match(
+            value,
+            @"\A(0|[1-9][0-9]{0,9})\.(0|[1-9][0-9]{0,9})\.(0|[1-9][0-9]{0,9})(?:-test\.([1-9][0-9]{0,9})\.([1-9][0-9]{0,9})\.([1-9][0-9]{0,9}))?\z",
+            RegexOptions.CultureInvariant
+        );
+        return match.Success
+            && match
+                .Groups.Cast<Group>()
+                .Skip(1)
+                .Where(group => group.Success)
+                .All(group => int.TryParse(group.Value, out _));
+    }
+
+    // Windows stores historical stable versions as two to four numeric parts.
+    // Test releases always retain their complete SemVer identity.
+    internal static bool InstalledVersion(string? value) =>
+        NumericVersion(value) || ReleaseVersion(value);
+
     internal static bool SameVersion(string first, string second)
     {
-        if (!NumericVersion(first) || !NumericVersion(second))
+        if (!InstalledVersion(first) || !InstalledVersion(second))
             return false;
+        if (first.Contains('-') || second.Contains('-'))
+            return string.Equals(first, second, StringComparison.Ordinal);
         var a = System.Version.Parse(first);
         var b = System.Version.Parse(second);
         return a.Major == b.Major
             && a.Minor == b.Minor
             && Math.Max(a.Build, 0) == Math.Max(b.Build, 0)
             && Math.Max(a.Revision, 0) == Math.Max(b.Revision, 0);
+    }
+
+    internal static bool InstalledImageVersionMatches(
+        string expected,
+        string? productVersion,
+        string? fileVersion
+    )
+    {
+        if (productVersion is null || !InstalledVersion(expected))
+            return false;
+        int suffix = expected.IndexOf('-');
+        if (suffix < 0)
+            return fileVersion is not null
+                && SameVersion(expected, productVersion)
+                && SameVersion(expected, fileVersion);
+        // Electron's resource editor preserves the full SemVer in FileVersion,
+        // while its ProductVersion is the numeric Windows version.
+        return string.Equals(expected, fileVersion, StringComparison.Ordinal)
+            && SameVersion(expected[..suffix], productVersion);
     }
 
     internal static T Read<T>(byte[] bytes)
@@ -82,7 +125,7 @@ internal static class UpdateProtocol
             || plan.ParentPid <= 0
             || plan.ParentStartedAtUtc.Offset != TimeSpan.Zero
             || plan.ParentStartedAtUtc.ToUnixTimeMilliseconds() <= 0
-            || !NumericVersion(plan.Version)
+            || !ReleaseVersion(plan.Version)
             || !Hash(plan.InstallerSha256)
         )
             throw new InvalidDataException("Invalid update protocol or identity.");
@@ -91,7 +134,7 @@ internal static class UpdateProtocol
         if (plan.Fallback is { } fallback)
         {
             if (
-                !NumericVersion(fallback.Version)
+                !ReleaseVersion(fallback.Version)
                 || !Hash(fallback.InstallerSha256)
                 || SameVersion(fallback.Version, plan.Version)
             )

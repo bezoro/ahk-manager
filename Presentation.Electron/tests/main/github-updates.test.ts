@@ -441,13 +441,18 @@ test('HTTP failures and thrown transport errors never reveal tokens, URLs or res
 });
 
 test('history pagination is fixed to three bounded pages and rejects oversized metadata', async () => {
-  const { client, calls } = clientFor(() =>
-    json(Array.from({ length: 100 }, () => ({ draft: true }))),
+  const { client, calls } = clientFor((url) =>
+    url.endsWith('/releases/latest')
+      ? new Response(null, { status: 404 })
+      : json(Array.from({ length: 100 }, () => ({ draft: true }))),
   );
   assert.deepEqual(await client.releases(null), []);
   assert.deepEqual(
     calls.map((call) => call.url),
-    [1, 2, 3].map((page) => `${API}/releases?per_page=100&page=${page}`),
+    [
+      ...[1, 2, 3].map((page) => `${API}/releases?per_page=100&page=${page}`),
+      `${API}/releases/latest`,
+    ],
   );
   for (const response of [
     () => json(Array.from({ length: 101 }, () => ({ draft: true }))),
@@ -456,4 +461,140 @@ test('history pagination is fixed to three bounded pages and rejects oversized m
     const { client: invalid } = clientFor(response);
     await assert.rejects(invalid.releases(null), /inválidas/);
   }
+});
+
+test('test channel includes canonical test prereleases and stable history while stable excludes every preview', async () => {
+  const stable = fixture('1.2.16', 16),
+    preview = fixture('1.3.0-test.18.1.2', 18),
+    later = fixture('1.3.0-test.19.1.2', 19);
+  preview.release.prerelease = true;
+  later.release.prerelease = true;
+  const manifests = new Map(
+    [stable, preview, later].map((item) => [assetUrl(item.release.assets[0]!.id), item.manifest]),
+  );
+  const { client } = clientFor((url) =>
+    url === LIST
+      ? json([
+          stable.release,
+          preview.release,
+          later.release,
+          { ...fixture('1.3.0-beta.1', 20).release, prerelease: true },
+          { ...fixture('1.3.0-test.20.1.2', 21).release, prerelease: false },
+          { ...fixture('1.3.1', 22).release, prerelease: true },
+        ])
+      : json(manifests.get(url)),
+  );
+  assert.deepEqual(
+    (await client.releases(null)).map((item) => item.version),
+    ['1.2.16'],
+  );
+  assert.deepEqual(
+    (await client.releases(null, 'test')).map((item) => item.version),
+    ['1.3.0-test.19.1.2', '1.3.0-test.18.1.2', '1.2.16'],
+  );
+  assert.equal((await client.resolve('github:18', null)).version, '1.3.0-test.18.1.2');
+  assert.deepEqual(
+    (await client.releases(null, 'stable')).map((item) => item.version),
+    ['1.2.16'],
+  );
+  await assert.rejects(client.resolve('github:18', null), /histórico consultado/);
+});
+
+test('test manifest must pin the exact commit and cannot name main or mismatch its test tag', async () => {
+  for (const mutation of ['main', 'version', 'commit']) {
+    const { release, manifest } = fixture('1.3.0-test.18.1.2');
+    release.prerelease = true;
+    if (mutation === 'main') release.target_commitish = 'main';
+    if (mutation === 'version') manifest.version = '1.3.0-test.19.1.2';
+    if (mutation === 'commit') manifest.commit = 'c'.repeat(40);
+    const { client } = clientFor((url) => (url === LIST ? json([release]) : json(manifest)));
+    await assert.rejects(client.releases(null, 'test'), /inválidas/);
+  }
+});
+
+test('historical preview metadata requires an exact commit before it can become a cached installation choice', async () => {
+  for (const target of ['main', 'feature/test', 'b'.repeat(39), 'B'.repeat(40), COMMIT + '\n']) {
+    const latest = fixture('1.3.0-test.19.1.2', 19),
+      previous = fixture('1.3.0-test.18.1.2', 18);
+    latest.release.prerelease = true;
+    previous.release.prerelease = true;
+    previous.release.target_commitish = target;
+    const { client, calls } = clientFor((url) =>
+      url === LIST ? json([latest.release, previous.release]) : json(latest.manifest),
+    );
+    await assert.rejects(client.releases(null, 'test'), /inválidas/);
+    assert.equal(
+      calls.length,
+      1,
+      'Unpinned historical metadata must fail before manifest loading.',
+    );
+    await assert.rejects(client.resolve('github:18', null), /histórico consultado/);
+  }
+});
+
+test('a response from the former channel cannot repopulate the catalog after a switch', async () => {
+  const stable = fixture('1.2.16', 16),
+    preview = fixture('1.3.0-test.18.1.2', 18);
+  preview.release.prerelease = true;
+  let finish!: (response: Response) => void;
+  const { client, calls } = clientFor((url) =>
+    url === LIST && calls.length === 1
+      ? new Promise<Response>((resolve) => {
+          finish = resolve;
+        })
+      : url === LIST
+        ? json([stable.release, preview.release])
+        : json(stable.manifest),
+  );
+  const older = client.releases(null, 'test');
+  const rejected = assert.rejects(older, /mudou durante a consulta/);
+  await client.releases(null, 'stable');
+  finish(json([preview.release]));
+  await rejected;
+  await assert.rejects(client.resolve('github:18', null), /histórico consultado/);
+  assert.equal((await client.resolve('github:16', null)).version, '1.2.16');
+});
+
+test('the latest stable stays available when three hundred previews crowd the bounded history', async () => {
+  const stable = fixture('1.2.16', 16);
+  const previews = Array.from({ length: 300 }, (_, index) => ({
+    ...fixture(`1.3.0-test.${index + 1}.1.2`, index + 100).release,
+    prerelease: true,
+  }));
+  const { client, calls } = clientFor((url) => {
+    if (url === `${API}/releases/latest`) return json(stable.release);
+    const page = /[?&]page=(\d+)/.exec(url)?.[1];
+    if (page) return json(previews.slice((Number(page) - 1) * 100, Number(page) * 100));
+    return json(stable.manifest);
+  });
+  const result = await client.releases(null, 'stable');
+  assert.deepEqual(
+    result.map((item) => item.version),
+    ['1.2.16'],
+  );
+  assert.deepEqual(
+    calls.map((call) => call.url),
+    [
+      ...[1, 2, 3].map((page) => `${API}/releases?per_page=100&page=${page}`),
+      `${API}/releases/latest`,
+      assetUrl(160),
+    ],
+  );
+});
+
+test('a truncated history preserves the highest latest stable even when lower stable releases are recent', async () => {
+  const highest = fixture('1.3.0', 30),
+    lower = fixture('1.2.17', 17);
+  const rows = Array.from({ length: 300 }, () => ({ draft: true }));
+  rows[0] = lower.release;
+  const { client } = clientFor((url) => {
+    if (url === `${API}/releases/latest`) return json(highest.release);
+    const page = /[?&]page=(\d+)/.exec(url)?.[1];
+    if (page) return json(rows.slice((Number(page) - 1) * 100, Number(page) * 100));
+    return json(highest.manifest);
+  });
+  assert.deepEqual(
+    (await client.releases(null, 'stable')).map((item) => item.version),
+    ['1.3.0', '1.2.17'],
+  );
 });

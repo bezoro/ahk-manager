@@ -4,6 +4,7 @@ const finiteProgress = (value: unknown): boolean =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
 export const updateState = shape({
   currentVersion: text(64),
+  channel: oneOf('stable', 'test'),
   phase: oneOf('idle', 'checking', 'downloading', 'installing', 'error'),
   availableVersion: nullable(text(64)),
   lastCheckedAt: nullable(text(64)),

@@ -63,7 +63,11 @@ npm.cmd run test:release
 npm.cmd run release:identity
 ```
 
-`release:identity` faz somente leitura do Git e mostra a versão prevista. `node scripts/compute-release.cjs --json` produz os mesmos dados em JSON para ferramentas. O script de build local também usa esse cálculo; `package.json.version` não determina a versão oficial. O job de publicação roda apenas na `main`, após a aprovação de toda a CI Windows. Consulte [UPDATES.md](UPDATES.md) para reexecuções, imutabilidade e assinatura.
+`release:identity` faz somente leitura do Git e mostra a versão prevista. `node scripts/compute-release.cjs --json` produz os mesmos dados em JSON para ferramentas. O script de build local também usa esse cálculo; `package.json.version` não determina a versão oficial.
+
+A publicação estável roda apenas na `main`, após a aprovação de toda a CI Windows. Pull requests abertos do próprio repositório também geram prévias no formato `X.Y.Z-test.<execução>.<tentativa>.<PR>`, vinculadas ao commit exato testado. O publicador executa o código de confiança da `main`, recusa resultados de forks e commits substituídos e preserva tags e assets anteriores. O build do PR não recebe credenciais de publicação ou assinatura. A base da prévia considera a maior tag estável disponível, mesmo quando ela ainda não é ancestral da branch.
+
+Para testar pelo aplicativo, selecione **Atualizações > Testes** e instale a prévia desejada. Quem ainda usa uma versão sem esse seletor precisa receber primeiro a atualização estável que o adiciona, pelo botão de atualização existente. Consulte [UPDATES.md](UPDATES.md) para retorno ao estável, reexecuções, imutabilidade e assinatura.
 
 ## Backend e Core
 

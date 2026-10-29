@@ -1428,6 +1428,33 @@ time {
 .updates-summary-actions button {
   white-space: normal;
 }
+.update-channel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.update-channel-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.update-channel-field label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.update-channel-field .fui-Select {
+  max-width: 100%;
+}
+.update-channel > .muted {
+  max-width: 76ch;
+}
+.update-release-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
 .update-install-hint {
   max-width: 76ch;
 }

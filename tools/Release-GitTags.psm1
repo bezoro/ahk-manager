@@ -1,10 +1,11 @@
 #requires -Version 7.0
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
 
 function Test-ReleaseTagArguments {
     param([string]$Repository, [string]$TagName)
-    if ($Repository -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$' -or $TagName -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-        throw 'A canonical GitHub repository and stable SemVer tag are required.'
+    if ($Repository -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$' -or -not $TagName.StartsWith('v') -or -not (Test-ReleaseVersion $TagName.Substring(1))) {
+        throw 'A canonical GitHub repository and release SemVer tag are required.'
     }
 }
 

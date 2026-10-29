@@ -28,6 +28,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -51,7 +52,15 @@ jobs:
       - name: Calculate version and plain text release notes
         id: identity
         working-directory: Presentation.Electron
-        run: npm run release:identity
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            node scripts/compute-release.cjs --sha "$SOURCE_COMMIT" --test-pr "$PR_NUMBER" --test-run "$GITHUB_RUN_NUMBER" --test-attempt "$GITHUB_RUN_ATTEMPT"
+          else
+            node scripts/compute-release.cjs --sha "$SOURCE_COMMIT"
+          fi
 
   windows-checks:
     name: Build and isolated tests (Windows x64)
@@ -72,6 +81,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -99,10 +109,11 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.release-identity.outputs.version }}
           RELEASE_NOTES_BASE64: ${{ needs.release-identity.outputs.notes-base64 }}
+          RELEASE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           "AHK_RELEASE_VERSION=$env:RELEASE_VERSION" >> $env:GITHUB_ENV
           "AHK_RELEASE_NOTES_BASE64=$env:RELEASE_NOTES_BASE64" >> $env:GITHUB_ENV
-          "AHK_SOURCE_COMMIT=$env:GITHUB_SHA" >> $env:GITHUB_ENV
+          "AHK_SOURCE_COMMIT=$env:RELEASE_SOURCE_COMMIT" >> $env:GITHUB_ENV
           "version=$env:RELEASE_VERSION" >> $env:GITHUB_OUTPUT
 
       - name: Install locked frontend dependencies
@@ -194,6 +205,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ./tools/Test-ReleaseTooling.ps1 -OutputRoot "$env:CI_OUTPUT/release-tooling-tests"
+          ./tools/Test-TestReleaseTooling.ps1 -OutputRoot "$env:CI_OUTPUT/test-channel-tooling-tests"
 
       - name: Run Node tests with actual backend snapshot fixtures
         if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' && steps.backend-tests.outcome == 'success' }}
@@ -310,6 +322,7 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/update-installation/*.json
             ${{ runner.temp }}/ahk-manager-ci/update-installation/*.log
             ${{ runner.temp }}/ahk-manager-ci/release-tooling-tests/*.json
+            ${{ runner.temp }}/ahk-manager-ci/test-channel-tooling-tests/*.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -330,7 +343,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-installer
+          name: ${{ github.event_name == 'pull_request' && format('windows-installer-test-{0}', github.run_attempt) || 'windows-installer' }}
           path: |
             ${{ runner.temp }}/ahk-manager-ci/installer/*Setup-x64.exe
             ${{ runner.temp }}/ahk-manager-ci/installer/SHA256.txt

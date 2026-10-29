@@ -1,11 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import type { UpdateRelease, UpdateState } from '../../shared/updates.js';
-import { compareVersions, validUpdateVersion, type RemoteUpdateRelease } from './github-updates.js';
+import type { UpdateChannel, UpdateRelease, UpdateState } from '../../shared/updates.js';
+import {
+  isTestUpdateVersion,
+  validUpdateChannel,
+  versionAllowedInChannel,
+} from '../../shared/update-versions.js';
+import { compareVersions, type RemoteUpdateRelease } from './github-updates.js';
 import type { CachedInstaller } from './update-store.js';
 
 export interface UpdateStorePort {
   readToken(): Promise<string | null>;
   saveToken(token: string | null): Promise<void>;
+  readChannel(): Promise<UpdateChannel>;
+  saveChannel(channel: UpdateChannel): Promise<void>;
   cached(): Promise<CachedInstaller[]>;
   verify(installer: CachedInstaller): Promise<void>;
   cache(version: string, source: string, sha256: string, bytes: number): Promise<CachedInstaller>;
@@ -13,7 +20,7 @@ export interface UpdateStorePort {
 export interface UpdateBoundary {
   version: string;
   store: UpdateStorePort;
-  releases(token: string | null): Promise<RemoteUpdateRelease[]>;
+  releases(token: string | null, channel: UpdateChannel): Promise<RemoteUpdateRelease[]>;
   resolve?(id: string, token: string | null): Promise<RemoteUpdateRelease>;
   download(
     release: RemoteUpdateRelease,
@@ -42,9 +49,12 @@ export class UpdateService {
   private token: string | null = null;
   private installing = false;
   private configuringCredential = false;
+  private configuringChannel = false;
+  private explicitTestOptIn = false;
   constructor(private readonly boundary: UpdateBoundary) {
     this.state = {
       currentVersion: boundary.version,
+      channel: 'stable',
       phase: 'idle',
       availableVersion: null,
       lastCheckedAt: null,
@@ -58,12 +68,16 @@ export class UpdateService {
     return structuredClone(this.state);
   }
   get busy(): boolean {
-    return this.installing || this.configuringCredential || active(this.state);
+    return (
+      this.installing || this.configuringCredential || this.configuringChannel || active(this.state)
+    );
   }
   private publish(patch: Partial<UpdateState> = {}): UpdateState {
     this.state = { ...this.state, ...patch };
     const versions = new Map<string, UpdateRelease>();
-    for (const cached of this.local.filter((item) => validUpdateVersion(item.version)))
+    for (const cached of this.local.filter((item) =>
+      versionAllowedInChannel(item.version, this.state.channel),
+    ))
       versions.set(cached.version, {
         id: `local:${cached.version}`,
         version: cached.version,
@@ -74,7 +88,9 @@ export class UpdateService {
         canInstall: cached.version !== this.boundary.version,
         cached: true,
       });
-    for (const release of this.remote)
+    for (const release of this.remote.filter((item) =>
+      versionAllowedInChannel(item.version, this.state.channel),
+    ))
       versions.set(release.version, {
         id: release.id,
         version: release.version,
@@ -104,18 +120,40 @@ export class UpdateService {
     this.state.releases = [...versions.values()]
       .sort((a, b) => compareVersions(b.version, a.version))
       .slice(0, 1000);
+    const enteringTests =
+      this.explicitTestOptIn &&
+      this.state.channel === 'test' &&
+      !isTestUpdateVersion(this.boundary.version);
+    const testChoices = enteringTests
+      ? this.state.releases.filter((item) => item.canInstall && isTestUpdateVersion(item.version))
+      : [];
+    // An explicit channel switch may select a preview older than the bootstrap.
+    // This exception does not survive restart, preventing a stable update from
+    // immediately offering the old preview again in a persisted test channel.
+    const selectedTest =
+      testChoices.find((item) => this.remote.some((remote) => remote.id === item.id)) ??
+      testChoices.find((item) => item.cached);
     this.state.availableVersion =
+      selectedTest?.version ??
       this.state.releases.find(
-        (item) => compareVersions(item.version, this.boundary.version) > 0 && item.canInstall,
-      )?.version ?? null;
+        (item) =>
+          item.canInstall &&
+          versionAllowedInChannel(item.version, this.state.channel) &&
+          ((this.state.channel === 'stable' && isTestUpdateVersion(this.boundary.version)) ||
+            compareVersions(item.version, this.boundary.version) > 0),
+      )?.version ??
+      null;
     this.boundary.changed(this.snapshot);
     return this.snapshot;
   }
   async initialize(): Promise<UpdateState> {
     try {
       this.token = await this.boundary.store.readToken();
+      const channel = await this.boundary.store.readChannel();
+      if (!validUpdateChannel(channel)) throw new Error('O canal de atualização salvo é inválido.');
       this.local = await this.boundary.store.cached();
       return this.publish({
+        channel,
         accessConfigured: this.token !== null,
         error: (await this.boundary.recovery?.()) ?? null,
       });
@@ -125,6 +163,29 @@ export class UpdateService {
         error: safeError(error, 'Não foi possível carregar o histórico de atualizações.'),
       });
     }
+  }
+  async setChannel(channel: UpdateChannel): Promise<UpdateState> {
+    if (this.busy) return this.snapshot;
+    if (!validUpdateChannel(channel))
+      return this.publish({ phase: 'error', error: 'O canal de atualização é inválido.' });
+    this.configuringChannel = true;
+    // Discard catalog identities before the first await. A former-channel choice
+    // must never remain selectable while its preference is being persisted.
+    this.remote = [];
+    this.publish({ phase: 'checking', error: null, lastCheckedAt: null });
+    try {
+      await this.boundary.store.saveChannel(channel);
+      this.explicitTestOptIn = channel === 'test' && this.state.channel === 'stable';
+      this.publish({ channel, phase: 'idle', error: null });
+    } catch {
+      return this.publish({
+        phase: 'error',
+        error: 'Não foi possível salvar o canal de atualização. O canal anterior foi mantido.',
+      });
+    } finally {
+      this.configuringChannel = false;
+    }
+    return this.check();
   }
   async setToken(value: string | null): Promise<UpdateState> {
     if (this.busy) return this.snapshot;
@@ -156,7 +217,7 @@ export class UpdateService {
     this.publish({ phase: 'checking', error: null, progress: null });
     try {
       this.local = await this.boundary.store.cached();
-      this.remote = await this.boundary.releases(this.token);
+      this.remote = await this.boundary.releases(this.token, this.state.channel);
       const recovery = (await this.boundary.recovery?.()) ?? null;
       return this.publish({
         phase: recovery ? 'error' : 'idle',

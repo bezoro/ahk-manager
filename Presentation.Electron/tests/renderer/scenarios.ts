@@ -2535,6 +2535,7 @@ export async function previewPreferences(): Promise<AssertionRecord[]> {
 
 function updateFixture(): UpdateState {
   return {
+    channel: 'stable',
     currentVersion: '1.2.1',
     phase: 'idle',
     availableVersion: '1.2.2',
@@ -2574,6 +2575,26 @@ function updateFixture(): UpdateState {
         canInstall: true,
         cached: true,
       },
+    ],
+  };
+}
+
+function testUpdateFixture(): UpdateState {
+  const updates = updateFixture();
+  const version = '1.3.0-test.18.1.2';
+  return {
+    ...updates,
+    channel: 'test',
+    availableVersion: version,
+    releases: [
+      {
+        ...updates.releases[0]!,
+        id: 'fixture-test-130',
+        version,
+        notes:
+          'Prévia da organização do aplicativo e dos canais de atualização. Disponível para avaliação antes do lançamento estável.',
+      },
+      ...updates.releases,
     ],
   };
 }
@@ -2618,6 +2639,136 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
       }
     }
   }
+  await check(
+    'changing channel dispatches once, disables conflicting actions and never installs automatically',
+    async () => {
+      await window.fixtureHarness.setState(host);
+      await window.fixtureHarness.setUpdates(updates);
+      await tick();
+      button(text.updates).click();
+      await tick();
+      const selector = document.getElementById('update-channel') as HTMLSelectElement;
+      assert(
+        selector.value === 'stable' && !selector.disabled,
+        'Stable channel is not the default',
+      );
+      assert(
+        selector.labels?.[0]?.textContent === text.updateChannel,
+        'Channel label is not associated',
+      );
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('setUpdateChannel', { pending: true });
+      outstanding.add('setUpdateChannel');
+      selector.value = 'test';
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+      await untilCall('setUpdateChannel');
+      await tick();
+      assert(
+        selector.disabled && button(text.updateInstall).disabled,
+        'Pending channel switch allowed another update action',
+      );
+      const calls = await window.fixtureHarness.calls();
+      assert(
+        calls.filter((call) => call.method === 'setUpdateChannel').length === 1,
+        'Channel change was repeated',
+      );
+      assert(
+        calls.find((call) => call.method === 'setUpdateChannel')?.args[0] === 'test',
+        'Channel request differs from selection',
+      );
+      await window.fixtureHarness.resolveResponse('setUpdateChannel', {
+        value: testUpdateFixture(),
+      });
+      outstanding.delete('setUpdateChannel');
+      await tick();
+      assert(
+        selector.value === 'test' && !selector.disabled,
+        'Selected test channel is not reflected',
+      );
+      assert(
+        document.querySelector('.update-release-badges')?.textContent?.includes(text.updatePreview),
+        'Test release lacks a visible preview label',
+      );
+      assert(
+        !(await window.fixtureHarness.calls()).some((call) => call.method === 'installUpdate'),
+        'Changing channel installed a version automatically',
+      );
+    },
+  );
+  await check(
+    'returning to stable offers an explicit rollback from an installed test version',
+    async () => {
+      const preview = testUpdateFixture();
+      preview.currentVersion = preview.availableVersion!;
+      preview.availableVersion = null;
+      preview.releases = preview.releases.map((release) => ({
+        ...release,
+        installed: release.version === preview.currentVersion,
+        canInstall: release.version !== preview.currentVersion,
+      }));
+      await window.fixtureHarness.setUpdates(preview);
+      await tick();
+      button(text.updates).click();
+      await tick();
+      const stable = { ...updates, currentVersion: preview.currentVersion };
+      await window.fixtureHarness.setResponse('setUpdateChannel', { value: stable });
+      await window.fixtureHarness.clearCalls();
+      const selector = document.getElementById('update-channel') as HTMLSelectElement;
+      selector.value = 'stable';
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+      await untilCall('setUpdateChannel');
+      await tick();
+      assert(
+        document.querySelector('.updates-availability')?.textContent ===
+          `${text.updateStableAvailable} ${stable.availableVersion}`,
+        'Stable version is described as a newer preview',
+      );
+      const rollback = button(
+        text.updateRollback,
+        document.querySelector('.updates-summary-actions')!,
+      );
+      assert(!rollback.disabled && selector.value === 'stable', 'Stable rollback is not available');
+      assert(
+        !(await window.fixtureHarness.calls()).some((call) => call.method === 'installUpdate'),
+        'Returning to stable installed without an explicit action',
+      );
+      await window.fixtureHarness.setResponse('installUpdate', { value: stable });
+      rollback.click();
+      await untilCall('installUpdate');
+      assert(
+        (await window.fixtureHarness.calls()).find((call) => call.method === 'installUpdate')
+          ?.args[0] === 'fixture-new-122',
+        'Stable rollback selected the wrong release',
+      );
+    },
+  );
+  await check(
+    'failed channel persistence retains the previous selection and shows an error',
+    async () => {
+      await window.fixtureHarness.setUpdates(updates);
+      await tick();
+      button(text.updates).click();
+      await tick();
+      await window.fixtureHarness.setResponse('setUpdateChannel', {
+        error: 'Fixture persistence failure',
+      });
+      const selector = document.getElementById('update-channel') as HTMLSelectElement;
+      selector.value = 'test';
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+      await until(
+        () =>
+          selector.value === 'stable' &&
+          !selector.disabled &&
+          document.querySelector('[role="alert"]')?.textContent === text.updateChannelFailed,
+        'Failed channel change did not restore the previous choice and announce the error',
+      );
+      assert(
+        document.querySelector('[role="alert"]')?.textContent === text.updateChannelFailed,
+        'Channel failure is not announced',
+      );
+    },
+  );
   await check(
     'update navigation announces availability and check keeps escaped permanent history on error',
     async () => {
@@ -2840,13 +2991,17 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
   return results;
 }
 
-export async function previewUpdates(recovery = false): Promise<AssertionRecord[]> {
+export async function previewUpdates(
+  recovery = false,
+  testChannel = false,
+): Promise<AssertionRecord[]> {
   const modal = document.querySelector('[role="dialog"]');
   if (modal) button(text.cancel, modal).click();
   await window.fixtureHarness.resetResponses();
-  const updates = updateFixture();
-  updates.releases[2] = {
-    ...updates.releases[2]!,
+  const updates = testChannel ? testUpdateFixture() : updateFixture();
+  const cachedIndex = updates.releases.findIndex((release) => release.id === 'fixture-cached-120');
+  updates.releases[cachedIndex] = {
+    ...updates.releases[cachedIndex]!,
     notes:
       'Correções de estabilidade e recuperação de arquivos. Esta versão foi preservada neste computador.',
   };
@@ -2894,7 +3049,10 @@ export async function previewUpdates(recovery = false): Promise<AssertionRecord[
   return [
     {
       name: 'updates preview shows new version and cached rollback history',
-      passed: !!document.querySelector('.update-release-list'),
+      passed:
+        !!document.querySelector('.update-release-list') &&
+        (document.getElementById('update-channel') as HTMLSelectElement)?.value ===
+          (testChannel ? 'test' : 'stable'),
     },
   ];
 }

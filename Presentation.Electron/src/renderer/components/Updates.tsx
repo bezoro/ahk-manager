@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { Badge, Button, Input, ProgressBar, Spinner } from '@fluentui/react-components';
+import { Badge, Button, Input, ProgressBar, Select, Spinner } from '@fluentui/react-components';
 import { ArrowClockwiseRegular, ArrowDownloadRegular, HistoryRegular } from '@fluentui/react-icons';
 import {
   isEarlierUpdateVersion,
+  type UpdateChannel,
   type UpdateRelease,
   type UpdateState,
 } from '../../shared/updates.js';
@@ -38,7 +39,9 @@ export function Updates({
 }: Props): React.ReactElement {
   const [token, setToken] = React.useState('');
   const [pending, setPending] = React.useState(false);
-  const [operation, setOperation] = React.useState<'check' | 'install' | 'token' | null>(null);
+  const [operation, setOperation] = React.useState<
+    'check' | 'install' | 'token' | 'channel' | null
+  >(null);
   const [feedback, setFeedback] = React.useState<string | null>(null);
   const inFlight = React.useRef(false);
   const active = pending || ['checking', 'downloading', 'installing'].includes(state.phase);
@@ -49,15 +52,24 @@ export function Updates({
       )
     : undefined;
   const installHint = installBlockedReason ?? text.updateInstallHint;
+  const returningToStable =
+    available &&
+    state.channel === 'stable' &&
+    isEarlierUpdateVersion(available.version, state.currentVersion);
+  const availablePreview = available?.version.includes('-test.') ?? false;
   const feedbackFailed =
     !!state.error ||
-    [text.updateAccessFailed, text.updateInstallFailed, text.updateCheckFailed].some(
-      (message) => message === feedback,
-    );
+    [
+      text.updateAccessFailed,
+      text.updateInstallFailed,
+      text.updateCheckFailed,
+      text.updateChannelFailed,
+    ].some((message) => message === feedback);
   async function request(
-    action: 'check' | 'install' | 'token',
+    action: 'check' | 'install' | 'token' | 'channel',
     release?: UpdateRelease,
     credential?: string | null,
+    channel?: UpdateChannel,
   ): Promise<void> {
     if (
       inFlight.current ||
@@ -76,7 +88,9 @@ export function Updates({
           ? await window.ahkManager.checkUpdates()
           : action === 'install'
             ? await window.ahkManager.installUpdate(release!.id)
-            : await window.ahkManager.setUpdateToken(credential ?? null);
+            : action === 'channel'
+              ? await window.ahkManager.setUpdateChannel(channel!)
+              : await window.ahkManager.setUpdateToken(credential ?? null);
       onState(result);
       if (action === 'token' && !result.error)
         setFeedback(credential ? text.updateAccessSaved : text.updateAccessRemoved);
@@ -86,7 +100,9 @@ export function Updates({
           ? text.updateAccessFailed
           : action === 'install'
             ? text.updateInstallFailed
-            : text.updateCheckFailed,
+            : action === 'channel'
+              ? text.updateChannelFailed
+              : text.updateCheckFailed,
       );
     } finally {
       inFlight.current = false;
@@ -115,7 +131,7 @@ export function Updates({
           <h2>{state.currentVersion || text.updateLoadingVersion}</h2>
           <p className="updates-availability">
             {state.availableVersion
-              ? `${text.updateAvailableVersion} ${state.availableVersion}`
+              ? `${returningToStable ? text.updateStableAvailable : availablePreview ? text.updateTestAvailable : text.updateAvailableVersion} ${state.availableVersion}`
               : state.error
                 ? text.updateLatestUnknown
                 : state.lastCheckedAt
@@ -129,7 +145,16 @@ export function Updates({
           </p>
         </div>
         <div className="updates-summary-actions">
-          {available && install(available, text.updateInstall, true)}
+          {available &&
+            install(
+              available,
+              returningToStable
+                ? text.updateRollback
+                : availablePreview
+                  ? text.updateInstallTest
+                  : text.updateInstall,
+              true,
+            )}
           <Button
             icon={<ArrowClockwiseRegular />}
             disabled={active}
@@ -139,6 +164,29 @@ export function Updates({
           </Button>
         </div>
       </div>
+      <section className="update-channel" aria-labelledby="update-channel-label">
+        <div className="update-channel-field">
+          <label id="update-channel-label" htmlFor="update-channel">
+            {text.updateChannel}
+          </label>
+          <Select
+            id="update-channel"
+            value={state.channel}
+            disabled={active}
+            aria-describedby="update-channel-hint"
+            onChange={(_, data) => {
+              if (data.value === 'stable' || data.value === 'test')
+                void request('channel', undefined, undefined, data.value);
+            }}
+          >
+            <option value="stable">{text.updateChannelStable}</option>
+            <option value="test">{text.updateChannelTest}</option>
+          </Select>
+        </div>
+        <p className="muted" id="update-channel-hint">
+          {state.channel === 'test' ? text.updateChannelTestHint : text.updateChannelStableHint}
+        </p>
+      </section>
       {recovery && (
         <p className="update-recovery-notice" role="status">
           {text.updateRecoveryHint}
@@ -162,7 +210,9 @@ export function Updates({
                 ? text.updateInstalling
                 : operation === 'token'
                   ? text.updateSavingAccess
-                  : text.updateChecking}
+                  : operation === 'channel'
+                    ? text.updateSavingChannel
+                    : text.updateChecking}
           </span>
           {state.phase === 'downloading' && (
             <ProgressBar
@@ -195,15 +245,22 @@ export function Updates({
                       <h3>{release.version}</h3>
                       <p className="muted">{date(release.publishedAt)}</p>
                     </div>
-                    {release.installed ? (
-                      <Badge appearance="tint" color="success">
-                        {text.updateInstalled}
-                      </Badge>
-                    ) : release.version === state.availableVersion ? (
-                      <Badge appearance="tint" color="brand">
-                        {text.updateNew}
-                      </Badge>
-                    ) : null}
+                    <div className="update-release-badges">
+                      {release.version.includes('-test.') && (
+                        <Badge appearance="outline" color="warning">
+                          {text.updatePreview}
+                        </Badge>
+                      )}
+                      {release.installed ? (
+                        <Badge appearance="tint" color="success">
+                          {text.updateInstalled}
+                        </Badge>
+                      ) : release.version === state.availableVersion ? (
+                        <Badge appearance="tint" color="brand">
+                          {returningToStable ? text.updateStable : text.updateNew}
+                        </Badge>
+                      ) : null}
+                    </div>
                   </div>
                   <p className="update-release-notes selectable">
                     {release.notes || text.updateNoNotes}

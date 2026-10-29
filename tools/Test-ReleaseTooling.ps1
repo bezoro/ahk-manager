@@ -52,7 +52,7 @@ function Invoke-RestMethod {
     if ($Method -eq 'Post' -and $Uri -eq 'https://api.github.com/repos/bezoro/ahk-manager/releases') {
         $request = $Body | ConvertFrom-Json
         if (-not $request.draft -or $request.make_latest -ne 'false') { throw 'Release must initially remain a draft.' }
-        $fixture.Release = [pscustomobject]@{ id = 41; tag_name = 'v1.2.99'; target_commitish = ('a' * 40); draft = $true; assets = @(); html_url = 'https://github.com/bezoro/ahk-manager/releases/tag/v1.2.99' }
+        $fixture.Release = [pscustomobject]@{ id = 41; tag_name = 'v1.2.99'; target_commitish = ('a' * 40); draft = $true; prerelease = $false; assets = @(); html_url = 'https://github.com/bezoro/ahk-manager/releases/tag/v1.2.99' }
         return $fixture.Release
     }
     if ($Method -eq 'Post' -and $Uri -match '^https://uploads.github.com/') {
@@ -109,7 +109,7 @@ try {
     Assert-Check ($refused -and $global:AhkReleaseToolingFixture.Calls.Count -eq 0) 'pull requests cannot publish even with a supplied token'
 
     $fixture = $global:AhkReleaseToolingFixture
-    $fixture.Release = [pscustomobject]@{ tag_name = 'v1.2.99'; target_commitish = $commit; draft = $false; assets = @([pscustomobject]@{ name = [IO.Path]::GetFileName($installer); state = 'uploaded' }, [pscustomobject]@{ name = 'ahk-manager-release.json'; state = 'uploaded' }) }
+    $fixture.Release = [pscustomobject]@{ tag_name = 'v1.2.99'; target_commitish = $commit; draft = $false; prerelease = $false; assets = @([pscustomobject]@{ name = [IO.Path]::GetFileName($installer); state = 'uploaded' }, [pscustomobject]@{ name = 'ahk-manager-release.json'; state = 'uploaded' }) }
     $completeRelease = $fixture.Release | ConvertTo-Json -Depth 5
     $fixture.Tag = New-FixtureGitTag $commit
     $before = $fixture.Calls.Count
@@ -232,6 +232,14 @@ try {
     $before = $global:AhkReleaseToolingFixture.Calls.Count
     & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit
     Assert-Check ($fixture.Calls.Count -eq $before + 3 -and @($fixture.Calls.GetRange($before, 3) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'identical published release verifies its real Git ref without mutation'
+    $fixture.Release.prerelease = $true
+    $refused = $false
+    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
+    Assert-Check $refused 'a prerelease cannot be reused or promoted as the stable release'
+    $refused = $false
+    try { & $publicationStatus -Repository $env:GITHUB_REPOSITORY -Version '1.2.99' -Commit $commit } catch { $refused = $true }
+    Assert-Check $refused 'stable publication status refuses a mismatched prerelease channel'
+    $fixture.Release.prerelease = $false
     $global:AhkReleaseToolingFixture.Release.assets[0].digest = 'sha256:' + ('0' * 64)
     $before = $global:AhkReleaseToolingFixture.Calls.Count
     $refused = $false

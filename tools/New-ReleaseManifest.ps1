@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$InstallerPath,
     [Parameter(Mandatory = $true)][string]$OutputPath,
-    [Parameter(Mandatory = $true)][ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')][string]$Version,
+    [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$Commit,
     [ValidateLength(0, 4000)][string]$Notes = '',
     [DateTimeOffset]$PublishedAt = [DateTimeOffset]::UtcNow
@@ -10,6 +10,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Release-Limits.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
+if (-not (Test-ReleaseVersion $Version)) { throw 'Invalid release version.' }
 if ($Notes.Contains([char]0)) { throw 'Release notes cannot contain NUL.' }
 if (-not [IO.Path]::IsPathFullyQualified($InstallerPath) -or -not [IO.Path]::IsPathFullyQualified($OutputPath)) { throw 'Release paths must be absolute.' }
 if (Test-Path -LiteralPath $OutputPath) { throw 'Release manifest must be written to a fresh path.' }

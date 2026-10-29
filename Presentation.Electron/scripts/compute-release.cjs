@@ -22,8 +22,8 @@ function resolveCommit(cwd, revision) {
   return git(cwd, ['rev-parse', '--verify', `${revision}^{commit}`]);
 }
 
-function latestAncestorTag(cwd, sha) {
-  const tags = git(cwd, ['tag', '--merged', sha])
+function latestStableTag(cwd, sha) {
+  const tags = git(cwd, sha ? ['tag', '--merged', sha] : ['tag'])
     .split('\n')
     .filter(
       (tag) =>
@@ -37,6 +37,23 @@ function latestAncestorTag(cwd, sha) {
     version: tags[0].slice(1),
     commit: git(cwd, ['rev-list', '-n', '1', tags[0]]),
   };
+}
+
+const latestAncestorTag = (cwd, sha) => latestStableTag(cwd, sha);
+
+function testIdentifiers(test) {
+  if (!test) return null;
+  const parts = [test.run, test.attempt, test.pr].map(String);
+  if (
+    !parts.every(
+      (part) =>
+        /^[1-9]\d*$/.test(part) && String(Number(part)) === part && Number(part) <= 2147483647,
+    )
+  )
+    throw new Error(
+      'Test release identifiers must be positive integers no greater than 2147483647.',
+    );
+  return parts.join('.');
 }
 
 function commitsSince(cwd, from, to) {
@@ -60,7 +77,8 @@ function plainNotes(markdown) {
   return clipped.trimEnd() + suffix;
 }
 
-async function computeRelease({ cwd = repositoryRoot, sha = 'HEAD' } = {}) {
+async function computeRelease({ cwd = repositoryRoot, sha = 'HEAD', test } = {}) {
+  const preview = testIdentifiers(test);
   const commit = resolveCommit(cwd, sha);
   const base = latestAncestorTag(cwd, commit);
   const commits = commitsSince(cwd, base.tag, commit);
@@ -75,10 +93,22 @@ async function computeRelease({ cwd = repositoryRoot, sha = 'HEAD' } = {}) {
   const parser = new CommitParser(preset.parser);
   const parsed = commits.map(({ hash, message }) => ({ ...parser.parse(message), hash }));
   const bump = preset.whatBump(parsed);
-  const alreadyTagged = base.commit === commit;
+  const alreadyTagged = !preview && base.commit === commit;
   const releaseType = alreadyTagged ? null : ['major', 'minor', 'patch'][bump?.level ?? 2];
-  const version = alreadyTagged ? base.version : semver.inc(base.version, releaseType);
+  // A PR can lag behind main. Its preview must still sort after the currently
+  // published stable baseline without claiming that stable tag for itself.
+  const versionBase = preview ? latestStableTag(cwd).version : base.version;
+  const stableVersion = alreadyTagged ? base.version : semver.inc(versionBase, releaseType);
+  const version = preview ? `${stableVersion}-test.${preview}` : stableVersion;
   if (!version) throw new Error('The next stable SemVer version could not be calculated.');
+  if (
+    !semver.valid(version) ||
+    version.length > 64 ||
+    [semver.major(version), semver.minor(version), semver.patch(version)].some(
+      (part) => part > 2147483647,
+    )
+  )
+    throw new Error('The release version exceeds the supported Windows update identity.');
   const releaseTag = `v${version}`;
   if (
     git(cwd, ['tag', '--list', releaseTag]) &&
@@ -102,7 +132,7 @@ async function computeRelease({ cwd = repositoryRoot, sha = 'HEAD' } = {}) {
   );
   return {
     version,
-    baseVersion: base.version,
+    baseVersion: versionBase,
     baseTag: base.tag,
     commit,
     releaseType,
@@ -118,11 +148,17 @@ if (require.main === module) {
       json: { type: 'boolean', default: false },
       sha: { type: 'string' },
       repo: { type: 'string' },
+      'test-pr': { type: 'string' },
+      'test-run': { type: 'string' },
+      'test-attempt': { type: 'string' },
     },
   });
   computeRelease({
     cwd: values.repo ? path.resolve(values.repo) : repositoryRoot,
     sha: values.sha || process.env.GITHUB_SHA || 'HEAD',
+    test: ['test-pr', 'test-run', 'test-attempt'].some((key) => values[key] !== undefined)
+      ? { pr: values['test-pr'], run: values['test-run'], attempt: values['test-attempt'] }
+      : undefined,
   })
     .then((release) => {
       if (process.env.GITHUB_OUTPUT && !values.json) {

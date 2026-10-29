@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { load, JSON_SCHEMA } from 'js-yaml';
 import { verifySignature } from 'electron-updater/out/windowsExecutableCodeSignatureVerifier.js';
+import { isTestUpdateVersion } from '../../shared/update-versions.js';
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -64,6 +65,7 @@ export async function downloadRelease(
   updater.autoDownload = false;
   updater.autoInstallOnAppQuit = false;
   updater.allowDowngrade = true;
+  updater.allowPrerelease = isTestUpdateVersion(release.version);
   updater.disableDifferentialDownload = true;
   updater.disableWebInstaller = true;
   // Never persist a token, signed asset URL or HTTP error body through library logging.

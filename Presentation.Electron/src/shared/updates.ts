@@ -1,3 +1,10 @@
+import {
+  compareUpdateVersions,
+  parseUpdateVersion,
+  type UpdateChannel,
+} from './update-versions.js';
+export type { UpdateChannel } from './update-versions.js';
+
 export interface UpdateRelease {
   id: string;
   version: string;
@@ -11,6 +18,7 @@ export interface UpdateRelease {
 
 export interface UpdateState {
   currentVersion: string;
+  channel: UpdateChannel;
   phase: 'idle' | 'checking' | 'downloading' | 'installing' | 'error';
   availableVersion: string | null;
   lastCheckedAt: string | null;
@@ -22,6 +30,7 @@ export interface UpdateState {
 
 export const emptyUpdateState = (): UpdateState => ({
   currentVersion: '',
+  channel: 'stable',
   phase: 'idle',
   availableVersion: null,
   lastCheckedAt: null,
@@ -33,17 +42,9 @@ export const emptyUpdateState = (): UpdateState => ({
 
 /** Presentation wording must distinguish installing a newer release from rollback. */
 export function isEarlierUpdateVersion(version: string, installedVersion: string): boolean {
-  if (
-    ![version, installedVersion].every((value) =>
-      /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value),
-    )
-  )
-    return false;
-  const target = version.split('.').map(Number),
-    installed = installedVersion.split('.').map(Number);
-  if (![...target, ...installed].every((value) => Number.isSafeInteger(value))) return false;
-  for (let index = 0; index < 3; index++) {
-    if (target[index] !== installed[index]) return target[index]! < installed[index]!;
-  }
-  return false;
+  return (
+    parseUpdateVersion(version) !== null &&
+    parseUpdateVersion(installedVersion) !== null &&
+    compareUpdateVersions(version, installedVersion) < 0
+  );
 }

@@ -43,7 +43,7 @@ internal static class InstallationRegistration
             || installation.GetValue("UpdateProtocol") is not int protocol
             || protocol != 1
             || uninstall?.GetValue("DisplayVersion") is not string version
-            || !UpdateProtocol.NumericVersion(version)
+            || !UpdateProtocol.InstalledVersion(version)
             || expectedVersion is not null && !UpdateProtocol.SameVersion(version, expectedVersion)
         )
             throw new InvalidDataException(
