@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, safeStorage, screen, session, shell, systemPreferences, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, net, screen, session, shell, systemPreferences, Tray } from 'electron';
 import { scriptFileStamp } from './script-files.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -9,7 +9,7 @@ import { ManagerController } from './controller.js';
 import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupWithContinuation } from './lifecycle.js';
 import { AdministrationPreflight, ElevationCoordinator } from './elevation.js';
 import { createDiagnostics, type PageDiagnostics } from './diagnostics.js';
-import {hostText as t} from '../shared/host-pt-BR.js';
+import {hostText as t} from '../shared/host-en-US.js';
 import { APP_URL, assetFromUrl, CSP, DocumentGuard, packagedBackend, type DocumentLease } from './security.js';
 import { capturePlacement, restorePlacement } from './placement.js';
 import type { AdministrationUiGuard, ElevationStatus, ManagerSnapshot, OperationResult, StartupContinuationOffer, ThemeState, WindowPlacement } from '../shared/contracts.js';
@@ -17,10 +17,13 @@ import { activityQuery, array, assertActivityQuery, assertMetadata, assertOperat
 import { UpdateService } from './update-service.js';
 import { UpdateStore, type CachedInstaller } from './update-store.js';
 import { GitHubUpdateClient, compareVersions } from './github-updates.js';
+import { createElectronUpdateFetch } from './electron-update-fetch.js';
+import { configureUpdateNetwork } from './update-network-policy.js';
 import { downloadRelease, verifyCachedInstallerSignature } from './electron-update-download.js';
 import { prepareUpdate, updateRecoveryStatus, type PreparedUpdate } from './update-handoff.js';
 import { shutdownAndCommitUpdate } from './update-shutdown.js';
 
+app.commandLine.appendSwitch('lang', 'en-US');
 protocol.registerSchemesAsPrivileged([{scheme:'ahk-manager',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.setName(t.title);
 app.setAppUserModelId('Bezoro.AhkManager.Electron');
@@ -139,28 +142,17 @@ function lockSession():void {
 async function configureUpdates():Promise<void> {
   // A dedicated Electron session retains OS proxy support and cannot grant renderer access.
   const network=session.fromPartition('electron-updater',{cache:false});
-  network.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
-  network.setPermissionCheckHandler(()=>false);
-  network.webRequest.onBeforeRequest((details,callback)=>{
-    let allowed=false;
-    try { const url=new URL(details.url);allowed=url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&(url.hostname==='api.github.com'&&url.pathname.startsWith('/repos/bezoro/ahk-manager/releases')||['release-assets.githubusercontent.com','objects.githubusercontent.com'].includes(url.hostname)); } catch { /* Only the fixed update origin is permitted. */ }
-    callback({cancel:!allowed});
-  });
-  network.webRequest.onBeforeSendHeaders((details,callback)=>{
-    const headers={...details.requestHeaders};
-    if(new URL(details.url).hostname!=='api.github.com')for(const name of Object.keys(headers))if(['authorization','cookie','proxy-authorization'].includes(name.toLowerCase()))delete headers[name];
-    callback({requestHeaders:headers});
-  });
+  configureUpdateNetwork(network);
   const root=path.join(process.env.LOCALAPPDATA??path.join(app.getPath('home'),'AppData','Local'),'Bezoro','AhkManagerElectron','Updates');
-  updateStore=new UpdateStore(root,{available:()=>safeStorage.isEncryptionAvailable(),encrypt:value=>safeStorage.encryptString(value),decrypt:value=>safeStorage.decryptString(value)});
-  const client=new GitHubUpdateClient(network.fetch.bind(network) as typeof fetch);
+  updateStore=new UpdateStore(root);
+  const client=new GitHubUpdateClient(createElectronUpdateFetch(network,options=>net.request(options)));
   updates=new UpdateService({
-    version:app.getVersion(),store:updateStore,releases:(token,channel)=>client.releases(token,channel),resolve:(id,token)=>client.resolve(id,token),download:downloadRelease,
+    version:app.getVersion(),store:updateStore,releases:channel=>client.releases(channel),resolve:id=>client.resolve(id),download:downloadRelease,
     preflight:(operationId,phase)=>{
       const lease=documentLease;
       return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>!!lease&&!!guard?.current(lease)&&!!window?.isFocused()&&!window.isDestroyed()&&!quitting&&!updateApplying&&!updateShutdownInFlight&&!adoptionPending&&!administration?.active&&!stopExit.active&&!controller?.state.busy&&!controller?.state.administrationPending);
     },
-    confirm:release=>confirm(compareVersions(release.version,app.getVersion())<0?'Voltar para a versão '+release.version+'?':'Atualizar para a versão '+release.version+'?','O Manager será fechado e reaberto. Os scripts que já estão em execução continuam funcionando, e suas configurações serão preservadas.'),
+    confirm:release=>confirm(compareVersions(release.version,app.getVersion())<0?'Return to version '+release.version+'?':'Update to version '+release.version+'?','The manager will close and reopen. Running scripts will keep running, and your settings will be preserved.'),
     apply:applyUpdate,changed:state=>guard?.send('manager:updates',state),recovery:()=>updateRecoveryStatus(updateStore!),
   });
   await updates.initialize();
@@ -168,14 +160,14 @@ async function configureUpdates():Promise<void> {
   const interval=setInterval(()=>{if(!quitting&&!updateApplying)void updates?.check();},15*60*1000);interval.unref();
 }
 async function applyUpdate(operationId:string,target:CachedInstaller):Promise<void> {
-  if(!updateStore||!window||updateApplying||updateShutdownInFlight||quitting||adoptionPending||administration?.active||stopExit.active)throw new Error('Aguarde as operações do Manager antes de atualizar.');
+  if(!updateStore||!window||updateApplying||updateShutdownInFlight||quitting||adoptionPending||administration?.active||stopExit.active)throw new Error('Wait for manager operations to finish before updating.');
   updateApplying=true;controller?.setAdministrationPending(true);
   let prepared:PreparedUpdate|null=null;
   let shutdownStarted=false;
   try {
     await verifyCachedInstallerSignature(target.installerPath);
     const created=app.getAppMetrics().find(metric=>metric.pid===process.pid)?.creationTime;
-    if(!created||!Number.isFinite(created))throw new Error('Não foi possível confirmar a sessão do Manager para atualizar.');
+    if(!created||!Number.isFinite(created))throw new Error('The manager session could not be verified for this update.');
     prepared=await prepareUpdate(updateStore,operationId,target,path.dirname(app.getPath('exe')),new Date(created).toISOString());
     shutdownStarted=true;
     await shutdownAndCommitUpdate({
@@ -193,9 +185,9 @@ async function applyUpdate(operationId:string,target:CachedInstaller):Promise<vo
     try{await prepared?.cancel();}catch(cancelError){cancellationError=cancelError;}
     finally{
       updateApplying=false;controller?.setAdministrationPending(false);
-      if(shutdownStarted&&backend)controller?.setConnection('failed','A atualização foi cancelada sem confirmação do encerramento. Aguarde e reconecte o backend antes de continuar.');
+      if(shutdownStarted&&backend)controller?.setConnection('failed','The update was cancelled without confirmed shutdown. Wait and reconnect the backend before continuing.');
     }
-    if(cancellationError)throw new Error(safeError(error)+' Não foi possível registrar o cancelamento da atualização.',{cause:cancellationError});
+    if(cancellationError)throw new Error(safeError(error)+' The update cancellation could not be recorded.',{cause:cancellationError});
     throw error;
   }
 }
@@ -398,7 +390,7 @@ function registerIpc():void {
     ipcMain.handle(`manager:${name}`,async(event,envelope:unknown)=>{
       const {lease,body}=guard!.validate(event,envelope);requireValid(body,validate,`${name} request`);
       if(quitting&&name!=='getState'&&name!=='getTheme')throw new Error(t.closing);
-      if(updateApplying&&!['getState','getTheme','getUpdateState'].includes(name))throw new Error('A instalação da atualização está sendo preparada.');
+      if(updateApplying&&!['getState','getTheme','getUpdateState'].includes(name))throw new Error('The update installation is being prepared.');
       if(adoptionPending&&!['getState','getTheme','getActivity'].includes(name))throw new Error(t.administrationPending);
       if(controller!.state.administrationPending&&!['getState','getTheme','getActivity','requestAdministration'].includes(name))throw new Error(t.administrationPending);
       const value=await documentScope.run(()=>guard!.current(lease),()=>handler(body));
@@ -410,7 +402,6 @@ function registerIpc():void {
   bind('getUpdateState',none,()=>updates!.snapshot);
   bind('checkUpdates',none,()=>updates!.check());
   bind('installUpdate',shape({id:text(100)}),v=>updates!.install(v.id));
-  bind('setUpdateToken',shape({token:nullable(text(512))}),v=>updates!.setToken(v.token));
   bind('setUpdateChannel',shape({channel:oneOf('stable','test')}),v=>updates!.setChannel(v.channel));
   bind('requestAdministration',none,()=>requestAdministration());
   bind('refresh',none,()=>controller!.refresh());bind('addFiles',none,()=>controller!.add('scripts'));bind('addFolder',none,()=>controller!.add('folder'));
@@ -427,7 +418,7 @@ function registerIpc():void {
   bind('previewImport',none,()=>controller!.previewImport());bind('commitImport',shape({token:guid}),v=>controller!.commitImport(v.token));
   bind('migrateProfile',none,()=>controller!.migrateProfile());bind('transferStartup',none,()=>controller!.transferStartup());
   bind('restoreBackup',none,()=>controller!.restoreBackup());bind('recoverPending',none,()=>controller!.recoverPending());
-  bind('retryBackend',none,async()=>{if(updateShutdownInFlight)throw new Error('Aguarde a confirmação de encerramento do backend.');await startBackend();if(backend?.ready)await runLogin();});
+  bind('retryBackend',none,async()=>{if(updateShutdownInFlight)throw new Error('Wait for confirmed backend shutdown.');await startBackend();if(backend?.ready)await runLogin();});
   bind('copyText',shape({text:text(65536)}),v=>clipboard.writeText(v.text));
   ipcMain.on('manager:updateSelection',(event,envelope:unknown)=>{try{const {body}=guard!.validate(event,envelope);const selected=body===null?null:assertSelection(body);controller!.updateSelection(selected);diagnosticSelection=selected?.scriptId??null;diagnostics?.selectionCommitted(diagnosticSelection);}catch{/* Untrusted fire-and-forget messages cannot alter host authority. */}});
   ipcMain.on('manager:documentReady',(event,envelope:unknown)=>{try{const {lease,body}=guard!.validate(event,envelope);requireValid(body,none,'document ready');documentLease=lease;rendererReady=true;deliverPreferences();}catch{/* No authority for invalid readiness signals. */}});

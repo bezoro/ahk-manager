@@ -135,7 +135,7 @@ public sealed partial class ManagerService
             if (execution.Result.Succeeded) started++; else { failed++; details.Add(item.Name + ": " + LoginReason(execution.Result.Code)); }
             record = await SaveItem(record, i, execution.Result.Succeeded ? StartupContinuationItemState.KnownStarted : uncertain ? StartupContinuationItemState.Uncertain : StartupContinuationItemState.KnownFailed).ConfigureAwait(false);
         }
-        string detail = $"Continuação do início com Windows. Iniciados: {started}. Já em execução: {running}. Não iniciados ou não confirmados: {failed}.\n" + string.Join("\n", details.Take(24));
+        string detail = $"Windows startup continuation. Started: {started}. Already running: {running}. Not started or unconfirmed: {failed}.\n" + string.Join("\n", details.Take(24));
         var summary = new OperationResult(failed == 0 ? Outcome.Confirmed : Outcome.Partial, Detail: detail[..Math.Min(detail.Length, 16000)]);
         await Continuations.WriteAsync(record with { Phase = failed == 0 ? StartupContinuationPhase.Completed : StartupContinuationPhase.Partial, Result = summary }, record).ConfigureAwait(false);
         startupRecoveryPending = !(await Continuations.PendingAsync().ConfigureAwait(false)).IsEmpty;
@@ -166,7 +166,7 @@ public sealed partial class ManagerService
         if (record is not null)
         {
             if (record.Phase != StartupContinuationPhase.Prepared || record.TicketHash != StartupContinuationStore.Hash(ticket)) return ReasonCode.PendingOperation;
-            var invalidated = new OperationResult(Outcome.CancelledBeforeDispatch, ReasonCode.StaleSelection, "A oferta de continuação foi cancelada porque um dos scripts recebeu outro pedido de início. Confira o estado e use uma nova ação manual para os demais scripts; essa oferta não será repetida.");
+            var invalidated = new OperationResult(Outcome.CancelledBeforeDispatch, ReasonCode.StaleSelection, "The startup continuation offer was cancelled because one of its scripts received another start request. Check the status and use a new manual action for the remaining scripts; this offer will not be replayed.");
             await Continuations.WriteAsync(record with { Phase = StartupContinuationPhase.Recovered, Result = invalidated }, record).ConfigureAwait(false);
             await Log(null, ScriptOperation.Start, invalidated, CancellationToken.None).ConfigureAwait(false);
         }
@@ -182,7 +182,7 @@ public sealed partial class ManagerService
     {
         startupRecoveryPending = true;
         if (startupRecoveryIssue is not null) storageIssues = storageIssues.Remove(startupRecoveryIssue);
-        startupRecoveryIssue = new(ReasonCode.PendingOperation, "Não foi possível confirmar os registros de continuação. Novas execuções estão bloqueadas. Use Recuperar pendências para conferir os processos e preservar os registros inválidos, sem repetir execuções.\n" + ex.Message);
+        startupRecoveryIssue = new(ReasonCode.PendingOperation, "The startup continuation records could not be verified. New launches are blocked. Use Check pending results to check processes and preserve invalid records without replaying launches.\n" + ex.Message);
         storageIssues = storageIssues.Add(startupRecoveryIssue);
     }
     async Task SettleExpiredStartupContinuationsCore()
@@ -193,7 +193,7 @@ public sealed partial class ManagerService
             foreach (var record in await Continuations.PendingAsync().ConfigureAwait(false))
             {
                 if (record.Ticket.ExpiresAt > DateTimeOffset.UtcNow || record.Items.Any(item => item is not (StartupContinuationItemState.NotDispatched or StartupContinuationItemState.KnownRunning or StartupContinuationItemState.KnownStarted or StartupContinuationItemState.KnownFailed or StartupContinuationItemState.RefusedBeforeExecution))) continue;
-                await Continuations.WriteAsync(record with { Phase = StartupContinuationPhase.Recovered, Result = new(Outcome.Partial, ReasonCode.Cancelled, "A tentativa de continuação expirou. Nenhuma solicitação de execução foi repetida.") }, record).ConfigureAwait(false);
+                await Continuations.WriteAsync(record with { Phase = StartupContinuationPhase.Recovered, Result = new(Outcome.Partial, ReasonCode.Cancelled, "The startup continuation attempt expired. No launch request was replayed.") }, record).ConfigureAwait(false);
                 if (preparedStartup?.OperationId == record.Ticket.OperationId) preparedStartup = null;
                 if (acceptedStartup?.Ticket.OperationId == record.Ticket.OperationId) acceptedStartup = null;
             }
@@ -211,14 +211,14 @@ public sealed partial class ManagerService
             // them. Corruption must not produce a partially recovered inventory.
             var pending = await Continuations.PendingAsync().ConfigureAwait(false);
             foreach (var record in pending)
-                await Continuations.WriteAsync(record with { Phase = StartupContinuationPhase.Recovered, Result = new(Outcome.Partial, ReasonCode.LaunchUncertain, "A solicitação anterior foi encerrada após conferir os processos. Nenhuma execução foi repetida.") }, record).ConfigureAwait(false);
+                await Continuations.WriteAsync(record with { Phase = StartupContinuationPhase.Recovered, Result = new(Outcome.Partial, ReasonCode.LaunchUncertain, "The previous request was closed after checking processes. No launch was replayed.") }, record).ConfigureAwait(false);
             preparedStartup = null;
             acceptedStartup = null;
             startupRecoveryPending = !(await Continuations.PendingAsync().ConfigureAwait(false)).IsEmpty;
             if (startupRecoveryPending) return false;
             if (startupRecoveryIssue is not null) { storageIssues = storageIssues.Remove(startupRecoveryIssue); startupRecoveryIssue = null; }
             if (!preserved.IsEmpty)
-                await Log(null, ScriptOperation.Recover, new(Outcome.Confirmed, Detail: $"Recuperação explícita: {preserved.Length} registro(s) inválido(s) preservado(s) em {Path.GetDirectoryName(preserved[0])}. Nenhum script foi iniciado ou repetido."), CancellationToken.None).ConfigureAwait(false);
+                await Log(null, ScriptOperation.Recover, new(Outcome.Confirmed, Detail: $"Explicit recovery: {preserved.Length} invalid record(s) preserved in {Path.GetDirectoryName(preserved[0])}. No script was started or relaunched."), CancellationToken.None).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex) when (SafeJsonFiles.Known(ex))

@@ -217,7 +217,7 @@ public static partial class CoreSuite
             await service.SaveMetadataAsync(added.Added.Single(), new("Fixture", "", null, true, false, false, []), true);
             if (scenario == "registration") registration.Entry = null;
             if (scenario == "authority") owner.Held = false;
-            if (scenario == "inspection") registration.Inspection = new(false, [], [new(ReasonCode.ExternalStartupConflict, "Tarefas agendadas: consulta indisponível. " + new string('x', 5000))]);
+            if (scenario == "inspection") registration.Inspection = new(false, [], [new(ReasonCode.ExternalStartupConflict, "Scheduled tasks: query unavailable. " + new string('x', 5000))]);
             if (scenario == "cancel-inspection") registration.CancelInspection = true;
             if (scenario == "cancel-after-inspection") registration.AfterInspection = cancellation.Cancel;
             if (scenario == "reservation")
@@ -227,8 +227,8 @@ public static partial class CoreSuite
             }
             var result = await service.RunLoginAsync(cancellation.Token);
             var records = (await service.GetActivityAsync(new())).Where(a => a.ScriptId is null && a.Operation == ScriptOperation.Start).ToArray();
-            Verify(!result.Succeeded && processes.Starts == 0 && records.Length == 1 && records[0].Code == result.Code && records[0].Detail == result.Detail && result.Detail?.Contains("Início com Windows", StringComparison.Ordinal) == true, "login diagnostic " + scenario + " persists one explanatory abort without dispatch");
-            if (scenario == "inspection") Verify(result.Detail?.Contains("Tarefas agendadas", StringComparison.Ordinal) == true && result.Detail.Length <= 2400, "login diagnostic inspection carries bounded origin and reason");
+            Verify(!result.Succeeded && processes.Starts == 0 && records.Length == 1 && records[0].Code == result.Code && records[0].Detail == result.Detail && result.Detail?.Contains("Windows startup", StringComparison.Ordinal) == true, "login diagnostic " + scenario + " persists one explanatory abort without dispatch");
+            if (scenario == "inspection") Verify(result.Detail?.Contains("Scheduled tasks", StringComparison.Ordinal) == true && result.Detail.Length <= 2400, "login diagnostic inspection carries bounded origin and reason");
             var persisted = await new SettingsStore(Path.Combine(dataRoot, "settings.json")).LoadAsync();
             Verify(persisted.Document.LastLoginKey.Length == 0, "login diagnostic " + scenario + " never reserves a refused attempt");
             await using var reopened = new ManagerService(dataRoot, new FakeOwner(root), processes, startup, Path.Combine(root, "legacy-absent"));
@@ -378,10 +378,10 @@ public static partial class CoreSuite
             else if (scenario is "standard" or "failed-first")
             {
                 Verify(result.Outcome == Outcome.Partial && boundary.Launches.Last().Path == second && !boundary.Launches.Last().Elevated, "login " + scenario + " continues eligible ordinary second script");
-                Verify(result.Detail?.Contains("Primeiro", StringComparison.Ordinal) == true && result.Detail.Contains(scenario == "standard" ? "administrador" : "acesso", StringComparison.OrdinalIgnoreCase), "login " + scenario + " names first failure and readable reason");
+                Verify(result.Detail?.Contains("Primeiro", StringComparison.Ordinal) == true && result.Detail.Contains(scenario == "standard" ? "administrator" : "access", StringComparison.OrdinalIgnoreCase), "login " + scenario + " names first failure and readable reason");
                 Verify(service.Snapshot.Activity.Any(a => a.ScriptId == ids[0] && a.Code == (scenario == "standard" ? ReasonCode.ManualElevationRequired : ReasonCode.AccessDenied)), "login " + scenario + " persists per-script reason");
             }
-            else if (scenario == "already-running") Verify(result.Succeeded && boundary.Starts == 1 && boundary.Launches.Single().Path == second && result.Detail?.Contains("Já em execução: 1", StringComparison.Ordinal) == true, "login never duplicates already-running first script while starting second");
+            else if (scenario == "already-running") Verify(result.Succeeded && boundary.Starts == 1 && boundary.Launches.Single().Path == second && result.Detail?.Contains("Already running: 1", StringComparison.Ordinal) == true, "login never duplicates already-running first script while starting second");
             else if (scenario == "cancel-after-first") Verify(result.Outcome == Outcome.Partial && boundary.Starts == 1 && result.Detail?.Contains("Segundo", StringComparison.Ordinal) == true && service.Snapshot.Activity.Any(a => a.ScriptId == ids[1] && a.Code == ReasonCode.Cancelled), "login cancellation preserves first effect and records unstarted second without replay");
             else if (scenario == "incompatible-first")
             {
@@ -390,7 +390,7 @@ public static partial class CoreSuite
                 Verify(records.Length == 1 && records[0].Detail?.Contains("Primeiro", StringComparison.Ordinal) == true, "login incompatible preflight failure is persisted once with script name");
             }
             else if (scenario == "cancel-during-observe") Verify(result.Outcome == Outcome.Partial && boundary.Starts == 1 && result.Detail?.Contains("Segundo", StringComparison.Ordinal) == true && service.Snapshot.Activity.Count(a => a.ScriptId == ids[1] && a.Operation == ScriptOperation.Start && a.Code == ReasonCode.Cancelled) == 1, "login cancellation during second observation reports partial prior effect and persists second cancellation once");
-            else Verify(boundary.Starts == (scenario == "uncertain" ? 1 : 0) && result.Outcome == Outcome.Partial && result.Detail?.Contains(scenario == "uncertain" ? "não repetirá" : "inventário", StringComparison.OrdinalIgnoreCase) == true, "login " + scenario + " preserves shared safety barrier with visible reason");
+            else Verify(boundary.Starts == (scenario == "uncertain" ? 1 : 0) && result.Outcome == Outcome.Partial && result.Detail?.Contains(scenario == "uncertain" ? "will not replay" : "inventory", StringComparison.OrdinalIgnoreCase) == true, "login " + scenario + " preserves shared safety barrier with visible reason");
             int starts = boundary.Starts;
             Verify(service.Snapshot.Activity.Count(a => a.ScriptId is null && a.Operation == ScriptOperation.Start && a.Detail == result.Detail) == 1, "login " + scenario + " persists one batch summary");
             Verify((await service.RunLoginAsync()).Code == ReasonCode.StartupAlreadyProcessed && boundary.Starts == starts, "login " + scenario + " is durably dispatched once");
@@ -510,7 +510,7 @@ public static partial class CoreSuite
             if (scenario is "post-stop-cancel" or "journal-stop-write")
             {
                 Check(authorized.File is null && File.Exists(fixture.Path) && manager.Snapshot.Scripts.Length == 1 && fixture.Processes.Current.Processes.IsEmpty && fixture.Processes.Starts == 0, "instrumented fake confirmsStop before cancellation/journal-write refusal; file/catalog preserved " + scenario);
-                bool truthful = authorized.Stopped && authorized.Result.Outcome is Outcome.Partial or Outcome.Unknown && authorized.Result.Detail?.Contains("encerrada", StringComparison.Ordinal) == true;
+                bool truthful = authorized.Stopped && authorized.Result.Outcome is Outcome.Partial or Outcome.Unknown && authorized.Result.Detail?.Contains("stopped", StringComparison.Ordinal) == true;
                 Console.WriteLine((truthful ? "PASS " : "FAIL ") + "confirmedStop remains reported after " + scenario);
                 if (!truthful) targetedFailures.Add(scenario);
                 continue;
@@ -527,7 +527,7 @@ public static partial class CoreSuite
             {
                 Check(authorized.Stopped && fixture.Processes.Controls == 1 && fixture.Processes.Current.Processes.IsEmpty, "exact verified gracefulStop completed before native permission failure");
                 var failure = await manager.CompleteRecycleAsync(plan.OperationId, Outcome.Failed, "permission denied");
-                Check(failure.Outcome == Outcome.Partial && failure.Detail!.Contains("encerrada") && File.Exists(fixture.Path) && manager.Snapshot.Scripts.Length == 1 && fixture.Processes.Starts == 0, "UAC denial after stop preserves file/catalog and stopped state without restart");
+                Check(failure.Outcome == Outcome.Partial && failure.Detail!.Contains("stopped") && File.Exists(fixture.Path) && manager.Snapshot.Scripts.Length == 1 && fixture.Processes.Starts == 0, "UAC denial after stop preserves file/catalog and stopped state without restart");
             }
             else if (scenario == "unknown")
             {

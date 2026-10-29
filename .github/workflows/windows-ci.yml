@@ -224,6 +224,11 @@ jobs:
           node.exe node_modules/electron/install.js
           if ($LASTEXITCODE -ne 0) { throw 'Electron runtime download failed.' }
 
+      - name: Verify the production Electron update transport
+        if: ${{ !cancelled() && steps.electron-runtime.outcome == 'success' }}
+        run: |
+          ./tools/Test-UpdateNetwork.ps1 -HarnessRoot "$env:CI_OUTPUT/update-network-harness" -OutputRoot "$env:CI_OUTPUT/update-network"
+
       - name: Test and capture Electron interface
         if: ${{ !cancelled() && steps.frontend-build.outcome == 'success' && steps.electron-runtime.outcome == 'success' }}
         run: |
@@ -276,24 +281,21 @@ jobs:
           ./tools/New-ReleaseManifest.ps1 -InstallerPath $installers[0].FullName -OutputPath "$env:CI_OUTPUT/installer/ahk-manager-release.json" -Version $env:AHK_RELEASE_VERSION -Commit $env:AHK_SOURCE_COMMIT -Notes $notes
           ./tools/Publish-GitHubRelease.ps1 -InstallerPath $installers[0].FullName -ManifestPath "$env:CI_OUTPUT/installer/ahk-manager-release.json" -Repository $env:GITHUB_REPOSITORY -Commit $env:AHK_SOURCE_COMMIT -ValidateOnly
 
-      - name: Build synthetic baseline installer for update tests
+      - name: Download the pinned published 1.2.16 installer for recovery tests
         id: baseline-installer
         if: ${{ !cancelled() && steps.installer-build.outcome == 'success' }}
-        working-directory: Presentation.Electron
         run: |
-          Copy-Item -LiteralPath "$env:CI_OUTPUT/frontend" -Destination "$env:CI_OUTPUT/baseline-frontend" -Recurse
-          ../tools/Set-ReleaseBuildInfo.ps1 -FrontendRoot "$env:CI_OUTPUT/baseline-frontend" -Version '1.2.0' -Commit $env:AHK_SOURCE_COMMIT
-          $env:AHK_RELEASE_VERSION = '1.2.0'
-          $env:AHK_FRONTEND_DIST = Join-Path $env:CI_OUTPUT 'baseline-frontend'
-          $env:AHK_BACKEND_DIST = Join-Path $env:CI_OUTPUT 'backend-publish'
-          $env:AHK_PACKAGE_OUT = Join-Path $env:CI_OUTPUT 'baseline-installer'
-          npm.cmd run package -- --publish never
-          if ($LASTEXITCODE -ne 0) { throw 'Synthetic baseline packaging failed.' }
+          $directory = Join-Path $env:CI_OUTPUT 'baseline-installer'
+          New-Item -ItemType Directory -Path $directory -ErrorAction Stop | Out-Null
+          $baseline = Join-Path $directory 'AHK-Manager-1.2.16-Setup-x64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/bezoro/ahk-manager/releases/download/v1.2.16/AHK-Manager-1.2.16-Setup-x64.exe' -OutFile $baseline -MaximumRedirection 3
+          $digest = (Get-FileHash -LiteralPath $baseline -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ((Get-Item -LiteralPath $baseline).Length -ne 165572785 -or $digest -cne '10110089efc44a7e4e7daf60df54d75730212b11a31aa2e6f3e9bf1283c0287a') { throw 'The published legacy installer does not match its pinned identity.' }
 
       - name: Verify installation update and rollback without launching the app
         if: ${{ !cancelled() && steps.installer-build.outcome == 'success' && steps.baseline-installer.outcome == 'success' }}
         run: |
-          ./tools/Test-UpdateInstallation.ps1 -BaselineInstaller "$env:CI_OUTPUT/baseline-installer/AHK-Manager-1.2.0-Setup-x64.exe" -TargetInstaller "$env:CI_OUTPUT/installer/AHK-Manager-$($env:AHK_RELEASE_VERSION)-Setup-x64.exe" -OutputRoot "$env:CI_OUTPUT/update-installation"
+          ./tools/Test-UpdateInstallation.ps1 -BaselineInstaller "$env:CI_OUTPUT/baseline-installer/AHK-Manager-1.2.16-Setup-x64.exe" -TargetInstaller "$env:CI_OUTPUT/installer/AHK-Manager-$($env:AHK_RELEASE_VERSION)-Setup-x64.exe" -OutputRoot "$env:CI_OUTPUT/update-installation"
 
       - name: Upload test evidence
         if: always()
@@ -307,6 +309,7 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/startup-inspection/*.txt
             ${{ runner.temp }}/ahk-manager-ci/frontend/build-info.json
             ${{ runner.temp }}/ahk-manager-ci/update-host-tests/*.json
+            ${{ runner.temp }}/ahk-manager-ci/update-network/*.json
             ${{ runner.temp }}/ahk-manager-ci/update-installation/*.json
             ${{ runner.temp }}/ahk-manager-ci/update-installation/*.log
             ${{ runner.temp }}/ahk-manager-ci/release-tooling-tests/*.json

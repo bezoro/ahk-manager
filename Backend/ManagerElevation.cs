@@ -440,7 +440,7 @@ internal static class ElevationNative
         try { var attributes = new SecurityAttributes { Length = Marshal.SizeOf<SecurityAttributes>(), Descriptor = descriptor }; if (!CreateDirectory(path, ref attributes)) throw new Win32Exception(Marshal.GetLastWin32Error()); }
         finally { ProcessNative.LocalFree(descriptor); }
     }
-    internal static void RecoveryError() => MessageBox(0, "Não foi possível concluir a abertura como administrador. Abra o AHK Manager normalmente para recuperar. Nenhum script foi encerrado.", "AHK Manager", 0x10);
+    internal static void RecoveryError() => MessageBox(0, "AHK Manager could not be reopened as administrator. Open it normally to recover. No scripts were stopped.", "AHK Manager", 0x10);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "MessageBoxW")] static extern int MessageBox(nint window, string text, string caption, uint kind);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text, uint revision, out nint descriptor, out uint size);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern SafePipeHandle CreateNamedPipe(string name, uint openMode, uint pipeMode, uint instances, uint output, uint input, uint timeout, ref SecurityAttributes attributes);

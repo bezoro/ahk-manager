@@ -61,7 +61,7 @@ internal static class StartupRegistrationChecks
 
         adapter.Task = null; adapter.Entry = startup.Command; adapter.DenyTaskCreate = true;
         var denied = await startup.SetEnabledAsync(true, true, true);
-        check(denied.Outcome == Outcome.Failed && denied.Code == ReasonCode.ManualElevationRequired && denied.Detail?.Contains("administrador") == true && adapter.Entry == startup.Command && adapter.Task is null && !adapter.DuplicateObserved, "denied task registration requests elevation and restores the previous normal registration");
+        check(denied.Outcome == Outcome.Failed && denied.Code == ReasonCode.ManualElevationRequired && denied.Detail?.Contains("administrator") == true && adapter.Entry == startup.Command && adapter.Task is null && !adapter.DuplicateObserved, "denied task registration requests elevation and restores the previous normal registration");
         adapter.DenyTaskCreate = false;
         check((await startup.SetEnabledAsync(true, true, true)).Succeeded, "administrative setup succeeds after access is available");
         adapter.DenyRunCreate = true;

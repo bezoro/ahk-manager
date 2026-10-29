@@ -1,53 +1,89 @@
-# Atualizações do AHK Manager
+# Application updates
 
-O aplicativo oferece dois canais em **Atualizações**. **Estável** é o padrão e recebe versões publicadas após uma execução bem-sucedida da CI em `main`. **Testes** também oferece prévias de pull requests do próprio repositório, depois dos mesmos testes do Windows. Escolher o canal não instala uma versão. O aplicativo consulta as versões ao abrir, ao trocar de canal e a cada 15 minutos; baixar e instalar exigem uma ação do usuário.
+AHK Manager uses public releases from the fixed `bezoro/ahk-manager` repository. Application update checks and downloads do not use GitHub credentials. The application has no personal access token field or private-repository configuration.
 
-Cada push aprovado na `main` gera uma Release estável com tag `vX.Y.Z`, calculada pelos Conventional Commits desde a maior tag ancestral. `feat` incrementa a minor; `fix`, refatorações e demais mudanças incrementam o patch. `!` ou `BREAKING CHANGE` incrementa a major. As versões anteriores não são sobrescritas.
+## Channels and user actions
 
-Reexecutar a CI de um commit estável já marcado reutiliza sua versão. A publicação reconhece uma Release já concluída do mesmo commit e preserva seus assets. Tags pertencentes a outro commit interrompem a publicação. O número da execução da CI não faz parte da versão estável. As notas vêm dos commits, em texto simples para leitura no histórico do aplicativo.
+**Stable** is selected by default and receives releases published after successful Windows CI on `main`. **Test** also offers previews of open pull requests from this repository after their Windows CI passes. Fork builds, closed pull requests and superseded source commits are not eligible for preview publication.
 
-As prévias usam SemVer no formato `X.Y.Z-test.<execução>.<tentativa>.<PR>`, por exemplo `1.3.1-test.24.1.2`. A execução e a tentativa distinguem builds, e o último número identifica o pull request. O cálculo considera também a maior tag estável disponível, para uma branch anterior à última atualização continuar oferecendo uma prévia mais nova. Cada prévia tem tag e assets próprios; uma nova execução não substitui uma anterior. Publicá-la não muda a Release estável mais recente do GitHub.
+The selected channel is saved independently of scripts and startup preferences. Switching channels queries the feed; it does not install anything. The application checks at startup, when the channel changes and every 15 minutes. A user must explicitly download and install a selected version.
 
-## Uso
+Open **Updates**, review the release and select **Update and reopen** or **Install test version**. Save or discard pending edits and wait for existing operations to finish. The manager requests confirmation, shuts down the backend normally and reopens after the version changes. Independent AHK processes keep running. Reopening uses `--foreground` and does not replay sign-in script launches.
 
-Abra **Atualizações**, confira a versão e pressione **Atualizar**. O download informa progresso. O aplicativo pede confirmação, exige que alterações estejam salvas e operações tenham terminado, fecha o backend normalmente e reabre o Manager depois da troca. Scripts que já estão rodando continuam em execução. A reabertura usa `--foreground`, sem repetir o processamento de login dos scripts.
+Entering Test explicitly may offer a preview older than the installed stable bootstrap release. After installing a stable release, remaining in Test does not repeatedly recommend an older preview; it remains an explicit history choice. Returning to Stable offers its latest release even when its version is lower than the installed preview.
 
-Para experimentar uma mudança antes do merge, escolha **Testes**, aguarde a consulta e pressione **Atualizar** na versão desejada. O histórico permite escolher outra prévia. O canal escolhido permanece salvo após reiniciar ou atualizar o aplicativo. Prévias podem conter problemas ainda em revisão.
+Version history combines compatible published releases with verified installers preserved on this computer. Rolling back changes application files, not the current profile or script contents. The Stable channel does not offer cached preview installers.
 
-Entrar explicitamente no canal de testes pode oferecer uma prévia anterior à versão estável instalada. Depois de instalar uma versão estável, permanecer no canal de testes não faz o aplicativo recomendar novamente uma prévia mais antiga; ela continua disponível no histórico.
+## Public network transport
 
-Para sair do canal de testes, escolha **Estável**. Se estiver executando uma prévia, o aplicativo oferece a versão estável mais recente, mesmo quando ela tem uma versão menor. A troca também exige pressionar o botão de instalação. O canal estável não oferece instaladores de teste preservados no cache.
+The application reconstructs fixed GitHub API routes from validated asset identifiers. It does not accept download locations from renderer input or release-provided URLs. HTTPS origins, redirects, response sizes and request durations are bounded.
 
-Uma versão antiga que ainda não tem o seletor de canais precisa receber primeiro a atualização estável que adiciona esse recurso. Esse primeiro passo também usa o botão **Atualizar** existente. Depois disso, testar pull requests não exige baixar ou instalar arquivos manualmente.
+The Electron transport preserves the operating system's proxy and certificate configuration. Metadata and asset redirects are handled explicitly so a Chromium manual-redirect cancellation cannot be mistaken for an empty update feed. Network errors report a failed check; they never claim that an outdated installation is current.
 
-O histórico reúne Releases compatíveis e instaladores preservados neste computador. **Voltar para esta versão** usa o mesmo processo de verificação e instalação, permitindo downgrade somente após uma escolha explícita. Os dados do perfil e os scripts permanecem atuais; o retorno troca o aplicativo, sem desfazer edições feitas pelo usuário.
+GitHub may temporarily limit anonymous requests. The application retains bounded polling and ETag caching and reports when a check should be retried. A personal access token is not required or offered as a workaround.
 
-Releases de um repositório público podem ser consultadas e baixadas sem autenticação. Esse é o fluxo padrão. Se o repositório estiver privado ou o GitHub limitar as consultas, o acesso avançado aceita opcionalmente um token com acesso a `bezoro/ahk-manager` e permissão **Contents: Read-only**. A credencial fica cifrada por `safeStorage`, que usa a proteção do Windows. O aplicativo recusa armazenamento sem criptografia. O renderer só recebe a indicação de que o acesso foi configurado; não recebe o token salvo. **Remover acesso** apaga a credencial.
+Credential files written by earlier releases are retired. Cleanup never reads or decrypts their contents, never follows links, and never blocks public update checks when an old file cannot be removed safely.
 
-## Publicação e integridade
+## Version identity
 
-O job de compilação tem acesso de leitura. Um job separado, com `contents: write`, publica a versão estável apenas depois de todos os testes do Windows passarem em um push para a `main` deste repositório.
+Stable tags use `vX.Y.Z`. Conventional Commits determine the increment from the highest reachable stable tag: `feat` increments the minor version, breaking changes increment the major version, and the remaining accepted types increment the patch version. Breaking changes use `!` or a `BREAKING CHANGE` footer. Re-running a tagged stable commit reuses its existing version.
 
-As prévias usam um workflow de publicação separado, acionado pela conclusão bem-sucedida da CI. Ele executa o código de publicação da `main`, confere o repositório de origem, o pull request ainda aberto, o commit atual e a identidade do artefato da execução aprovada. Builds de forks, PRs fechados ou commits substituídos não são publicados. O publicador não executa o instalador nem scripts vindos do PR e não entrega credenciais de publicação ao build do PR.
+Previews use `X.Y.Z-test.<run>.<attempt>.<PR>`, for example `1.3.1-test.24.1.2`. Run and attempt identifiers order builds chronologically; the final identifier names the pull request. Preview calculation uses the latest stable tag and the common ancestor with the PR head, excluding changes that were already released through a shared commit.
 
-O publicador cria uma Release em rascunho, envia os assets e só depois a publica. Prévias têm a marcação de pré-lançamento e não podem substituir a Release estável mais recente. Uma versão já publicada é conferida, sem substituir seus arquivos.
+The Windows build calculates its version, notes and source commit for its current attempt after installing locked tooling. It does not reuse an earlier successful job's identity when only a failed Windows job is retried. Each build has its own immutable tag and assets.
 
-Os assets são `AHK-Manager-<version>-Setup-x64.exe` e `ahk-manager-release.json`. O manifesto de protocolo 1 contém versão, commit, data, notas, nome, tamanho e hashes SHA256/SHA512 do instalador. O cliente só consulta o repositório fixo, valida o manifesto e reconstrói as URLs da API a partir dos IDs dos assets. Aceita HTTPS, limita tamanho e tempo e retira credenciais nos redirecionamentos para os servidores de assets do GitHub.
+## Trusted publication
 
-O `electron-updater` 6.8.11 cuida do download, cache, progresso e verificação SHA512. O aplicativo verifica SHA256 antes de preservar e entregar o instalador ao aplicador. A instalação padrão não baixa nem instala atualizações ao sair. O aplicador independente não acessa a rede.
+Build jobs have read access. A separate job with `contents: write` publishes a stable release only after all Windows checks pass for a `main` push.
 
-Para distribuir versões assinadas, configure os secrets `WINDOWS_CSC_LINK` e `WINDOWS_CSC_KEY_PASSWORD`, e a variável `WINDOWS_PUBLISHER_NAME` no GitHub. O certificado é uma credencial externa e não pertence ao repositório. Com ele configurado, o empacotamento estável exige assinatura. O publicador de prévias assina o instalador no job de confiança e atualiza os hashes do manifesto antes da publicação. O atualizador verifica o editor nos dois canais, inclusive ao usar um instalador antigo do cache. Sem certificado configurado, os builds continuam sem assinatura de editor verificado; os hashes detectam corrupção, mas não substituem Authenticode.
+Preview publication runs in a separate `workflow_run` workflow using release tooling checked out from `main`. It verifies the repository, successful CI, current open PR head, run attempt, artifact identity and ZIP digest. Only the expected flat files are extracted into a fresh directory with decompression bounds. The publisher does not run the installer or scripts supplied by the PR and does not expose publication credentials to the PR build.
 
-## Aplicação e recuperação
+A successful `main` CI also discovers eligible PR builds completed before the preview publisher became available. Their version identity remains the one calculated at build time. No manual download or rebuild is required for that backfill.
 
-O NSIS só aceita atualização de uma instalação por usuário com `UpdateProtocol=1`, caminho registrado correspondente e arquivos com identidade comprovada. A entrada Run e a tarefa administrativa são preservadas porque o executável permanece no mesmo caminho. A primeira migração de versões até 1.1 é manual, pois seus desinstaladores recusam `--updated`.
+Publication first creates a draft, uploads and verifies both assets, revalidates the tag and source, and only then publishes. Existing tags must identify the approved commit. Published tags and assets are never overwritten. An incomplete draft can resume only when existing bytes match. A preview is marked as a prerelease and cannot replace GitHub's latest stable release.
 
-O aplicador é copiado para fora da instalação e recebe um plano limitado, com hash. Ele comprova PID, criação, usuário, sessão e imagem do processo pai antes de confirmar a preparação. O Manager só autoriza a aplicação depois de concluir as operações pendentes, tentar salvar a posição da janela e observar a saída do backend. O aplicador exige esse recibo vinculado à operação e à sessão, além da saída do Manager com código zero. Uma queda antes dessa confirmação não inicia a instalação. Depois disso, confere os instaladores novamente e preserva a instalação completa com hashes e as duas chaves próprias do Registro. Só então executa NSIS. Se o instalador encerrar com falha ou a instalação final não corresponder à versão esperada, o aplicador preserva os arquivos parciais e restaura a cópia anterior e seus registros.
+The required assets are `AHK-Manager-<version>-Setup-x64.exe` and `ahk-manager-release.json`. Update protocol 1 records the version, source commit, date, plain-text notes, installer name, size and SHA256/SHA512 hashes. The client rejects unexpected or duplicate manifest fields and mismatched release, asset or installer identity.
 
-Cancelamento ou falha de encerramento antes da aplicação não inicia o instalador. Um prazo excedido não autoriza matar o processo nem repetir a instalação. Resultado desconhecido preserva as cópias e bloqueia outra atualização automática até a investigação da operação.
+`electron-updater` owns installer download progress and SHA512 verification. A separate SHA256 check runs before caching and before the installer is handed to the applicator. Automatic download and install-on-quit are disabled. The native applicator does not access the network.
 
-Instaladores e recibos ficam em `%LOCALAPPDATA%/Bezoro/AhkManagerElectron/Updates/installers/<version>`. Planos, logs limitados, resultados e cópias ficam em `Updates/operations/<operationId>`. Esses dados permanecem após desinstalar, assim como o perfil e os scripts. Conserve as cópias enquanto uma atualização estiver pendente. Não exclua o histórico durante uma instalação.
+## Recovering builds with the earlier redirect defect
 
-## Validação
+Versions **1.2.16**, **1.3.0** and **1.3.0-test.23.1.2** use an Electron Fetch path that cancels GitHub asset redirects when manual redirect handling is requested. Release metadata can be listed, but retrieving the release manifest fails. A successful Node Fetch test does not exercise this Electron behavior.
 
-Os testes Node cobrem isolamento entre canais, persistência da seleção, ordenação SemVer, retorno ao estável, consulta privada, redirecionamentos, hashes, falhas, concorrência, preflights e recuperação por cache. Os testes de publicação simulam a API do GitHub e conferem a origem e a identidade das prévias. O aplicador testa o protocolo e os estados de instalação/restauração com efeitos isolados. A CI instala pacotes reais no Windows descartável, atualiza e faz downgrade, sem abrir o aplicativo. As capturas do renderer cobrem a seleção de canal, a página de atualizações e o histórico sem backend. A sessão pessoal do Windows, UAC e o primeiro login real exigem validação separada.
+A failed check in these builds does not mean that no newer release exists. Adding a GitHub token does not repair the transport. The installed binary cannot download its own fix through the same broken manifest path.
+
+The first upgrade requires the corrected **1.3.1** installer once:
+
+1. Exit the old manager using **Exit and keep scripts running**. AHK scripts can remain active.
+2. Run the corrected setup normally. It detects a registered per-user installation that supports update protocol 1 and offers a repair or upgrade confirmation. The default answer is No.
+3. Confirm the repair. Setup validates the exact registered path, directory chain and installation ownership, then uses the existing guarded update path. Profiles, scripts and owned Windows startup settings stay in place.
+
+The recovery path does not kill the manager, remove startup registration or ask the user to uninstall first. Unknown installations, older protocols, redirected paths and machine-wide conflicts remain rejected. A silent setup never repairs an existing installation implicitly; the explicit `--repair` maintenance flag is reserved for a caller that intentionally requests that operation, including the isolated Windows installer test.
+
+After this one-time repair, later stable releases, previews and rollbacks use the application's update buttons. The fix is verified with the actual Electron runtime, including the legacy failure and bounded redirect handling in the corrected transport.
+
+## Publisher signatures
+
+To distribute signed installers, configure the GitHub secrets `WINDOWS_CSC_LINK` and `WINDOWS_CSC_KEY_PASSWORD`, plus the public variable `WINDOWS_PUBLISHER_NAME`. Certificates are external credentials and never belong in the repository.
+
+The stable packaging job signs when configured. A trusted Windows preview publisher signs the downloaded installer and regenerates its manifest hashes without running the package. Unsigned PR builds retain the expected publisher policy in their application update configuration, so installing a preview does not silently remove future signature verification. The updater checks that publisher for both channels and for cached rollback installers.
+
+Without a configured certificate, releases have no verified Authenticode publisher. Hash checks detect altered or corrupted bytes; they do not replace publisher signatures.
+
+## Applying updates and recovering
+
+NSIS accepts application-authorized updates only for a per-user installation with `UpdateProtocol=1`, a matching registered path and proven file identity. Versions through 1.1 require their documented manual migration because their uninstallers reject `--updated`.
+
+The applicator is copied outside the installation and receives a size-limited, hashed plan. It verifies the parent process identifier, creation time, user, session and image. The manager permits application only after draining operations, attempting to save window placement and observing backend exit. The applicator requires the matching shutdown receipt and a zero manager exit code. A crash before that confirmation does not begin installation.
+
+Before starting NSIS, the applicator verifies the installer again, snapshots installation files with hashes and captures the two owned registry trees. It compares the registered full version, numeric ProductVersion and complete FileVersion. Distinct previews and attempts are never treated as the same installed version merely because their numeric Windows version matches.
+
+A confirmed installer failure or verified version mismatch preserves partial files and restores the previous installation and registry data. Cancellation or unconfirmed shutdown before application does not start the installer. A timeout never permits killing a process or replaying an unknown installation result. Recovery records remain available for investigation, and an unknown result blocks another automatic application attempt.
+
+Installers and receipts are stored under `%LOCALAPPDATA%/Bezoro/AhkManagerElectron/Updates/installers/<version>`. Plans, bounded logs, results and snapshots are stored under `Updates/operations/<operationId>`. They survive uninstalling, along with profiles and scripts. Do not remove pending-operation evidence or version history during an installation.
+
+## Validation scope
+
+Node tests cover channel isolation, persisted selection, public feed validation, bounded redirects, integrity checks, failure handling, serialization, preflights and offline cache recovery. Publication tests use mocked HTTP to verify source identity and immutability. Native applicator tests isolate protocol and recovery effects.
+
+Windows CI runs the actual Electron network transport, renders the production interface, captures light/dark and narrow-window states, packages real installers, and exercises installation, updating, rollback and cleanup in temporary locations. These checks do not validate the user's interactive UAC prompt, personal Windows session or next real sign-in.

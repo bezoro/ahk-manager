@@ -26,7 +26,7 @@ export function useUpdates(): { state: UpdateState; accept(value: UpdateState): 
     let alive = true, eventSeen = false;
     const off = window.ahkManager.onUpdates(value => { eventSeen = true; if (alive) setState(value); });
     void window.ahkManager.getUpdateState().then(value => { if (alive && !eventSeen) setState(value); }).catch(() => {
-      if (alive && !eventSeen) setState(value => ({ ...value, phase: 'error', error: 'Não foi possível carregar as atualizações. Tente verificar novamente.' }));
+      if (alive && !eventSeen) setState(value => ({ ...value, phase: 'error', error: 'Updates could not be loaded. Please check again.' }));
     });
     return () => { alive = false; off(); };
   }, []);

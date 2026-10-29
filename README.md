@@ -1,103 +1,77 @@
-# AHK Manager: atualizações e canais
+# AHK Manager
 
-A página **Atualizações** mostra a versão instalada, o canal selecionado e o histórico. O canal **Estável**, selecionado por padrão, recebe alterações da `main` que passaram pela CI. Escolha **Testes** para receber prévias de pull requests do próprio repositório antes do merge. Os dois canais usam o botão do aplicativo, sem baixar ou instalar arquivos manualmente.
+AHK Manager runs and organizes AutoHotkey v2 scripts on Windows 11 x64. It combines an Electron, React and Fluent UI interface with a .NET backend that owns process identity, settings and recovery.
 
-A seleção do canal permanece salva após reiniciar ou atualizar. Voltar a **Estável** oferece a versão estável mais recente, mesmo quando ela é anterior à prévia instalada. Escolher o canal apenas consulta as versões; baixar e instalar sempre dependem de uma ação do usuário. O Manager consulta o GitHub ao abrir e a cada 15 minutos, sem exigir login ou token.
+The application and active contributor documentation use English. Script contents, filenames, manually entered descriptions and existing profile data keep their original language.
 
-Versões anteriores ao seletor de canais recebem primeiro a atualização estável que habilita essa opção, pelo botão **Atualizar** existente. Depois disso, prévias de mudanças ainda em revisão ficam disponíveis ao selecionar **Testes**.
+## Manage scripts
 
-O `electron-updater` baixa e verifica o instalador. O aplicador aguarda o encerramento normal do Manager, preserva uma cópia da instalação e aplica a versão escolhida. Os scripts AHK continuam em execução. Perfis, scripts e preferências de início com Windows são preservados. Uma falha confirmada na instalação restaura a cópia anterior; uma operação de resultado incerto fica bloqueada para não repetir efeitos.
+- Add individual scripts or a folder without running any of them.
+- Start, restart and request a normal stop for a selected script. Restart starts a replacement only after the previous process has exited.
+- Choose each script's startup and administrator preferences independently.
+- Edit with the configured editor. VS Code is detected by default; the Windows Edit association or a text editor is used when needed. Editing never uses the `.ahk` Open association that may execute a script.
+- Inspect readable hotkeys, their original syntax, process observations and recorded activity.
+- Recover missing script paths or remove catalog entries while preserving the files. Deleting a file requires confirmation and uses the Windows Recycle Bin.
 
-As versões seguem Semantic Versioning. Conventional Commits determinam o incremento estável: `feat` incrementa a minor, mudanças incompatíveis a major e demais tipos a patch. Prévias usam `X.Y.Z-test.<execução>.<tentativa>.<PR>`, com tag e instalador próprios. Publicar uma prévia não substitui a versão estável mais recente.
+The manager verifies identities again after native confirmations. Multiple instances, insufficient access, incomplete observations and uncertain operations remain visible instead of being treated as stopped. It never automatically kills a process to resolve uncertainty.
 
-Consulte [UPDATES.md](UPDATES.md) para publicação, assinatura, recuperação e migração de versões até 1.1. A CI do Windows valida os dois canais e preserva instaladores, capturas da interface e logs nos artefatos da execução.
+## Install and start
 
-## Comportamento de inicialização introduzido na 1.1
+Use the Windows x64 installer from [GitHub Releases](https://github.com/bezoro/ahk-manager/releases). The installed package includes Electron and a self-contained .NET backend. Node.js, npm and the .NET SDK are development tools and are not required to run the application. Install AutoHotkey v2 separately to run scripts.
 
-O Manager inicia com Windows e como administrador por padrão. As duas preferências são independentes e configuráveis. Na primeira abertura, a confirmação do Windows permite concluir o modo administrativo. O início elevado usa uma tarefa agendada por usuário; o modo padrão usa uma entrada de login do usuário. Se uma alteração não puder ser aplicada, a interface informa que a configuração está pendente e permite tentar novamente.
+Running at Windows sign-in and administrator mode are enabled by default. Change them independently in **Preferences**. Elevated startup uses a scheduled task for the current user; standard startup uses a per-user sign-in entry. Windows may request approval when applying administrator settings. If registration cannot be completed, the application reports the pending setup.
 
-Scripts marcados para iniciar com Windows são executados no login. Cada script mantém sua preferência administrativa; scripts normais continuam com privilégio padrão mesmo quando o Manager está elevado. Iniciar, parar e reiniciar verificam a identidade do processo. Novos processos e encerramentos externos atualizam o estado automaticamente.
+Scripts marked for startup run at sign-in. A standard script stays under standard user privileges even when the manager is elevated. Reopening the manager, including after an application update, does not replay sign-in launches.
 
-Editar procura o VS Code instalado, preservando a seleção de outro editor e seus argumentos. Sem VS Code, utiliza a associação segura Editar ou um editor de texto. Um Manager elevado abre o editor com o privilégio padrão do usuário.
+Closing the window can keep the manager in the notification area. **Exit and keep scripts running** leaves independent scripts running. **Stop scripts and exit** asks for consent, considers the complete catalog and exits only after the approved processes are confirmed stopped. Cancelling further stop requests does not restart scripts that have already stopped.
 
-As preferências de inicialização aparecem primeiro. As ações principais ficam juntas, ações secundárias estão em um menu e a recuperação de pendências funciona mesmo com a lista vazia. Registros de continuação inválidos podem ser preservados em quarentena após uma recuperação explícita, sem repetir execuções.
+## Updates and test builds
 
-A CI do Windows verifica backend, contratos, WMI, tipos e cenários de interface, captura temas claro/escuro, janelas estreitas e zoom de 200%, e compila o instalador. Logs, capturas e instalador ficam disponíveis nos artefatos da execução. Consulte [SAFE-TESTS.md](SAFE-TESTS.md) para o escopo e [VALIDATION.md](VALIDATION.md) para os resultados e limites da validação atual.
+Open **Updates** to check the installed version, select a channel and inspect version history.
 
-Para desinstalar uma instalação com tarefa administrativa ativa, abra o Manager como administrador e desative "Iniciar o Manager com Windows" antes de usar o desinstalador. Ele verifica a tarefa da instalação e interrompe a remoção enquanto ela estiver registrada. Perfis, backups e scripts são preservados.
+- **Stable** is the default. It receives releases from `main` after Windows CI passes.
+- **Test** includes previews from open pull requests in this repository after the same Windows checks pass.
 
-Os registros abaixo descrevem versões anteriores, inclusive políticas e instalações que mudaram na 1.1.0.
+Selecting a channel checks for releases. Downloading and installing always require an explicit button press. The application also checks at startup and every 15 minutes. Checks and downloads use public GitHub releases without a GitHub account or personal access token.
 
-## Versão 1.0.4 — recuperação de arquivos e atalhos legíveis
+The selected channel survives restarts and updates. Returning to Stable offers the latest stable release even when it is older than the installed preview. Version history provides explicit rollback to compatible published or preserved installers. Updating or rolling back the application preserves the current profile and scripts; it does not undo script edits.
 
-Arquivos ausentes mostram **Localizar script…** e **Remover da lista** no painel. Localizar preserva o registro e suas preferências; remover da lista preserva o arquivo. Para arquivos existentes, **Excluir arquivo…** solicita confirmação e usa a Lixeira do Windows. Se o script estiver em execução, a mensagem explica que ele será parado primeiro. A exclusão só prossegue após o encerramento comprovado; recusa de saída, identidade incerta ou mudança de arquivo interrompem a operação.
+Application updates normally close and reopen the manager. Running scripts continue independently. Confirmed installation failures restore the preserved installation. An unknown result blocks another automatic application attempt so an uncertain effect is not repeated.
 
-Os atalhos identificados usam nomes legíveis para modificadores, teclas e mouse. Por exemplo, `!^#+u` aparece como **Ctrl + Alt + Shift + Win + U**; **F13** continua F13. A sintaxe original, origem e limitações ficam nos detalhes. A análise não executa o código nem deduz gestos complexos a partir de `LButton Up`.
+See [UPDATES.md](UPDATES.md) for release identity, network handling, integrity checks and recovery, including the one-time repair required by the redirect defect in versions 1.2.16 and 1.3.0.
 
-Para declarar um clique duplo, coloque a anotação imediatamente antes da hotkey de mouse correspondente:
+## Data and Windows startup
 
-```autohotkey
-; @gesture double-click
-~LButton Up:: {
-    ; A implementação do gesto continua sendo responsabilidade do script.
-}
+Operational data is stored under `%LOCALAPPDATA%/Bezoro/AhkManagerElectron`. Chromium data is stored separately under `%APPDATA%/Bezoro/AhkManagerElectron/Chromium`. Existing profiles are not copied silently. Import and WinUI migration require selection, a preview and confirmation; migration preserves the source and creates an exact backup.
+
+Application updates retain the installed executable path so verified Windows startup registrations continue to refer to the same installation. Before uninstalling an installation with an active administrator startup task, open the manager as administrator and disable its Windows startup preference. The uninstaller checks the task and refuses to remove an installation that still owns it.
+
+Profiles, backups, update recovery records and scripts remain after uninstalling. The uninstaller verifies its owned-file inventory and preserves unrelated files and nonempty directories.
+
+## Development
+
+Use Windows, Node.js **24.22.0** and the .NET SDK pinned by `global.json`. Keep `package-lock.json` and the NuGet lock files intact. CI uses the same locked dependencies.
+
+From `Presentation.Electron`:
+
+```powershell
+npm.cmd ci --ignore-scripts
+npm.cmd run typecheck
+npm.cmd run test:release
+npm.cmd test -- --out C:\Temp\ahk-manager-node-tests
 ```
 
-A interface mostra **Clique duplo (botão principal do mouse)** como gesto informado pelo script. Uma anotação inválida ou separada da declaração não vira uma afirmação sobre o comportamento do código.
+Use a new absolute output directory for every test or build. The scripts refuse existing staging directories.
 
-A versão 1.0.4 está instalada no local existente. Os 270 arquivos foram conferidos, com preservação do catálogo, das preferências e da inicialização com Windows. O ciclo real de parada e envio à Lixeira passou em 97 verificações. A captura própria da janela administrativa mostrou os quatro registros, os três atalhos legíveis e o tema **Seguir o sistema**. O script de ícones recebeu a anotação e passou a usar o intervalo de duplo clique configurado no Windows; uma instância já aberta só usa o novo intervalo após seu próximo reinício. Veja os limites em [VALIDATION.md](VALIDATION.md).
+Build and package from the repository root:
 
-## Versão 1.0.3 — histórico da instalação anterior
-
-O painel mostra apenas a descrição quando há `; @description` no cabeçalho. Sem ela, apresenta a descrição manual e um exemplo do cabeçalho. As colunas **Iniciar com Windows** e **Administrador** usam checkboxes; falhas ao salvar preservam as alterações ainda não salvas no painel. Buscar pelo texto do cabeçalho também permite operar o script encontrado.
-
-A observação distingue intérpretes AutoHotkey reconhecidos de processos comuns sem metadados legíveis. Um candidato AutoHotkey sem identidade suficiente continua não confirmado. **Reabrir como administrador** solicita confirmação do Windows quando o acesso elevado é necessário. A checkbox é uma preferência para a próxima execução; não altera o privilégio do processo atual nem provoca UAC ao salvar ou no login. Scripts administrativos continuam manuais. O gerenciador elevado solicita privilégio padrão para scripts desmarcados, sem fallback silencioso para administrador.
-
-Passaram 126 testes Node, 45 cenários de interface, 36 verificações corretivas, 188 de core e 169 de backend. A integração normal real passou por 101 verificações com scripts temporários, incluindo início, recusa de duplicata, encerramento, reinício e limpeza confirmada. Em um gerenciador elevado, scripts temporários desmarcados iniciaram com privilégio padrão e marcados iniciaram elevados; ambos encerraram normalmente, com saída comprovada.
-
-O pacote NSIS 1.0.3 foi instalado no local existente, com os 270 arquivos previstos conferidos e preservação do perfil, da entrada de login e dos arquivos alheios ao pacote. A abertura normal produziu uma captura própria com os quatro registros e as checkboxes. A transferência real para administrador foi confirmada pelo usuário, pelo recibo consumido e pelo token elevado do backend. O usuário confirmou os status corretos na janela administrativa. A composição Mica, outras escalas de DPI e o próximo login real não foram revalidados nesta entrega; consulte [VALIDATION.md](VALIDATION.md).
-## Descrição do cabeçalho (1.0.2)
-
-O Inspector usa primeiro as linhas `; @description Texto` do cabeçalho do arquivo raiz, unidas em múltiplas linhas. Sem uma tag não vazia, usa a descrição manual salva. A descrição manual continua editável e independente; o texto derivado não é salvo no catálogo. Edite o cabeçalho no arquivo e pressione F5 para atualizar; não há watcher nem promessa de atualização instantânea.
-
-```autohotkey
-; @description Alterna os ícones da área de trabalho.
-; @description Funciona com duplo clique ou Ctrl+Alt+D.
-#Requires AutoHotkey v2.0
+```powershell
+./tools/Build-Electron.ps1 -OutputRoot C:\Temp\ahk-manager-build
+./tools/Package-Electron.ps1 -BuildRoot C:\Temp\ahk-manager-build -OutputRoot C:\Temp\ahk-manager-package
 ```
 
-A análise termina no primeiro código ou diretiva não permitida, inclusive `#Include`. Não importa descrições de includes, strings ou comentários de bloco. O limite é de 64 linhas/8192 caracteres de cabeçalho e 4000 de descrição; excesso ou NUL rejeita o valor inteiro e mantém o fallback manual com diagnóstico parcial. A busca usa nome, caminho e descrição efetiva.
+Use `npm.cmd` in PowerShell. The build downloads the pinned Electron runtime through its official installer after `npm ci --ignore-scripts` has disabled arbitrary dependency lifecycle hooks.
 
-A versão 1.0.2 foi revisada, empacotada e instalada no mesmo local, preservando perfil, scripts e inicialização com Windows. O usuário confirmou a descrição ao selecionar um script e a atualização por F5 na janela instalada. As referências à validação visual 1.0.1 abaixo são históricas.
+The active solution contains Backend and Tests.Backend. The Electron application is under `Presentation.Electron`; the independent installer applicator is under `UpdateHost`. Some shared .NET services remain in the archived WinUI folders until the separate architectural refactor is merged. The archived UI projects are not part of the shipped Electron application.
 
-# AHK Manager — Windows 11
-
-**Versão 1.0.1:** a correção da tela cinza foi instalada e validada no Windows 11. Foram verificados lista, detalhes, busca, menus, páginas, temas claro/escuro, fechamento para a bandeja e reabertura da mesma instância. A preferência final é **Seguir o sistema**. A integração com AutoHotkey real passou por 97 verificações com scripts temporários inofensivos. Ainda há limites de aceitação, descritos em [VALIDATION.md](VALIDATION.md); esta não é uma aprovação geral de distribuição.
-
-Gerenciador de scripts AutoHotkey **v2** para Windows 11 x64. A interface usa Electron, TypeScript, React e Fluent UI; o backend .NET conserva a autoridade de processos, identidade, persistência e recuperação. Os controles Fluent são controles web. A moldura e os botões da janela, seletores de arquivos, confirmações e área de notificação usam integração do Windows. Mica é solicitado pela API suportada no Windows 11 22H2 ou superior; há fundo sólido quando indisponível ou em alto contraste. Tema e cor de destaque acompanham o sistema por padrão.
-
-Instale pelo **AHK-Manager-1.0.4-Setup-x64.exe**, por usuário, sem privilégios administrativos. A pasta instalada contém **Bezoro.AhkManager.exe**, Electron e o backend autossuficiente em `backend/AhkManager.Backend.exe`. Não exige Node, npm, SDK, Visual Studio ou .NET instalado. AutoHotkey v2 é um requisito separado para executar scripts. A distribuição não tem assinatura digital de editor verificado; o Windows pode apresentar SmartScreen. Não há atualização automática.
-
-Adicionar arquivos apenas cadastra caminhos. Iniciar valida o interpretador e o arquivo. Parar solicita saída normal e confirma o encerramento; OnExit pode recusar. Reiniciar só inicia uma substituição depois da saída comprovada. Não há encerramento forçado automático. Pausa e suspensão são diferentes; funções sem observação comprovável ficam indisponíveis com explicação.
-
-A identidade do processo e a seleção são verificadas novamente após confirmações. Acesso insuficiente, múltiplas instâncias e observação incompleta aparecem como não confirmados. Não repita uma execução incerta: use Verificar pendências. Um Manager anterior aberto impede efeitos concorrentes; feche-o antes de operar pelo novo aplicativo.
-
-A bandeja oferece **Sair mantendo os scripts** e **Parar scripts e sair…**. A segunda opção considera todo o catálogo, independentemente dos filtros, pede confirmação nativa com Cancelar por padrão e solicita saída apenas das identidades verificadas e aprovadas. Você pode cancelar novos pedidos pela bandeja; isso não reinicia scripts já parados. Mudanças de identidade, recusa de OnExit, operações pendentes ou resultados incertos mantêm o gerenciador aberto. Só a observação final de todo o escopo parado permite sair. Fechar a janela ou sair por outro caminho mantém a semântica de preservar scripts. Não há encerramento forçado. A lógica foi exercitada com adaptadores falsos; o ciclo nativo completo de **Parar scripts e sair…** ainda exige validação isolada. Nenhum teste autoriza parar scripts operacionais.
-
-Editar usa um editor configurado ou a associação segura **Editar** do Windows. Não usa a associação Abrir de .ahk, que pode executar o arquivo. Argumentos do editor são informados um por linha; {file} representa o caminho, passado como um único argumento. Metadados não reescrevem o script.
-
-Os dados operacionais novos ficam em `%LOCALAPPDATA%/Bezoro/AhkManagerElectron`, com JSON versionado, substituição atômica e cópia de segurança. O armazenamento Chromium separado fica em `%APPDATA%/Bezoro/AhkManagerElectron/Chromium`. Nenhum perfil anterior é copiado silenciosamente. A migração de perfil WinUI exige seleção, prévia, confirmação e backup exato, preservando operações pendentes e a origem. A importação de catálogo legado é um fluxo separado, também explícito. Configuração inválida abre para recuperação sem sobrescrever a origem.
-
-O início com Windows é opcional e por usuário. Iniciar o Manager, mostrar sua janela e iniciar cada script são preferências separadas. Scripts administrativos exigem confirmação manual e não iniciam automaticamente. Desabilitar o Manager no logon mantém as preferências dos scripts, mas deixa-as inativas. Uma entrada WinUI anterior permanece em conflito até uma transferência explicitamente confirmada e verificada; não é criada entrada duplicada. Fechar pode manter o aplicativo na área de notificação; **Sair do Manager não encerra scripts**.
-
-A análise estática de atalhos é limitada. Não avalia código e não cobre todos os contextos, atalhos dinâmicos ou programas externos. Atalhos manuais são apenas metadados. A atividade registra solicitações e resultados observados, não eventos internos inventados.
-
-Desenvolvimento: Node **24.22**, npm **12.2**, .NET SDK **10.0.402**, runtime **10.0.13** e Windows SDK **26100**. `package-lock.json` e os locks NuGet fixam as dependências. Execute `tools/Build-Electron.ps1 -OutputRoot <pasta-nova>` e `tools/Package-Electron.ps1 -BuildRoot <mesma-pasta> -OutputRoot <outra-pasta-nova>`. Use `npm.cmd`, sem contornar políticas do PowerShell. O download oficial `electron/install.js` verifica o runtime; `npm ci --ignore-scripts` mantém hooks arbitrários desativados. A solução ativa contém Backend e Tests.Backend. Fontes WinUI/WPF e seus testes permanecem arquivados e fora do pacote Electron.
-
-Integração real opcional: `Tests.Backend.exe --ahk-owned --root <pasta-absoluta-inexistente>`, em Windows com token normal e AutoHotkey v2 conhecido. O seletor usa arquivos e perfis temporários, sem hotkeys, envio de entrada, escrita de inicialização ou UAC. A sequência tem prazo de 180 segundos e limpeza independente de 30 segundos; supervisione com margem de inicialização, sem matar processos ao vencer um prazo. Falhas e saídas incertas conservam recibos para recuperação explícita, sem repetição automática. Não crie o marcador OnExit manualmente para contornar uma falha. O ensaio não valida UI, bandeja ou descoberta operacional completa.
-
-Ctrl+F pesquisa; F5 atualiza; Tab percorre os controles. Consulte [SAFE-TESTS.md](SAFE-TESTS.md) e [VALIDATION.md](VALIDATION.md).
-
-A atualização é manual: escolha **Sair mantendo os scripts**, desinstale a versão anterior preservando os perfis e scripts e instale a nova versão. Esse fluxo foi validado nas substituições 1.0.0 → 1.0.1, 1.0.1 → 1.0.2, 1.0.2 → 1.0.3 e 1.0.3 → 1.0.4, preservando o catálogo, os arquivos dos scripts e a entrada de login existente. A atualização in-place é recusada antes de remover arquivos ou alterar a entrada de login. Guarde a distribuição anterior e uma cópia dos dados; depois da reinstalação, confira a preferência de inicialização com Windows e confirme novamente seu registro, se desejar usá-la. O instalador não encerra árvores de processos.
-
-Para remover, saia do Manager e use o desinstalador do Windows. Ele oferece remover somente a entrada de login que corresponde exatamente à instalação atual, com confirmação padrão Cancelar/Não. Antes de qualquer remoção, verifica a lista exata de arquivos empacotados, seus hashes e caminhos sem redirecionamento. Arquivos alterados ou caminhos inacessíveis interrompem a remoção; arquivos alheios à lista e diretórios não vazios são preservados. Os perfis, backups e scripts permanecem disponíveis; sua remoção deve ser feita separadamente pelo usuário.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing process control, startup registration or the update protocol. Historical test and validation reports remain in [SAFE-TESTS.md](SAFE-TESTS.md) and [VALIDATION.md](VALIDATION.md), including older Portuguese records whose scope must not be mistaken for current validation.

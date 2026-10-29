@@ -112,7 +112,7 @@ public static class UnelevatedProcessLauncher
     {
         if (arguments.Count > 256 || arguments.Any(argument => argument is null || argument.Contains('\0'))) throw new ArgumentException("Invalid editor arguments.");
         string command = string.Join(" ", arguments.Prepend(executable).Select(ScriptPaths.QuoteArgument));
-        if (command.Length > MaximumTokenCommandLength) throw new ArgumentException("O comando do editor excede o limite de 1023 caracteres para execução com privilégios padrão.");
+        if (command.Length > MaximumTokenCommandLength) throw new ArgumentException("The editor command exceeds the 1023-character limit for launching with standard privileges.");
         return command;
     }
     static Process? LaunchVerified(string executable, string command, string directory)

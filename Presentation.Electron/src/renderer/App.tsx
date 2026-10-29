@@ -4,7 +4,7 @@ import { AddRegular, ArrowClockwiseRegular, ArrowDownloadRegular, ChevronDownReg
 import type { CatalogResult, HostState, ManagerSettings, OperationResult, ScriptOperation, ScriptQuery } from '../shared/contracts.js';
 import { actionReason, brandPalette, defaultQuery, metadataOf, nextQuery, newDraft, rebaseRowPreference, reconcileDraft, visibleScripts, type Draft, type RowPreference } from './model.js';
 import { useHost, useNarrow, useTheme, useUpdates } from './hooks.js';
-import { catalogSummary, connectionStatus, operation, outcome, problemCount, reason, scriptCount, text } from './resources/pt-BR.js';
+import { catalogSummary, connectionStatus, operation, outcome, problemCount, reason, scriptCount, text } from './resources/en-US.js';
 import { time } from './format.js';
 import { ScriptList } from './components/ScriptList.js';
 import { Inspector } from './components/Inspector.js';

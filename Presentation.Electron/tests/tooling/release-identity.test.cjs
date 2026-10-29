@@ -239,7 +239,7 @@ test('manifest notes are plain text with readable code/link labels and preserve 
   assert.doesNotMatch(release.notes, /https?:|fixture-secret|`|\]\(|^#+ /m);
   const clipped = plainNotes('## Long release\n\n' + 'á🙂'.repeat(3000));
   assert.ok(clipped.length <= 4000);
-  assert.match(clipped, /Notas resumidas/);
+  assert.match(clipped, /Notes shortened/);
   assert.doesNotMatch(clipped, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
   for (const prefix of ['', 'x']) {
     const boundary = plainNotes(prefix + '🙂'.repeat(3000));

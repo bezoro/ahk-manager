@@ -19,7 +19,7 @@ public sealed class ExternalEditorService
                 return new OperationResult(Outcome.Accepted);
             }
             using var self = new NativeProcessIdentity(Environment.ProcessId);
-            if (!self.TryReadSecurity(out var security)) return new OperationResult(Outcome.Failed, ReasonCode.EditorUnavailable, "Não foi possível verificar o privilégio para abrir o editor.");
+            if (!self.TryReadSecurity(out var security)) return new OperationResult(Outcome.Failed, ReasonCode.EditorUnavailable, "The privilege required to open the editor could not be verified.");
             bool elevated = security.Elevated || security.IntegrityRid >= 0x3000;
             string? automaticEditor = string.IsNullOrWhiteSpace(settings.EditorPath) ? DiscoverVisualStudioCode() : null;
             var info = CreateEditorStartInfo(script, settings, automaticEditor, elevated);
@@ -39,10 +39,10 @@ public sealed class ExternalEditorService
     static Process? StartEditor(ProcessStartInfo info, bool elevated)
     {
         if (!elevated) return Process.Start(info);
-        if (info.UseShellExecute) throw new InvalidOperationException("O editor precisa de uma execução com privilégios padrão.");
-        if (UnelevatedProcessLauncher.UnavailableReason() is not null) throw new InvalidOperationException("Não foi possível abrir o editor com privilégios padrão. Verifique se o Windows Explorer está disponível nesta sessão.");
+        if (info.UseShellExecute) throw new InvalidOperationException("The editor must run with standard privileges.");
+        if (UnelevatedProcessLauncher.UnavailableReason() is not null) throw new InvalidOperationException("The editor could not be opened with standard privileges. Check that Windows Explorer is available in this session.");
         return UnelevatedProcessLauncher.LaunchExecutable(info.FileName, info.ArgumentList.ToArray(), info.WorkingDirectory)
-            ?? throw new InvalidOperationException("O Windows não confirmou a abertura do editor. Verifique se ele já foi aberto antes de tentar novamente.");
+            ?? throw new InvalidOperationException("Windows did not confirm that the editor opened. Check whether it is already open before trying again.");
     }
 
     internal static ProcessStartInfo CreateEditorStartInfo(string script, ManagerSettings settings, string? automaticEditor, bool elevated)
@@ -57,7 +57,7 @@ public sealed class ExternalEditorService
             fallback.ArgumentList.Add(script); return fallback;
         }
         editor = ScriptPaths.Canonical(editor, false);
-        if (!editor.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Selecione o executável do editor.");
+        if (!editor.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Select the editor executable.");
         var info = new ProcessStartInfo(editor) { UseShellExecute = false, WorkingDirectory = directory };
         bool inserted = false;
         foreach (var argument in settings.EditorArguments)

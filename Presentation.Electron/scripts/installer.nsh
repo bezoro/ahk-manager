@@ -11,6 +11,8 @@ Var /GLOBAL ahkInstallerCacheFolder
 Var /GLOBAL ahkInstallerHash
 Var /GLOBAL ahkInstallerBytes
 Var /GLOBAL ahkInstallerReceipt
+Var /GLOBAL ahkRepairRoot
+Var /GLOBAL ahkRepairExitCode
 !endif
 
 ; Local stage diagnostics only. Logging cannot change a guard's registers/error flag.
@@ -52,7 +54,7 @@ Var /GLOBAL ahkInstallerReceipt
   !endif
 !macroend
 
-LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou uma atualização autorizada pelo AHK Manager. Saia do Manager antes de continuar. A migração de versões anteriores ao protocolo de atualização 1 exige desinstalar preservando perfis e scripts e instalar a nova versão. Nenhum arquivo da instalação foi alterado por esta tentativa."
+LangString ahkManualUpdate 1033 "This installation requires a manual update or an update authorized by AHK Manager. Exit the manager before continuing. Migrating versions older than update protocol 1 requires uninstalling while preserving profiles and scripts, then installing the new version. This attempt did not change any installation files."
 
 !macro abortManualUpdate
   !insertmacro traceInstaller "abort: manual-update; exit=2"
@@ -63,7 +65,7 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
 
 !macro abortInstallerCache
   !insertmacro traceInstaller "abort: installer-cache; exit=3"
-  MessageBox MB_OK|MB_ICONEXCLAMATION "Não foi possível preservar este instalador no histórico de versões. Nenhuma cópia existente será sobrescrita. Confira o acesso à pasta Updates/installers e tente novamente." /SD IDOK
+  MessageBox MB_OK|MB_ICONEXCLAMATION "This installer could not be preserved in version history. No existing copy will be overwritten. Check access to the Updates/installers folder and try again." /SD IDOK
   SetErrorLevel 3
   Abort
 !macroend
@@ -170,7 +172,11 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
       !insertmacro abortManualUpdate
     ${EndIf}
   !else
-    StrCpy $R3 "$INSTDIR"
+    !if "${MODE}" == "repair"
+      StrCpy $R3 "$ahkUpdateRoot"
+    !else
+      StrCpy $R3 "$INSTDIR"
+    !endif
   !endif
   ClearErrors
   GetFullPathName $R2 "$R3"
@@ -191,6 +197,70 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
   ; The same per-user installation was validated exactly above.
   !insertmacro rejectRegisteredInstallation HKLM
   SetRegView 64
+!macroend
+
+; The parent has not acquired electron-builder's installer mutex yet. Validate
+; ownership, obtain consent, and delegate to the existing exact update path.
+!macro repairRegisteredInstallation
+  !insertmacro validateUpdatedInstallation "repair"
+  StrCpy $ahkRepairRoot "$ahkUpdateRoot"
+  ${StdUtils.TestParameter} $R0 "repair"
+  ${If} $R0 != "true"
+    ${If} ${Silent}
+      !insertmacro abortManualUpdate
+    ${EndIf}
+    SetErrorLevel 2
+    !insertmacro customCheckAppRunning
+    SetErrorLevel 0
+    MessageBox MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION "Update or repair this AHK Manager installation?$\r$\n$\r$\n$ahkRepairRoot$\r$\n$\r$\nClose the manager first. Your profile, scripts, version history, and Windows startup settings will be preserved. Existing file ownership checks remain in effect." /SD IDNO IDYES ahkRepairApproved
+    SetErrorLevel 2
+    Quit
+    ahkRepairApproved:
+  ${EndIf}
+  ; Registry or path changes while confirmation was open invalidate consent.
+  !insertmacro validateUpdatedInstallation "repair"
+  ${If} $ahkUpdateRoot != $ahkRepairRoot
+    !insertmacro abortManualUpdate
+  ${EndIf}
+  SetErrorLevel 2
+  !insertmacro customCheckAppRunning
+  SetErrorLevel 0
+  !insertmacro traceInstaller "repair: delegate verified root=$ahkRepairRoot"
+  StrCpy $ahkRepairExitCode 2
+  ClearErrors
+  ; NSIS consumes the unquoted remainder after /D=. It must stay last.
+  ${If} ${Silent}
+    ExecWait '$\"$EXEPATH$\" /S --updated /D=$ahkRepairRoot' $ahkRepairExitCode
+  ${Else}
+    ExecWait '$\"$EXEPATH$\" --updated /D=$ahkRepairRoot' $ahkRepairExitCode
+  ${EndIf}
+  ${If} ${Errors}
+    !insertmacro traceInstaller "repair: child could not be started"
+    SetErrorLevel 2
+  ${Else}
+    !insertmacro traceInstaller "repair: child exit=$ahkRepairExitCode"
+    SetErrorLevel $ahkRepairExitCode
+  ${EndIf}
+  ; The parent must never enter cache, uninstall, or installation stages.
+  Quit
+!macroend
+
+; The assisted installer otherwise appends APP_FILENAME to a custom destination
+; after preInit, even when the --updated directory page has been skipped.
+!macro customPageAfterChangeDir
+  !ifdef MUI_PAGE_CUSTOMFUNCTION_PRE
+    !undef MUI_PAGE_CUSTOMFUNCTION_PRE
+  !endif
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE ahkInstallFilesPre
+  Function ahkInstallFilesPre
+    ${If} ${isUpdated}
+      !insertmacro validateUpdatedInstallation "installer"
+    ${Else}
+      !ifdef allowToChangeInstallationDirectory
+        Call instFilesPre
+      !endif
+    ${EndIf}
+  FunctionEnd
 !macroend
 
 !macro guardUninstallUpdate
@@ -335,6 +405,16 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
       !insertmacro traceInstaller "preInit: validate-update"
       !insertmacro validateUpdatedInstallation "installer"
     ${Else}
+      SetRegView 64
+      ReadRegStr $R0 HKCU "${INSTALL_REGISTRY_KEY}" "InstallLocation"
+      ${StdUtils.TestParameter} $R1 "repair"
+      ${If} $R0 == ""
+      ${AndIf} $R1 == "true"
+        !insertmacro abortManualUpdate
+      ${EndIf}
+      ${If} $R0 != ""
+        !insertmacro repairRegisteredInstallation
+      ${EndIf}
       !insertmacro traceInstaller "fresh-gate: HKCU64"
       SetRegView 64
       !insertmacro rejectRegisteredInstallation HKCU
@@ -373,7 +453,7 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
   nsProcess::_FindProcess "${APP_EXECUTABLE_FILENAME}"
   Pop $R0
   ${If} $R0 == 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Encerre o AHK Manager pela opção Sair antes de instalar ou remover. Os scripts AutoHotkey podem continuar em execução." /SD IDOK
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Use Exit to close AHK Manager before installing or uninstalling. AutoHotkey scripts may keep running." /SD IDOK
     Abort
   ${EndIf}
 !macroend
@@ -384,9 +464,9 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
   Pop $R2
   Pop $R3
   ${If} $R2 == 2
-    Abort "Este AHK Manager ainda possui uma tarefa de início com Windows. Abra o Manager como administrador, desative Iniciar com Windows nas Preferências, saia do Manager e execute a desinstalação novamente. Nenhum arquivo foi removido."
+    Abort "This AHK Manager installation still owns a Windows startup task. Open the manager as administrator, disable Start with Windows in Preferences, exit the manager, and run uninstall again. No files were removed."
   ${ElseIf} $R2 != 0
-    Abort "Não foi possível conferir a tarefa de início com Windows. Nenhum arquivo foi removido. Verifique o acesso ao Agendador de Tarefas antes de tentar novamente."
+    Abort "The Windows startup task could not be verified. No files were removed. Check access to Task Scheduler before trying again."
   ${EndIf}
 !macroend
 
@@ -399,7 +479,7 @@ LangString ahkManualUpdate 1046 "Esta instalação exige atualização manual ou
     ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Bezoro.AhkManager.WinUI"
     StrCpy $R1 '$\"$INSTDIR\Bezoro.AhkManager.exe$\" --login --background'
     ${If} $R0 == $R1
-      MessageBox MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION "Remover a entrada de inicialização deste AHK Manager? Seu perfil e seus scripts serão preservados." /SD IDNO IDNO preserveStartup
+      MessageBox MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION "Remove the startup entry for this AHK Manager installation? Your profile and scripts will be preserved." /SD IDNO IDNO preserveStartup
       ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Bezoro.AhkManager.WinUI"
       ${If} $R0 == $R1
         DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Bezoro.AhkManager.WinUI"
