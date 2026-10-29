@@ -9,7 +9,12 @@ export interface ReadableHotkey {
 type ModifierKind = keyof typeof text.modifiers;
 type Modifier = { kind: ModifierKind; side?: 'left' | 'right' };
 type Key = { label: string; token: string; coded: boolean };
-const modifierSymbols: Readonly<Record<string, ModifierKind>> = { '^': 'ctrl', '!': 'alt', '+': 'shift', '#': 'win' };
+const modifierSymbols: Readonly<Record<string, ModifierKind>> = {
+  '^': 'ctrl',
+  '!': 'alt',
+  '+': 'shift',
+  '#': 'win',
+};
 const modifierOrder: readonly ModifierKind[] = ['ctrl', 'alt', 'shift', 'win'];
 const mouseButtons = new Set(['lbutton', 'rbutton', 'mbutton', 'xbutton1', 'xbutton2']);
 
@@ -17,8 +22,10 @@ function readKey(token: string): Key | null {
   const normalized = token.toLowerCase();
   const known = Object.hasOwn(text.keys, normalized) ? text.keys[normalized] : undefined;
   if (known) return { label: known, token: normalized, coded: false };
-  if (/^f(?:[1-9]|1\d|2[0-4])$/i.test(token)) return { label: token.toUpperCase(), token: normalized, coded: false };
-  if (/^numpad\d$/i.test(token)) return { label: `${token.slice(-1)} (teclado numérico)`, token: normalized, coded: false };
+  if (/^f(?:[1-9]|1\d|2[0-4])$/i.test(token))
+    return { label: token.toUpperCase(), token: normalized, coded: false };
+  if (/^numpad\d$/i.test(token))
+    return { label: `${token.slice(-1)} (teclado numérico)`, token: normalized, coded: false };
   if (/^(?:vk[\da-f]{2}(?:sc[\da-f]{3})?|sc[\da-f]{3})$/i.test(token)) {
     return { label: token, token: normalized, coded: true };
   }
@@ -30,12 +37,17 @@ function readKey(token: string): Key | null {
 
 function keyAction(key: Key, release: boolean): string {
   if (release) return `solte ${key.label}`;
-  return Object.hasOwn(text.wheelActions, key.token) ? text.wheelActions[key.token]! : `pressione ${key.label}`;
+  return Object.hasOwn(text.wheelActions, key.token)
+    ? text.wheelActions[key.token]!
+    : `pressione ${key.label}`;
 }
 
 function modifierLabel(modifiers: readonly Modifier[]): string[] {
-  return modifierOrder.flatMap(kind => modifiers.filter(item => item.kind === kind).map(item =>
-    `${text.modifiers[kind]}${item.side ? ` ${text[item.side]}` : ''}`));
+  return modifierOrder.flatMap((kind) =>
+    modifiers
+      .filter((item) => item.kind === kind)
+      .map((item) => `${text.modifiers[kind]}${item.side ? ` ${text[item.side]}` : ''}`),
+  );
 }
 
 function manualModifiers(chord: string): { modifiers: Modifier[]; key: string } | null {
@@ -46,20 +58,31 @@ function manualModifiers(chord: string): { modifiers: Modifier[]; key: string } 
     const match = /^(l|r)?(ctrl|control|alt|shift|win)$/i.exec(part);
     if (!match) return null;
     const name = match[2]!.toLowerCase();
-    modifiers.push({ kind: name === 'control' ? 'ctrl' : name as ModifierKind,
-      ...(match[1] ? { side: match[1].toLowerCase() === 'l' ? 'left' as const : 'right' as const } : {}) });
+    modifiers.push({
+      kind: name === 'control' ? 'ctrl' : (name as ModifierKind),
+      ...(match[1]
+        ? { side: match[1].toLowerCase() === 'l' ? ('left' as const) : ('right' as const) }
+        : {}),
+    });
   }
   return { modifiers, key: parts.at(-1)! };
 }
 
 /** Translate declaration notation only; never inspect a handler, filename, or script body. */
-export function formatHotkey(input: { chord: string; declaredGesture?: 'DoubleClick' | null }): ReadableHotkey {
+export function formatHotkey(input: {
+  chord: string;
+  declaredGesture?: 'DoubleClick' | null;
+}): ReadableHotkey {
   const details = [text.raw + input.chord];
   let chord = input.chord.trim();
   const fallback = (): ReadableHotkey => {
     details.push(text.unknown);
     if (input.declaredGesture) details.push(text.invalidGesture);
-    return { label: input.chord || text.missing, instruction: input.chord ? `Atalho AHK: ${input.chord}. ${text.unknown}` : text.missing, details };
+    return {
+      label: input.chord || text.missing,
+      instruction: input.chord ? `Atalho AHK: ${input.chord}. ${text.unknown}` : text.missing,
+      details,
+    };
   };
   if (!chord) return fallback();
 
@@ -106,11 +129,30 @@ export function formatHotkey(input: { chord: string; declaredGesture?: 'DoubleCl
     }
   }
   // Repeated/general plus sided versions are ambiguous; preserve them verbatim.
-  if (modifiers.some((item, index) => modifiers.slice(0, index).some(previous =>
-    previous.kind === item.kind && (!previous.side || !item.side || previous.side === item.side)))) return fallback();
+  if (
+    modifiers.some((item, index) =>
+      modifiers
+        .slice(0, index)
+        .some(
+          (previous) =>
+            previous.kind === item.kind &&
+            (!previous.side || !item.side || previous.side === item.side),
+        ),
+    )
+  )
+    return fallback();
   let modifierLabels = modifierLabel(modifiers);
-  if (altGr) modifierLabels = [text.altGr, ...modifierLabel(modifiers.filter(item =>
-    !(item.kind === 'ctrl' && item.side === 'left') && !(item.kind === 'alt' && item.side === 'right')))];
+  if (altGr)
+    modifierLabels = [
+      text.altGr,
+      ...modifierLabel(
+        modifiers.filter(
+          (item) =>
+            !(item.kind === 'ctrl' && item.side === 'left') &&
+            !(item.kind === 'alt' && item.side === 'right'),
+        ),
+      ),
+    ];
 
   const combination = chord.split(/\s+&\s+/);
   if (combination.length > 1) {
@@ -124,8 +166,11 @@ export function formatHotkey(input: { chord: string; declaredGesture?: 'DoubleCl
       if (key.token === 'rbutton') details.push(text.secondary);
     }
     if (input.declaredGesture) details.push(text.invalidGesture);
-    return { label: `${held.label} → ${pressed.label}${release ? ' (ao soltar)' : ''}`,
-      instruction: `Mantenha ${held.label} pressionado e ${keyAction(pressed, release)}.`, details };
+    return {
+      label: `${held.label} → ${pressed.label}${release ? ' (ao soltar)' : ''}`,
+      instruction: `Mantenha ${held.label} pressionado e ${keyAction(pressed, release)}.`,
+      details,
+    };
   }
 
   const key = readKey(chord);
@@ -135,23 +180,36 @@ export function formatHotkey(input: { chord: string; declaredGesture?: 'DoubleCl
   if (key.token === 'rbutton') details.push(text.secondary);
   if (input.declaredGesture === 'DoubleClick' && mouseButtons.has(key.token)) {
     details.push(text.gesture);
-    return { label: [...modifierLabels, `${text.doubleClick} (${key.label.toLowerCase()})`].join(' + '),
-      instruction: `Clique duas vezes com ${key.label.toLowerCase()}${modifierLabels.length ? ` mantendo ${modifierLabels.join(' + ')} pressionado` : ''}.`, details };
+    return {
+      label: [...modifierLabels, `${text.doubleClick} (${key.label.toLowerCase()})`].join(' + '),
+      instruction: `Clique duas vezes com ${key.label.toLowerCase()}${modifierLabels.length ? ` mantendo ${modifierLabels.join(' + ')} pressionado` : ''}.`,
+      details,
+    };
   }
   if (input.declaredGesture) details.push(text.invalidGesture);
   const label = [...modifierLabels, key.label].join(' + ');
-  if (!release && !modifiers.length && !prefixes.has('~') && ['ctrl', 'control', 'alt', 'shift'].includes(key.token)) {
+  if (
+    !release &&
+    !modifiers.length &&
+    !prefixes.has('~') &&
+    ['ctrl', 'control', 'alt', 'shift'].includes(key.token)
+  ) {
     details.push(text.neutralModifier);
     return { label, instruction: `Pressione e solte ${key.label}.`, details };
   }
   if (Object.hasOwn(text.wheelActions, key.token) && !release) {
     const action = keyAction(key, false);
-    return { label, instruction: modifierLabels.length
-      ? `Mantenha ${modifierLabels.join(' + ')} pressionado e ${action}.`
-      : `${action[0]!.toUpperCase()}${action.slice(1)}.`, details };
+    return {
+      label,
+      instruction: modifierLabels.length
+        ? `Mantenha ${modifierLabels.join(' + ')} pressionado e ${action}.`
+        : `${action[0]!.toUpperCase()}${action.slice(1)}.`,
+      details,
+    };
   }
-  const instruction = release && modifierLabels.length
-    ? `Mantenha ${modifierLabels.join(' + ')} pressionado e solte ${key.label}.`
-    : `${release ? 'Solte' : 'Pressione'} ${label}.`;
+  const instruction =
+    release && modifierLabels.length
+      ? `Mantenha ${modifierLabels.join(' + ')} pressionado e solte ${key.label}.`
+      : `${release ? 'Solte' : 'Pressione'} ${label}.`;
   return { label: label + (release ? ' (ao soltar)' : ''), instruction, details };
 }

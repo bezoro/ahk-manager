@@ -1,54 +1,181 @@
 import type { ScriptOperation } from './contracts.js';
-const stopExitReasons:Record<string,string>={BatchBusy:'Outra saída com parada está em andamento.',ObservationUntrusted:'A observação ou a autoridade do backend não está confirmada.',ConfirmationTooLarge:'O escopo é grande demais para uma confirmação nativa completa. Nenhuma parada foi enviada.',ScopeOrAuthorityChanged:'O catálogo ou a autoridade mudou após a confirmação.',UnexpectedPlan:'O backend devolveu uma autorização diferente da parada esperada.',DiscardUnconfirmed:'O descarte da autorização não foi confirmado; nenhuma nova parada foi enviada com ela.',FinalStateNotStopped:'A observação final não confirmou todo o escopo parado.',NotDispatched:'Pedido de parada não enviado.',DeadlineExceeded:'A observação final excedeu o prazo de 30 segundos.'};
-const stopExitReason=(value:string)=>stopExitReasons[value]??value;
+const stopExitReasons: Record<string, string> = {
+  BatchBusy: 'Outra saída com parada está em andamento.',
+  ObservationUntrusted: 'A observação ou a autoridade do backend não está confirmada.',
+  ConfirmationTooLarge:
+    'O escopo é grande demais para uma confirmação nativa completa. Nenhuma parada foi enviada.',
+  ScopeOrAuthorityChanged: 'O catálogo ou a autoridade mudou após a confirmação.',
+  UnexpectedPlan: 'O backend devolveu uma autorização diferente da parada esperada.',
+  DiscardUnconfirmed:
+    'O descarte da autorização não foi confirmado; nenhuma nova parada foi enviada com ela.',
+  FinalStateNotStopped: 'A observação final não confirmou todo o escopo parado.',
+  NotDispatched: 'Pedido de parada não enviado.',
+  DeadlineExceeded: 'A observação final excedeu o prazo de 30 segundos.',
+};
+const stopExitReason = (value: string) => stopExitReasons[value] ?? value;
 /** Native host copy. Keep consent wording and dynamic target details together. */
-export const hostText={
-  title:'AHK Manager',cancel:'Cancelar',confirm:'Confirmar',unknownError:'Falha desconhecida.',
-  administrationTitle:'Reabrir como administrador?',administrationDetail:'O Windows solicitará sua confirmação. O gerenciador será reaberto com acesso de administrador somente após a transferência autenticada. Os scripts em execução serão preservados. A inicialização com o Windows continuará padrão.',
-  administrationPending:'A transferência de autoridade está pendente. Nenhuma operação será reenviada. Aguarde a confirmação ou verifique a transferência.',
-  administrationCliInvalid:'Use --request-administrator uma única vez, sem --login ou --background.',
-  loginResultTitle:'Confira o início dos scripts',
-  administrationSetupDeferred:'O Manager continuará no modo padrão nesta sessão. Você pode concluir a configuração pelo botão Reabrir como administrador.',
-  startupSetupIncomplete:'A preferência de inicialização foi salva, mas o Windows ainda não confirmou sua aplicação.',
-  continuationTitle:'Continuar o início dos scripts normais?',
-  continuationContinue:'Continuar com permissão do Windows',continuationLater:'Agora não',continuationMenu:'Continuar início dos scripts…',continuationCheck:'Consultar início dos scripts…',
-  continuationDetail:(names:readonly string[])=>`Um processo administrativo impede a verificação completa. O Windows pode solicitar sua confirmação para reabrir o Manager e conferir os processos antes de continuar. Somente os scripts normais abaixo, que ainda não receberam pedido de início, serão considerados; eles continuarão sem acesso de administrador. O início com Windows permanecerá padrão.\n\n${names.slice(0,24).join('\n')}${names.length>24?'\nConsulte a atividade para o escopo completo.':''}`,
-  adoptionInvalid:'A solicitação de continuação é inválida. Abra o Manager normalmente para verificar o estado. Nenhum início será repetido.',
-  loginFailure:(code:string)=>code==='ObservationIncomplete'?'O inventário de processos está incompleto. Os scripts foram preservados para evitar execuções duplicadas.':code==='PendingOperation'||code==='LaunchUncertain'?'Uma execução anterior ainda não foi confirmada. Os scripts afetados não foram iniciados novamente para evitar duplicação.':code==='StartupInactive'?'O início com Windows está inativo ou sua entrada precisa de revisão.':code==='ExternalStartupConflict'?'Não foi possível conferir outras configurações de início automático. Revise-as para evitar duplicação.':`O início não foi concluído (${code}). Consulte a atividade e os avisos dos scripts.`,
-  windowsPackagedRequired:'Execute a distribuição empacotada para Windows. Os testes usam dependências isoladas.',
-  invalidPath:'Caminho inválido.',wrongFileType:'A seleção não corresponde ao tipo esperado.',fileLimit:'Seleção excede o limite de arquivos.',
-  pickerTitles:{scripts:'Adicionar scripts AutoHotkey',locate:'Localizar script',folder:'Adicionar scripts de uma pasta',interpreter:'Selecionar AutoHotkey v2',editor:'Selecionar editor',import:'Selecionar catálogo legado',migration:'Selecionar perfil WinUI'},
-  deleteTitle:'Excluir arquivo?',
-  deleteDetail:(file:string,pid:number|null)=>`${file}\n\n${pid===null?'':`A execução verificada (PID ${pid}) será encerrada primeiro, sem encerramento à força.\n`}O arquivo será enviado à Lixeira e o registro será removido da lista. O Windows poderá pedir permissão de administrador. Se houver falha após a parada, o script permanecerá parado. Cancelar preserva o arquivo e o registro.`,
-  locateStartupTitle:'Manter a inicialização deste script?',
-  locateStartupDetail:(file:string)=>`${file}\n\nEste novo caminho manterá a preferência de execução no login. Esta confirmação não ativa a inicialização do gerenciador nem executa o script agora.`,
-  recycleUnknown:'O prazo terminou; a reciclagem pode estar em andamento. O arquivo pode já ter sido enviado à Lixeira. A exclusão não será repetida automaticamente.',
-  recycleFailed:'A reciclagem não foi confirmada. O registro foi preservado. Verifique o arquivo e a Lixeira.',
-  recycleStopped:'A execução foi encerrada e permanecerá parada. ',
-  fileFilters:{scripts:'Scripts AutoHotkey',catalog:'Catálogo JSON',applications:'Aplicativos'},
-  welcomeTitle:'Bem-vindo ao AHK Manager',welcomeQuestion:'Criar um perfil novo ou migrar um perfil WinUI?',welcomeDetail:'Os perfis anteriores e os scripts serão preservados. A migração apresenta uma prévia e exige confirmação antes de copiar os arquivos.',newProfile:'Criar perfil novo',chooseWinUiProfile:'Selecionar perfil WinUI',
-  tray:{open:'Abrir AHK Manager',hide:'Ocultar janela',show:'Mostrar janela',running:(count:number)=>`Scripts em execução (${count})`,noneRunning:'Nenhum script confirmado em execução',preferences:'Preferências',exit:'Sair mantendo os scripts',stopExit:'Parar scripts e sair…',cancelStopExit:'Cancelar parada e permanecer aberto',stopping:(done:number,total:number)=>`Parando scripts (${done}/${total})…`},
-  stopExitBusy:'A parada para sair está em andamento. Aguarde ou cancele pelo ícone da bandeja.',
-  stopExitTitle:'Parar os scripts do catálogo e sair?',
-  stopExitConsent:(items:readonly {name:string;path:string;pid:number|null;reason:string}[])=>`Escopo: os ${items.length} scripts deste catálogo, independentemente dos filtros. Somente as identidades verificadas abaixo poderão receber uma solicitação de parada. Instâncias não verificáveis, elevadas, alteradas ou com operações pendentes serão preservadas; nesse caso o gerenciador permanecerá aberto. Não haverá encerramento à força.\n\n${items.map(item=>`${item.name}\n${item.path}\nPID: ${item.pid??'—'} · ${item.reason==='None'?'já parado':item.reason==='NotDispatched'?'identidade verificada':item.reason}`).join('\n\n')}\n\nCancelar preserva todos os scripts. Cancelar durante a parada impede novos pedidos; scripts já parados não serão reiniciados.`,
-  stopExitPartialTitle:'O gerenciador continuará aberto',
-  stopExitPartial:(receipt:{confirmedStops:number;cancelled:boolean;expired:boolean;items:readonly {name:string;reason:string;outcome:string}[];problems:readonly string[]})=>`${receipt.confirmedStops} paradas confirmadas.${receipt.cancelled?' Operação cancelada.':''}${receipt.expired?' Prazo de despacho encerrado.':''}\nScripts já parados permanecerão parados. Nenhum processo foi encerrado à força. Os scripts listados abaixo não tiveram a parada confirmada. Você pode escolher separadamente “Sair mantendo os scripts”.\n\n${receipt.items.filter(item=>item.outcome==='untouched'||item.outcome==='unknown').slice(0,24).map(item=>`${item.name.slice(0,120)}: ${stopExitReason(item.reason).slice(0,240)}`).join('\n')}\n${receipt.problems.slice(0,8).map(value=>stopExitReason(value).slice(0,400)).join('\n')}`,
-  closing:'O gerenciador está encerrando.',documentChanged:'Documento substituído durante a operação. Consulte a atividade para o resultado.',shutdownUnconfirmed:'Encerramento não confirmado',
-  backendStillAlive:(pid:number|null)=>`O backend anterior (PID ${pid}) ainda não confirmou saída. Reinício bloqueado.`,
-  shutdownDeadline:(pid:number|null)=>`Prazo de 15 segundos excedido. Encerramento desconhecido do backend PID ${pid??'?'}. Verifique operations.json no perfil. Nenhum script ou processo foi encerrado à força.`,
-  backendClosed:(code:string|number|null)=>`Backend encerrado (${code??'unknown'}). Scripts em execução foram preservados.`,
-  backendChannelClosed:'A conexão com o gerenciador de processos foi encerrada. Os scripts em execução continuam independentes.',
-  dispatchedUnknown:(action:string,id:string)=>`O resultado da solicitação ${action} (${id}) não pôde ser confirmado. Ela não será repetida automaticamente.`,
-  backendShutdownUnknown:(pid:number|null)=>`Encerramento desconhecido; backend PID ${pid}. Nenhum processo foi encerrado à força.`,
-  backendUnavailable:'Backend indisponível. Nenhuma operação foi reenviada.',queueFull:'A fila de operações está cheia.',documentClosed:'Documento encerrado antes do envio.',
-  removeTitle:'Remover da lista?',removeDetail:(name:string,file:string)=>`${name}\n${file}\n\nO arquivo e o processo em execução serão preservados.`,
-  scriptStartupTitle:'Executar este script após o login?',scriptStartupDetail:(name:string,file:string)=>`${name}\n${file}\n\nA preferência será aplicada ao entrar no Windows pelo AHK Manager.`,
-  removeCollectionTitle:'Remover coleção?',removeCollectionDetail:(name:string)=>`${name}\n\nOs scripts e arquivos serão preservados.`,
-  operationTitle:'Confirmar operação',operationDetail:(action:string,name:string,file:string,pid:number|null)=>`${action}\n${name}\n${file}${pid===null?'':`\nPID: ${pid}`}`,
-  operations:{Start:'Iniciar script',Stop:'Solicitar encerramento do script',Restart:'Reiniciar script',TogglePause:'Alternar pausa',ToggleSuspend:'Alternar suspensão dos atalhos',Edit:'Abrir script no editor',OpenFolder:'Abrir pasta do script',Recover:'Recuperar observação',RecycleFile:'Excluir arquivo'} satisfies Record<ScriptOperation,string>,
-  selectExecutable:'Selecione o executável pelo seletor do Windows.',managerStartupTitle:'Iniciar o AHK Manager com o Windows?',managerStartupDetail:'O Manager iniciará no login deste usuário. O modo administrativo usa uma tarefa agendada e pode solicitar a permissão do Windows; o modo padrão usa uma entrada de inicialização por usuário.',
-  previewsFull:'Muitas prévias pendentes.',importTitle:'Importar catálogo?',importDetail:(source:string,count:number)=>`${source}\n${count} scripts\n\nO arquivo de origem será preservado.`,
-  migrationTitle:'Migrar perfil WinUI?',migrationDetail:(source:string,count:number,pending:number)=>`${source}\n${count} arquivos; ${pending} operações pendentes.\n\nSerá guardado um backup exato no novo perfil. A origem e os scripts serão preservados. Nenhuma entrada de inicialização será transferida nesta etapa.`,
-  transferTitle:'Transferir inicialização do WinUI?',transferDetail:(oldPath:string|null,newPath:string)=>`Origem: ${oldPath}\nDestino: ${newPath}\n\nSomente a entrada existente verificada será transferida. Nenhuma entrada duplicada será criada.`,
-  restoreTitle:'Restaurar backup?',restoreDetail:'O backend verificará o backup e a revisão antes de substituir as configurações. Os scripts no disco serão preservados.',
+export const hostText = {
+  title: 'AHK Manager',
+  cancel: 'Cancelar',
+  confirm: 'Confirmar',
+  unknownError: 'Falha desconhecida.',
+  administrationTitle: 'Reabrir como administrador?',
+  administrationDetail:
+    'O Windows solicitará sua confirmação. O gerenciador será reaberto com acesso de administrador somente após a transferência autenticada. Os scripts em execução serão preservados. A inicialização com o Windows continuará padrão.',
+  administrationPending:
+    'A transferência de autoridade está pendente. Nenhuma operação será reenviada. Aguarde a confirmação ou verifique a transferência.',
+  administrationCliInvalid:
+    'Use --request-administrator uma única vez, sem --login ou --background.',
+  loginResultTitle: 'Confira o início dos scripts',
+  administrationSetupDeferred:
+    'O Manager continuará no modo padrão nesta sessão. Você pode concluir a configuração pelo botão Reabrir como administrador.',
+  startupSetupIncomplete:
+    'A preferência de inicialização foi salva, mas o Windows ainda não confirmou sua aplicação.',
+  continuationTitle: 'Continuar o início dos scripts normais?',
+  continuationContinue: 'Continuar com permissão do Windows',
+  continuationLater: 'Agora não',
+  continuationMenu: 'Continuar início dos scripts…',
+  continuationCheck: 'Consultar início dos scripts…',
+  continuationDetail: (names: readonly string[]) =>
+    `Um processo administrativo impede a verificação completa. O Windows pode solicitar sua confirmação para reabrir o Manager e conferir os processos antes de continuar. Somente os scripts normais abaixo, que ainda não receberam pedido de início, serão considerados; eles continuarão sem acesso de administrador. O início com Windows permanecerá padrão.\n\n${names.slice(0, 24).join('\n')}${names.length > 24 ? '\nConsulte a atividade para o escopo completo.' : ''}`,
+  adoptionInvalid:
+    'A solicitação de continuação é inválida. Abra o Manager normalmente para verificar o estado. Nenhum início será repetido.',
+  loginFailure: (code: string) =>
+    code === 'ObservationIncomplete'
+      ? 'O inventário de processos está incompleto. Os scripts foram preservados para evitar execuções duplicadas.'
+      : code === 'PendingOperation' || code === 'LaunchUncertain'
+        ? 'Uma execução anterior ainda não foi confirmada. Os scripts afetados não foram iniciados novamente para evitar duplicação.'
+        : code === 'StartupInactive'
+          ? 'O início com Windows está inativo ou sua entrada precisa de revisão.'
+          : code === 'ExternalStartupConflict'
+            ? 'Não foi possível conferir outras configurações de início automático. Revise-as para evitar duplicação.'
+            : `O início não foi concluído (${code}). Consulte a atividade e os avisos dos scripts.`,
+  windowsPackagedRequired:
+    'Execute a distribuição empacotada para Windows. Os testes usam dependências isoladas.',
+  invalidPath: 'Caminho inválido.',
+  wrongFileType: 'A seleção não corresponde ao tipo esperado.',
+  fileLimit: 'Seleção excede o limite de arquivos.',
+  pickerTitles: {
+    scripts: 'Adicionar scripts AutoHotkey',
+    locate: 'Localizar script',
+    folder: 'Adicionar scripts de uma pasta',
+    interpreter: 'Selecionar AutoHotkey v2',
+    editor: 'Selecionar editor',
+    import: 'Selecionar catálogo legado',
+    migration: 'Selecionar perfil WinUI',
+  },
+  deleteTitle: 'Excluir arquivo?',
+  deleteDetail: (file: string, pid: number | null) =>
+    `${file}\n\n${pid === null ? '' : `A execução verificada (PID ${pid}) será encerrada primeiro, sem encerramento à força.\n`}O arquivo será enviado à Lixeira e o registro será removido da lista. O Windows poderá pedir permissão de administrador. Se houver falha após a parada, o script permanecerá parado. Cancelar preserva o arquivo e o registro.`,
+  locateStartupTitle: 'Manter a inicialização deste script?',
+  locateStartupDetail: (file: string) =>
+    `${file}\n\nEste novo caminho manterá a preferência de execução no login. Esta confirmação não ativa a inicialização do gerenciador nem executa o script agora.`,
+  recycleUnknown:
+    'O prazo terminou; a reciclagem pode estar em andamento. O arquivo pode já ter sido enviado à Lixeira. A exclusão não será repetida automaticamente.',
+  recycleFailed:
+    'A reciclagem não foi confirmada. O registro foi preservado. Verifique o arquivo e a Lixeira.',
+  recycleStopped: 'A execução foi encerrada e permanecerá parada. ',
+  fileFilters: {
+    scripts: 'Scripts AutoHotkey',
+    catalog: 'Catálogo JSON',
+    applications: 'Aplicativos',
+  },
+  welcomeTitle: 'Bem-vindo ao AHK Manager',
+  welcomeQuestion: 'Criar um perfil novo ou migrar um perfil WinUI?',
+  welcomeDetail:
+    'Os perfis anteriores e os scripts serão preservados. A migração apresenta uma prévia e exige confirmação antes de copiar os arquivos.',
+  newProfile: 'Criar perfil novo',
+  chooseWinUiProfile: 'Selecionar perfil WinUI',
+  tray: {
+    open: 'Abrir AHK Manager',
+    hide: 'Ocultar janela',
+    show: 'Mostrar janela',
+    running: (count: number) => `Scripts em execução (${count})`,
+    noneRunning: 'Nenhum script confirmado em execução',
+    preferences: 'Preferências',
+    exit: 'Sair mantendo os scripts',
+    stopExit: 'Parar scripts e sair…',
+    cancelStopExit: 'Cancelar parada e permanecer aberto',
+    stopping: (done: number, total: number) => `Parando scripts (${done}/${total})…`,
+  },
+  stopExitBusy: 'A parada para sair está em andamento. Aguarde ou cancele pelo ícone da bandeja.',
+  stopExitTitle: 'Parar os scripts do catálogo e sair?',
+  stopExitConsent: (
+    items: readonly { name: string; path: string; pid: number | null; reason: string }[],
+  ) =>
+    `Escopo: os ${items.length} scripts deste catálogo, independentemente dos filtros. Somente as identidades verificadas abaixo poderão receber uma solicitação de parada. Instâncias não verificáveis, elevadas, alteradas ou com operações pendentes serão preservadas; nesse caso o gerenciador permanecerá aberto. Não haverá encerramento à força.\n\n${items.map((item) => `${item.name}\n${item.path}\nPID: ${item.pid ?? '—'} · ${item.reason === 'None' ? 'já parado' : item.reason === 'NotDispatched' ? 'identidade verificada' : item.reason}`).join('\n\n')}\n\nCancelar preserva todos os scripts. Cancelar durante a parada impede novos pedidos; scripts já parados não serão reiniciados.`,
+  stopExitPartialTitle: 'O gerenciador continuará aberto',
+  stopExitPartial: (receipt: {
+    confirmedStops: number;
+    cancelled: boolean;
+    expired: boolean;
+    items: readonly { name: string; reason: string; outcome: string }[];
+    problems: readonly string[];
+  }) =>
+    `${receipt.confirmedStops} paradas confirmadas.${receipt.cancelled ? ' Operação cancelada.' : ''}${receipt.expired ? ' Prazo de despacho encerrado.' : ''}\nScripts já parados permanecerão parados. Nenhum processo foi encerrado à força. Os scripts listados abaixo não tiveram a parada confirmada. Você pode escolher separadamente “Sair mantendo os scripts”.\n\n${receipt.items
+      .filter((item) => item.outcome === 'untouched' || item.outcome === 'unknown')
+      .slice(0, 24)
+      .map((item) => `${item.name.slice(0, 120)}: ${stopExitReason(item.reason).slice(0, 240)}`)
+      .join('\n')}\n${receipt.problems
+      .slice(0, 8)
+      .map((value) => stopExitReason(value).slice(0, 400))
+      .join('\n')}`,
+  closing: 'O gerenciador está encerrando.',
+  documentChanged:
+    'Documento substituído durante a operação. Consulte a atividade para o resultado.',
+  shutdownUnconfirmed: 'Encerramento não confirmado',
+  backendStillAlive: (pid: number | null) =>
+    `O backend anterior (PID ${pid}) ainda não confirmou saída. Reinício bloqueado.`,
+  shutdownDeadline: (pid: number | null) =>
+    `Prazo de 15 segundos excedido. Encerramento desconhecido do backend PID ${pid ?? '?'}. Verifique operations.json no perfil. Nenhum script ou processo foi encerrado à força.`,
+  backendClosed: (code: string | number | null) =>
+    `Backend encerrado (${code ?? 'unknown'}). Scripts em execução foram preservados.`,
+  backendChannelClosed:
+    'A conexão com o gerenciador de processos foi encerrada. Os scripts em execução continuam independentes.',
+  dispatchedUnknown: (action: string, id: string) =>
+    `O resultado da solicitação ${action} (${id}) não pôde ser confirmado. Ela não será repetida automaticamente.`,
+  backendShutdownUnknown: (pid: number | null) =>
+    `Encerramento desconhecido; backend PID ${pid}. Nenhum processo foi encerrado à força.`,
+  backendUnavailable: 'Backend indisponível. Nenhuma operação foi reenviada.',
+  queueFull: 'A fila de operações está cheia.',
+  documentClosed: 'Documento encerrado antes do envio.',
+  removeTitle: 'Remover da lista?',
+  removeDetail: (name: string, file: string) =>
+    `${name}\n${file}\n\nO arquivo e o processo em execução serão preservados.`,
+  scriptStartupTitle: 'Executar este script após o login?',
+  scriptStartupDetail: (name: string, file: string) =>
+    `${name}\n${file}\n\nA preferência será aplicada ao entrar no Windows pelo AHK Manager.`,
+  removeCollectionTitle: 'Remover coleção?',
+  removeCollectionDetail: (name: string) => `${name}\n\nOs scripts e arquivos serão preservados.`,
+  operationTitle: 'Confirmar operação',
+  operationDetail: (action: string, name: string, file: string, pid: number | null) =>
+    `${action}\n${name}\n${file}${pid === null ? '' : `\nPID: ${pid}`}`,
+  operations: {
+    Start: 'Iniciar script',
+    Stop: 'Solicitar encerramento do script',
+    Restart: 'Reiniciar script',
+    TogglePause: 'Alternar pausa',
+    ToggleSuspend: 'Alternar suspensão dos atalhos',
+    Edit: 'Abrir script no editor',
+    OpenFolder: 'Abrir pasta do script',
+    Recover: 'Recuperar observação',
+    RecycleFile: 'Excluir arquivo',
+  } satisfies Record<ScriptOperation, string>,
+  selectExecutable: 'Selecione o executável pelo seletor do Windows.',
+  managerStartupTitle: 'Iniciar o AHK Manager com o Windows?',
+  managerStartupDetail:
+    'O Manager iniciará no login deste usuário. O modo administrativo usa uma tarefa agendada e pode solicitar a permissão do Windows; o modo padrão usa uma entrada de inicialização por usuário.',
+  previewsFull: 'Muitas prévias pendentes.',
+  importTitle: 'Importar catálogo?',
+  importDetail: (source: string, count: number) =>
+    `${source}\n${count} scripts\n\nO arquivo de origem será preservado.`,
+  migrationTitle: 'Migrar perfil WinUI?',
+  migrationDetail: (source: string, count: number, pending: number) =>
+    `${source}\n${count} arquivos; ${pending} operações pendentes.\n\nSerá guardado um backup exato no novo perfil. A origem e os scripts serão preservados. Nenhuma entrada de inicialização será transferida nesta etapa.`,
+  transferTitle: 'Transferir inicialização do WinUI?',
+  transferDetail: (oldPath: string | null, newPath: string) =>
+    `Origem: ${oldPath}\nDestino: ${newPath}\n\nSomente a entrada existente verificada será transferida. Nenhuma entrada duplicada será criada.`,
+  restoreTitle: 'Restaurar backup?',
+  restoreDetail:
+    'O backend verificará o backup e a revisão antes de substituir as configurações. Os scripts no disco serão preservados.',
 } as const;
