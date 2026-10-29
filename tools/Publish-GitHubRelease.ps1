@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Release-Limits.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Release-GitTags.psm1') -Force -DisableNameChecking
 if (-not [IO.Path]::IsPathFullyQualified($InstallerPath) -or -not [IO.Path]::IsPathFullyQualified($ManifestPath)) { throw 'Release paths must be absolute.' }
 if ([IO.Path]::GetFileName($ManifestPath) -cne 'ahk-manager-release.json') { throw 'Unexpected release manifest name.' }
 $manifestFile = Get-Item -LiteralPath $ManifestPath
@@ -50,6 +51,13 @@ if ($ValidateOnly) { Write-Host "Release $($manifest.version) validated; no netw
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_REF -ne 'refs/heads/main' -or $env:GITHUB_REPOSITORY -cne $Repository -or $env:GITHUB_SHA -cne $Commit) { throw 'Publication requires the approved main-branch GitHub Actions job.' }
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'The release job token is missing.' }
 $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'Bezoro-AhkManager-Release' }
+$invoke = Get-Command Invoke-RestMethod
+$request = {
+    param($Method, $Uri, $Body)
+    $parameters = @{ Method = $Method; Uri = $Uri; Headers = $headers }
+    if ($null -ne $Body) { $parameters.ContentType = 'application/json'; $parameters.Body = $Body }
+    & $invoke @parameters
+}.GetNewClosure()
 $base = "https://api.github.com/repos/$Repository/releases"
 $tag = 'v' + $manifest.version
 $release = $null
@@ -62,8 +70,14 @@ if ($null -ne $release) {
     # Published releases are never patched, replaced, deleted or re-uploaded.
     if ($release.target_commitish -cne $Commit -or $release.tag_name -cne $tag) { throw 'Existing draft belongs to a different commit.' }
     $alreadyPublished = -not $release.draft
+    if ($alreadyPublished) {
+        $actual = Get-ReleaseGitTagCommit -Repository $Repository -TagName $tag -Request $request
+        if ($null -eq $actual -or $actual -cne $Commit) { throw 'The published release tag no longer identifies the approved commit.' }
+    }
+    else { $null = Ensure-ReleaseGitTag -Repository $Repository -TagName $tag -Commit $Commit -Request $request }
 }
 else {
+    $null = Ensure-ReleaseGitTag -Repository $Repository -TagName $tag -Commit $Commit -Request $request
     $body = @{ tag_name = $tag; target_commitish = $Commit; name = "AHK Manager $($manifest.version)"; body = $manifest.notes; draft = $true; prerelease = $false; make_latest = 'false' } | ConvertTo-Json
     $release = Invoke-RestMethod -Method Post -Uri $base -Headers $headers -ContentType 'application/json' -Body $body
 }
@@ -81,12 +95,16 @@ foreach ($file in @($installer, $manifestFile)) {
     $asset = Invoke-RestMethod -Method Post -Uri $upload -Headers $headers -ContentType $contentType -InFile $file.FullName
     if ($asset.name -cne $file.Name -or $asset.size -ne $file.Length -or $asset.state -cne 'uploaded') { throw 'GitHub did not confirm the complete asset upload; the release remains a draft.' }
 }
+$actual = Get-ReleaseGitTagCommit -Repository $Repository -TagName $tag -Request $request
+if ($null -eq $actual -or $actual -cne $Commit) { throw 'The release tag changed before publication; no release will be published.' }
 if ($alreadyPublished) { Write-Host "Release $tag is already published with identical assets; no changes were made."; return }
 $release = Invoke-RestMethod -Uri "$base/$($release.id)" -Headers $headers
 foreach ($name in @($installer.Name, $manifestFile.Name)) {
     if (@($release.assets | Where-Object { $_.name -ceq $name -and $_.state -ceq 'uploaded' }).Count -ne 1) { throw 'The release is missing an uploaded asset and remains a draft.' }
 }
 if (-not $release.draft) { Write-Host "Release $tag was published concurrently; verified assets were preserved without further changes."; return }
-$published = Invoke-RestMethod -Method Patch -Uri "$base/$($release.id)" -Headers $headers -ContentType 'application/json' -Body (@{ draft = $false; make_latest = 'true' } | ConvertTo-Json)
+$actual = Get-ReleaseGitTagCommit -Repository $Repository -TagName $tag -Request $request
+if ($null -eq $actual -or $actual -cne $Commit) { throw 'The release tag changed before publication; the release remains a draft.' }
+$published = Invoke-RestMethod -Method Patch -Uri "$base/$($release.id)" -Headers $headers -ContentType 'application/json' -Body (@{ draft = $false; make_latest = 'legacy' } | ConvertTo-Json)
 if ($published.draft) { throw 'GitHub did not confirm release publication.' }
 Write-Host "Published $($published.html_url) with its manifest and installer."

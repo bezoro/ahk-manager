@@ -1,6 +1,8 @@
 # Atualizações do AHK Manager
 
-O aplicativo oferece apenas versões publicadas depois de uma execução bem-sucedida da CI em `main`. Cada push aprovado gera `1.2.<run_number>` e uma Release com tag própria. As versões anteriores não são sobrescritas. O aplicativo verifica as versões ao abrir e a cada 15 minutos; baixar e instalar exigem uma ação do usuário.
+O aplicativo oferece apenas versões publicadas depois de uma execução bem-sucedida da CI em `main`. Cada push aprovado gera uma Release estável com tag `vX.Y.Z`, calculada pelos Conventional Commits desde a maior tag ancestral. `feat` incrementa a minor; `fix`, refatorações e demais mudanças incrementam o patch. `!` ou `BREAKING CHANGE` incrementa a major. As versões anteriores não são sobrescritas. O aplicativo verifica as versões ao abrir e a cada 15 minutos; baixar e instalar exigem uma ação do usuário.
+
+Reexecutar a CI de um commit já marcado reutiliza sua versão. A publicação reconhece uma Release já concluída do mesmo commit e preserva seus assets. Tags pertencentes a outro commit interrompem a publicação. O número da execução da CI não faz parte da versão. As notas vêm dos commits, em texto simples para leitura no histórico do aplicativo.
 
 ## Uso
 

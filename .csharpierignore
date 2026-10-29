@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/artifacts/
+**/TestResults/
+**/*.generated.cs
+App/
+Presentation.WinUI/
+Presentation.Wpf/
+Tests/
+Tests.WinUI/
+Tests.WpfUI/
+Assets/
+tools/safe-tests/

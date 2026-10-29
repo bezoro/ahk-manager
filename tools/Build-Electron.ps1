@@ -12,7 +12,6 @@ $stageRoot = [IO.Path]::GetFullPath($OutputRoot)
 if (Test-Path -LiteralPath $stageRoot) { throw 'Use a fresh output directory.' }
 New-Item -ItemType Directory -Path $stageRoot | Out-Null
 $frontend = Join-Path $repoRoot 'Presentation.Electron'
-if (-not $ReleaseVersion) { $ReleaseVersion = (Get-Content -LiteralPath (Join-Path $frontend 'package.json') -Raw | ConvertFrom-Json).version }
 if (-not $SourceCommit) {
     $SourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Source commit is unavailable.' }
@@ -25,6 +24,13 @@ Push-Location -LiteralPath $frontend
 try {
     & $NpmPath ci --ignore-scripts
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed: $LASTEXITCODE" }
+    if (-not $ReleaseVersion) {
+        $identityJson = & node.exe 'scripts/compute-release.cjs' --json --sha $SourceCommit
+        if ($LASTEXITCODE -ne 0) { throw 'Release identity is unavailable. Fetch Git tags or supply -ReleaseVersion explicitly.' }
+        $ReleaseVersion = ($identityJson | ConvertFrom-Json).version
+        if (-not $ReleaseVersion) { throw 'The release identity did not contain a version.' }
+        $env:AHK_RELEASE_VERSION = $ReleaseVersion
+    }
     & node.exe 'node_modules/electron/install.js'
     if ($LASTEXITCODE -ne 0) { throw "Electron runtime download failed: $LASTEXITCODE" }
     & $NpmPath run typecheck
