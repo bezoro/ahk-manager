@@ -287,8 +287,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                                 || currentTask is not null && currentTask != originalTask
                             )
                                 return false;
-                            bool restoredTask = currentTask is null;
-                            if (restoredTask)
+                            if (currentTask is null)
                             {
                                 if (!tasks!.CompareExchangeTask(null, originalTask))
                                     return false;
@@ -299,29 +298,15 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                                 )
                                     return false;
                             }
-                            try
-                            {
-                                if (
-                                    (
-                                        currentEntry == originalEntry
-                                        || adapter.CompareExchangeEntry(null, originalEntry)
-                                    )
-                                    && adapter.ReadEntry() == originalEntry
-                                    && tasks!.ReadTask() == currentTask
+                            // Creation and observation are separate Scheduler operations. A
+                            // later task read cannot authorize deleting a concurrent replacement
+                            // if restoring the Run entry fails; leave it available for recovery.
+                            return (
+                                    currentEntry == originalEntry
+                                    || adapter.CompareExchangeEntry(null, originalEntry)
                                 )
-                                    return true;
-                            }
-                            catch (Exception rollback) when (RegistrationException(rollback))
-                            {
-                                // Remove only the task this rollback just recreated, still
-                                // bound to its newly observed identity. A concurrent entry wins.
-                                if (restoredTask)
-                                    tasks!.CompareExchangeTask(currentTask, null);
-                                return false;
-                            }
-                            if (restoredTask)
-                                tasks!.CompareExchangeTask(currentTask, null);
-                            return false;
+                                && adapter.ReadEntry() == originalEntry
+                                && tasks!.ReadTask() == currentTask;
                         }
                         else if (originalEntry is null && originalTask is null)
                             return currentEntry is null && currentTask is null;

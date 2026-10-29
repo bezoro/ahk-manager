@@ -231,9 +231,37 @@ internal static class StartupRelocationChecks
         check(
             entryRestoreRace.Outcome == Outcome.Partial
                 && adapter.Entry == "another product command"
-                && adapter.Task is null,
-            "dual rollback preserves a concurrent Run entry and removes only its own newly restored task"
+                && adapter.Task == original,
+            "dual rollback preserves a concurrent Run entry and leaves the observed task available for recovery"
         );
+        var changedXml = XDocument.Parse(WindowsStartupTaskStore.Xml(original));
+        changedXml
+            .Root!.Element(ns + "RegistrationInfo")!
+            .Add(new XElement(ns + "Description", "Concurrent task definition"));
+        var changedTask = WindowsStartupTaskStore.Parse(changedXml.ToString());
+        check(
+            changedTask.Fingerprint != original.Fingerprint
+                && changedTask with { Fingerprint = original.Fingerprint } == original,
+            "concurrent XML changes can retain the same projected startup definition"
+        );
+        foreach (bool throws in new[] { false, true })
+        {
+            adapter.Reset(original);
+            adapter.Entry = previous.Command;
+            adapter.FailNextTaskCreation = true;
+            adapter.ReplaceAfterCreationBeforeRead = changedTask;
+            adapter.FailNextEntryCreation = throws;
+            if (!throws)
+                adapter.ReplaceBeforeEntryCreation = "another product command";
+            var changedTaskRace = await current.SetEnabledAsync(true, true, true);
+            check(
+                changedTaskRace.Outcome == Outcome.Partial
+                    && adapter.Task == changedTask
+                    && adapter.Expected.Count == 1
+                    && adapter.Expected[0] == original,
+                "failed Run rollback never deletes task XML replaced between creation and observation"
+            );
+        }
         adapter.Reset(original);
         adapter.Entry = previous.Command;
         adapter.FailNextEntryCreation = true;
@@ -269,7 +297,9 @@ internal static class StartupRelocationChecks
         public string? Entry;
         public StartupTaskRegistration? Task;
         public StartupTaskRegistration? ReplaceBeforeRemoval,
-            ReplaceBeforeCreation;
+            ReplaceBeforeCreation,
+            ReplaceAfterCreationBeforeRead;
+        StartupTaskRegistration? pendingTaskRead;
         public string? ReplaceBeforeEntryCreation;
         public readonly List<StartupTaskRegistration> Expected = [];
         public bool FailNextTaskCreation,
@@ -281,7 +311,8 @@ internal static class StartupRelocationChecks
         {
             Task = task;
             Entry = null;
-            ReplaceBeforeRemoval = ReplaceBeforeCreation = null;
+            ReplaceBeforeRemoval = ReplaceBeforeCreation = ReplaceAfterCreationBeforeRead = null;
+            pendingTaskRead = null;
             ReplaceBeforeEntryCreation = null;
             FailNextTaskCreation = FailNextEntryCreation = DuplicateObserved = false;
             Expected.Clear();
@@ -290,7 +321,15 @@ internal static class StartupRelocationChecks
 
         public string? ReadEntry() => Entry;
 
-        public StartupTaskRegistration? ReadTask() => Task;
+        public StartupTaskRegistration? ReadTask()
+        {
+            if (pendingTaskRead is { } replacement)
+            {
+                Task = replacement;
+                pendingTaskRead = null;
+            }
+            return Task;
+        }
 
         public bool CompareExchangeEntry(string? expected, string? replacement)
         {
@@ -345,6 +384,11 @@ internal static class StartupRelocationChecks
             if (Task != expected)
                 return false;
             Task = replacement;
+            if (expected is null && replacement is not null)
+            {
+                pendingTaskRead = ReplaceAfterCreationBeforeRead;
+                ReplaceAfterCreationBeforeRead = null;
+            }
             Writes++;
             DuplicateObserved |= Entry is not null && Task is not null;
             return true;

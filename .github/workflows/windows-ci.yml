@@ -416,6 +416,7 @@ jobs:
             TargetInstaller = $installers[0].FullName
             OutputRoot = Join-Path $env:RUNNER_TEMP 'installed-updater-evidence'
             ExpectedOutcome = 'Installed'
+            TimeoutSeconds = 300
           }
           if ($env:TEST_CLIENT -ceq 'candidate') {
             $parameters.BaselineInstaller = $installers[0].FullName

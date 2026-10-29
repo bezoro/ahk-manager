@@ -2,13 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace AhkManager.TestSupport;
 
 public static class InstalledUpdaterUi
 {
+    static readonly object accessibilityGate = new();
+    static readonly Dictionary<string, Task<string>> accessibilityReads = new();
+
     sealed class OutputCapture : IDisposable
     {
         readonly Process process;
@@ -111,6 +116,23 @@ public static class InstalledUpdaterUi
     [DllImport("user32.dll")]
     static extern bool ShowWindowAsync(IntPtr window, int command);
 
+    [DllImport("oleacc.dll")]
+    static extern int AccessibleObjectFromWindow(
+        IntPtr window,
+        uint objectId,
+        ref Guid interfaceId,
+        [MarshalAs(UnmanagedType.Interface)] out object accessible
+    );
+
+    [DllImport("oleacc.dll")]
+    static extern int AccessibleChildren(
+        IntPtr accessible,
+        int first,
+        int count,
+        [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 2)] object[] children,
+        out int obtained
+    );
+
     static string Text(IntPtr window)
     {
         var text = new StringBuilder(4096);
@@ -123,6 +145,161 @@ public static class InstalledUpdaterUi
         var text = new StringBuilder(256);
         GetClassName(window, text, text.Capacity);
         return text.ToString();
+    }
+
+    static object AccessibleProperty(
+        object accessible,
+        string property,
+        params object[] arguments
+    ) =>
+        accessible
+            .GetType()
+            .InvokeMember(property, BindingFlags.GetProperty, null, accessible, arguments);
+
+    static int Children(object accessible, object[] children, out int obtained)
+    {
+        obtained = 0;
+        IntPtr unknown = Marshal.GetIUnknownForObject(accessible);
+        IntPtr dispatch = IntPtr.Zero;
+        try
+        {
+            var interfaceId = new Guid("618736e0-3c3d-11cf-810c-00aa00389b71");
+            int result = Marshal.QueryInterface(unknown, in interfaceId, out dispatch);
+            return result < 0
+                ? result
+                : AccessibleChildren(dispatch, 0, children.Length, children, out obtained);
+        }
+        finally
+        {
+            if (dispatch != IntPtr.Zero)
+                Marshal.Release(dispatch);
+            Marshal.Release(unknown);
+        }
+    }
+
+    static string ReadAccessibleText(IntPtr window, int pid, string executable, DateTime started)
+    {
+        if (!Owned(window, pid, executable, started))
+            return "";
+        // IAccessible inherits IDispatch. Late-bound property reads use MSAA
+        // without requiring Windows Desktop assemblies in the fixture runtime.
+        var interfaceId = new Guid("618736e0-3c3d-11cf-810c-00aa00389b71");
+        if (AccessibleObjectFromWindow(window, 0xFFFFFFFC, ref interfaceId, out var root) < 0)
+            return "";
+        var text = new StringBuilder();
+        int visited = 0;
+
+        void Name(object accessible, object child)
+        {
+            foreach (string property in new[] { "accName", "accDescription", "accValue" })
+                try
+                {
+                    if (
+                        text.Length < 16384
+                        && AccessibleProperty(accessible, property, child) is string value
+                    )
+                    {
+                        text.Append('\n');
+                        text.Append(value.AsSpan(0, Math.Min(value.Length, 16384 - text.Length)));
+                    }
+                }
+                catch (Exception) { }
+        }
+
+        void Visit(object accessible, int depth)
+        {
+            if (++visited > 128 || depth > 8 || text.Length >= 16384)
+                return;
+            Name(accessible, 0);
+            int count;
+            try
+            {
+                count = Math.Clamp(
+                    Convert.ToInt32(AccessibleProperty(accessible, "accChildCount")),
+                    0,
+                    128 - visited
+                );
+            }
+            catch (Exception)
+            {
+                return;
+            }
+            if (count == 0)
+                return;
+            var children = new object[count];
+            if (Children(accessible, children, out int obtained) < 0)
+                return;
+            for (int index = 0; index < Math.Min(obtained, count); index++)
+            {
+                if (text.Length >= 16384 || visited >= 128)
+                    break;
+                if (children[index] is int child)
+                {
+                    visited++;
+                    Name(accessible, child);
+                }
+                else if (children[index] is { } descendant)
+                    Visit(descendant, depth + 1);
+            }
+        }
+
+        try
+        {
+            Visit(root, 0);
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+        return Owned(window, pid, executable, started) ? text.ToString() : "";
+    }
+
+    static string AccessibleText(IntPtr window, int pid, string executable, DateTime started)
+    {
+        string key = $"{pid}:{started.Ticks}:{window.ToInt64()}";
+        Task<string> reading;
+        bool created = false;
+        lock (accessibilityGate)
+        {
+            var completed = new List<string>();
+            foreach (var entry in accessibilityReads)
+                if (entry.Value.IsCompleted)
+                    completed.Add(entry.Key);
+            foreach (string previous in completed)
+                accessibilityReads.Remove(previous);
+            if (!accessibilityReads.TryGetValue(key, out reading))
+            {
+                if (accessibilityReads.Count >= 8)
+                    return "";
+                reading = Task.Run(() => ReadAccessibleText(window, pid, executable, started));
+                accessibilityReads.Add(key, reading);
+                created = true;
+            }
+        }
+        // A hung provider cannot block the driver or create repeated workers.
+        // Thread-pool workers are background threads; no process is terminated.
+        try
+        {
+            return reading.Wait(created ? 250 : 0) && Owned(window, pid, executable, started)
+                ? reading.GetAwaiter().GetResult()
+                : "";
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+        finally
+        {
+            // Completed snapshots never authorize a later dialog using a reused
+            // HWND, and a partially populated accessibility tree can be retried.
+            if (reading.IsCompleted)
+                lock (accessibilityGate)
+                    if (
+                        accessibilityReads.TryGetValue(key, out var current)
+                        && ReferenceEquals(current, reading)
+                    )
+                        accessibilityReads.Remove(key);
+        }
     }
 
     public static bool Matches(int pid, string executable, DateTime started)
@@ -211,6 +388,10 @@ public static class InstalledUpdaterUi
                 result.Add(
                     $"window class={ClassName(window)}; enabled={IsWindowEnabled(window)}; foreground={GetForegroundWindow() == window}; text={Text(window)}"
                 );
+                if (ClassName(window) == "#32770")
+                    result.Add(
+                        "accessible text=" + AccessibleText(window, pid, executable, started)
+                    );
                 EnumChildWindows(
                     window,
                     (child, state) =>
@@ -263,9 +444,25 @@ public static class InstalledUpdaterUi
                     IntPtr.Zero
                 );
                 string question = content.ToString();
+                const string detail =
+                    "The manager will close and reopen. Running scripts will keep running, and your settings will be preserved.";
+                bool targetMatches =
+                    question.Contains(
+                        "Update to version " + version + "?",
+                        StringComparison.Ordinal
+                    )
+                    || question.Contains(
+                        "Return to version " + version + "?",
+                        StringComparison.Ordinal
+                    );
                 if (
-                    buttons.Count != 1
-                    || !(
+                    buttons.Count == 1
+                    && ClassName(window) == "#32770"
+                    && (!targetMatches || !question.Contains(detail, StringComparison.Ordinal))
+                )
+                {
+                    question += AccessibleText(window, pid, executable, started);
+                    targetMatches =
                         question.Contains(
                             "Update to version " + version + "?",
                             StringComparison.Ordinal
@@ -273,16 +470,12 @@ public static class InstalledUpdaterUi
                         || question.Contains(
                             "Return to version " + version + "?",
                             StringComparison.Ordinal
-                        )
-                    )
-                    || !question.Contains(
-                        "The manager will close and reopen.",
-                        StringComparison.Ordinal
-                    )
-                    || !question.Contains(
-                        "Running scripts will keep running",
-                        StringComparison.Ordinal
-                    )
+                        );
+                }
+                if (
+                    buttons.Count != 1
+                    || !targetMatches
+                    || !question.Contains(detail, StringComparison.Ordinal)
                 )
                     return true;
                 IntPtr button = buttons[0];
