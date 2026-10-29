@@ -377,6 +377,65 @@ public static class InstalledUpdaterUi
     public static bool Close(int pid, string executable, DateTime started) =>
         MainWindow(pid, executable, started, close: true);
 
+    public static bool CloseAndWait(int pid, string executable, DateTime earliest)
+    {
+        Process process = null;
+        DateTime started;
+        try
+        {
+            process = Process.GetProcessById(pid);
+            // Enumeration includes short-lived Chromium children. Retain the
+            // OS handle before reading identity or dispatching WM_CLOSE so a
+            // normal fast exit still has an observable exit code.
+            _ = process.SafeHandle;
+            if (process.HasExited)
+            {
+                process.Dispose();
+                return false;
+            }
+            started = process.StartTime.ToUniversalTime();
+        }
+        catch (ArgumentException)
+        {
+            process?.Dispose();
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            process?.Dispose();
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception error) when (error.NativeErrorCode == 87)
+        {
+            process?.Dispose();
+            return false;
+        }
+        catch
+        {
+            process?.Dispose();
+            throw;
+        }
+
+        using (process)
+        {
+            if (
+                started < earliest
+                || !Matches(pid, executable, started)
+                || !Close(pid, executable, started)
+            )
+                return false;
+            if (!process.WaitForExit(30000))
+                throw new InvalidOperationException(
+                    "The test Manager did not close normally. It was preserved."
+                );
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException(
+                    $"The test Manager close returned {process.ExitCode}."
+                );
+            return true;
+        }
+    }
+
     public static string[] Describe(int pid, string executable, DateTime started)
     {
         var result = new List<string>();

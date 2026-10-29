@@ -511,14 +511,16 @@ finally {
     if ($script:settled -and $managerPath) {
         foreach ($candidate in @(Get-Process -Name 'Bezoro.AhkManager' -ErrorAction SilentlyContinue)) {
             try {
-                $created = $candidate.StartTime.ToUniversalTime()
-                if ($created -ge $managerStarted -and [AhkManager.TestSupport.InstalledUpdaterUi]::Matches($candidate.Id, $managerPath, $created) -and [AhkManager.TestSupport.InstalledUpdaterUi]::Close($candidate.Id, $managerPath, $created)) {
-                    if (-not $candidate.WaitForExit(30000)) { throw 'The test Manager did not close normally. It was preserved.' }
-                    if ($candidate.ExitCode -ne 0) { throw "The test Manager close returned $($candidate.ExitCode)." }
-                }
+                [AhkManager.TestSupport.InstalledUpdaterUi]::CloseAndWait($candidate.Id, $managerPath, $managerStarted) | Out-Null
             }
             catch { $script:failure = "Graceful Manager close: $($_.Exception.Message)" }
             finally { $candidate.Dispose() }
+        }
+        if ($ExpectedOutcome -eq 'Refused') {
+            try {
+                Assert-Check ($manager.WaitForExit(30000) -and $manager.ExitCode -eq 0) 'the refused original Manager closes normally through its owned window'
+            }
+            catch { $script:failure = "Graceful Manager close: $($_.Exception.Message)" }
         }
         if ($script:startupWritten -and $registry) {
             $key = $registry.OpenSubKey($runKey, $true)
