@@ -437,7 +437,7 @@ try {
             Trace 'Confirmed the exact target through the installed app native dialog.'
         }
         try { $result = Evaluate 'globalThis.__installedUpdaterResult' }
-        catch { if ($manager.HasExited) { break }; throw }
+        catch { if ($ExpectedOutcome -eq 'Installed' -and $script:confirmed -and $socket.State -ne [Net.WebSockets.WebSocketState]::Open -and $manager.WaitForExit(30000)) { break }; throw }
         if ($result -and -not $result.pending) { break }
         if ([DateTime]::UtcNow -ge $windowDiagnosticAt) {
             Save-WindowDiagnostics 'pending-consent'
@@ -453,7 +453,7 @@ try {
     Assert-Check ($operations.Count -eq 1) 'the installed app dispatched exactly one operation without replay'
     $script:operation = $operations[0].FullName
     $plan = Get-Content -LiteralPath (Join-Path $script:operation 'plan.json') -Raw | ConvertFrom-Json
-    Assert-Check ($plan.parentPid -eq $manager.Id -and [DateTimeOffset]::Parse($plan.parentStartedAtUtc).ToUnixTimeMilliseconds() -eq [DateTimeOffset]::new($managerStarted).ToUnixTimeMilliseconds() -and $plan.installDirectory -eq $installRoot -and $plan.installerSha256 -ceq $targetHash) 'the production plan binds the actual installed parent session, exact installation and target bytes'
+    Assert-Check ($plan.parentPid -eq $manager.Id -and ([DateTimeOffset]$plan.parentStartedAtUtc).ToUnixTimeMilliseconds() -eq [DateTimeOffset]::new($managerStarted).ToUnixTimeMilliseconds() -and $plan.installDirectory -eq $installRoot -and $plan.installerSha256 -ceq $targetHash) 'the production plan binds the actual installed parent session, exact installation and target bytes'
     if ($ExpectedOutcome -eq 'Refused') {
         Assert-Check (-not $manager.HasExited -and $result -and -not $result.pending -and $result.value.phase -eq 'error' -and $result.value.error) 'the installed baseline reports its refusal and stays open'
         Assert-Check (-not (Test-Path -LiteralPath (Join-Path $script:operation 'ready.json')) -and -not (Test-Path -LiteralPath (Join-Path $script:operation 'commit.json'))) 'native rejection occurs before readiness and shutdown authorization'
