@@ -6,8 +6,8 @@ import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
-import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupWithContinuation } from './lifecycle.js';
-import { AdministrationPreflight, ElevationCoordinator } from './elevation.js';
+import { administrationCli, startupAdoptionCli, startupAdoptionBlocksInteraction, LifecycleIntent, StopExitIntent, SHUTDOWN_DEADLINE_MS, orderlyShutdown, reportStartupWithContinuation, configuredLoginElevation } from './lifecycle.js';
+import { AdministrationPreflight, ElevationCoordinator, administrationDocumentReady } from './elevation.js';
 import { createDiagnostics, type PageDiagnostics } from './diagnostics.js';
 import {hostText as t} from '../shared/host-en-US.js';
 import { APP_URL, assetFromUrl, CSP, DocumentGuard, packagedBackend, type DocumentLease } from './security.js';
@@ -43,13 +43,15 @@ let rendererReady=false;
 let documentLease:DocumentLease|null=null;
 const initialAdministration=administrationCli(process.argv);
 const initialAdoption=startupAdoptionCli(process.argv);
+const quietAdoption=initialAdoption.descriptor!==null&&process.argv.includes('--background');
 let adoptionPending=initialAdoption.descriptor!==null||initialAdoption.invalid;
 let continuationOffer:StartupContinuationOffer|null=null;
 let administrativeCliPending=initialAdministration==='request';
-const lifecycle=new LifecycleIntent(!adoptionPending&&initialAdministration==='none'&&process.argv.includes('--login'),adoptionPending||initialAdministration!=='none'||process.argv.includes('--foreground'));
+const lifecycle=new LifecycleIntent(!adoptionPending&&initialAdministration==='none'&&process.argv.includes('--login'),(adoptionPending&&!quietAdoption)||initialAdministration!=='none'||process.argv.includes('--foreground'),quietAdoption);
 const preflight=new AdministrationPreflight();
 let administration:ElevationCoordinator|null=null;
 let administrationLease:DocumentLease|null=null;
+let quietStartupTransfer=false;
 const stopExit=new StopExitIntent();
 let stopExitProgress={done:0,total:0};
 let quitting=false;
@@ -64,8 +66,8 @@ const single=app.requestSingleInstanceLock();
 if(!single)app.quit();
 else {
   app.on('second-instance',(_event,argv)=>{
-    if(adoptionPending||argv.some(value=>value==='--startup-adoption'||value.startsWith('--startup-adoption='))){show();return;}
-    if(initialAdoption.descriptor!==null&&argv.includes('--login')){show();return;}
+    if(adoptionPending||argv.some(value=>value==='--startup-adoption'||value.startsWith('--startup-adoption='))){if(!argv.includes('--login')&&!argv.includes('--background')){lifecycle.requestExplicitActivation();show();}return;}
+    if(initialAdoption.descriptor!==null&&argv.includes('--login'))return;
     const administrative=administrationCli(argv);
     if(administrative!=='none'){lifecycle.requestExplicitActivation();show();if(administrative==='invalid')dialog.showErrorBox(t.title,t.administrationCliInvalid);else if(ready)void requestAdministration(true);else administrativeCliPending=true;return;}
     if(argv.includes('--login')){lifecycle.requestLogin();if(ready)void runLogin();}
@@ -74,7 +76,7 @@ else {
   app.on('activate',()=>{lifecycle.requestExplicitActivation();show();});
   app.on('before-quit',event=>{if(!quitComplete){event.preventDefault();void quit();}});
   app.on('window-all-closed',()=>{if(!quitting)void quit();});
-  void app.whenReady().then(start).catch(error=>{dialog.showErrorBox(t.title,safeError(error));quitComplete=true;app.quit();});
+  void app.whenReady().then(start).catch(error=>{if(!lifecycle.quietStartup)dialog.showErrorBox(t.title,safeError(error));quitComplete=true;app.quit();});
 }
 function safeError(error:unknown):string {return error instanceof Error?error.message.slice(0,4096):t.unknownError;}
 function theme():ThemeState {
@@ -229,9 +231,9 @@ async function start():Promise<void> {
   const native={files:pick,confirm,placement,alive,fileStamp:scriptFileStamp,trash:(target:string)=>shell.trashItem(path.win32.normalize(target))};
   controller=new ManagerController({request:()=>Promise.reject(new Error('Backend starting'))},native,state=>{guard?.send('manager:state',state);updateTheme();updateTray();});
   administration=new ElevationCoordinator({
-    eligible:()=>!adoptionPending&&!quitting&&!stopExit.active&&controller?.state.connection==='ready'&&controller.state.authorityMode==='Normal'&&!controller.state.busy&&!!backend?.ready,
+    eligible:()=>!adoptionPending&&!quitting&&!stopExit.active&&controller?.state.connection==='ready'&&controller.state.authorityMode==='Normal'&&!controller.state.busy&&(!quietStartupTransfer||(lifecycle.quietStartup&&configuredLoginElevation(controller.state.snapshot?.settings)&&controller.state.snapshot?.readOnly===false&&controller.state.snapshot.effectsAvailable))&&!!backend?.ready,
     confirm:()=>confirm(t.administrationTitle,t.administrationDetail),
-    preflight:(operationId,phase)=>{const lease=administrationLease;return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>!!lease&&!!guard?.current(lease)&&!!window?.isFocused()&&!window.isDestroyed());},
+    preflight:(operationId,phase)=>{const lease=administrationLease;return preflight.check(operationId,phase,request=>guard?.send('manager:administrationPreflight',request),()=>administrationDocumentReady({currentDocument:!!lease&&!!guard?.current(lease),windowAlive:!!window&&!window.isDestroyed(),focused:window?.isFocused()===true,quietStartup:quietStartupTransfer&&lifecycle.quietStartup&&configuredLoginElevation(controller?.state.snapshot?.settings)}));},
     quiesce:value=>controller?.setAdministrationPending(value),
     drain:async()=>{await controller?.drain();},persistPlacement:async()=>{await controller?.savePlacement(true);},
     request:(action,payload,timeoutMs)=>{if(!backend)throw new Error(t.backendUnavailable);return backend.request<ElevationStatus>(action,payload,timeoutMs);},
@@ -249,57 +251,126 @@ async function start():Promise<void> {
   const wantsAdministrator=controller.state.snapshot?.settings.launchManagerAsAdministrator===true;
   const canInitialize=!initialAdoption.descriptor&&!adoptionPending&&controller.state.connection==='ready'&&controller.state.snapshot?.readOnly===false&&controller.state.snapshot.effectsAvailable;
   let setupDeferred=false;
-  if(administrativeCliPending||canInitialize&&wantsAdministrator&&controller.state.authorityMode==='Normal'){
-    administrativeCliPending=false;show();
-    const result=await requestAdministration(true,lifecycle.loginRequested);
+  if(administrativeCliPending||canInitialize&&wantsAdministrator&&controller.state.authorityMode==='Normal'&&(!lifecycle.quietStartup||lifecycle.takeAutomaticElevation(controller.state.snapshot?.settings))){
+    administrativeCliPending=false;
+    const quiet=lifecycle.quietStartup;
+    if(!quiet)show();
+    const result=await requestAdministration(true,lifecycle.loginRequested,quiet);
     if(result.outcome==='Confirmed'){
       if(quitting||quitComplete)return;
     }else{
       setupDeferred=true;
-      if(window)await dialog.showMessageBox(window,{type:'warning',title:t.administrationTitle,message:t.administrationSetupDeferred,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+      if(window&&!quiet)await dialog.showMessageBox(window,{type:'warning',title:t.administrationTitle,message:t.administrationSetupDeferred,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
     }
   }
   if(canInitialize&&!setupDeferred&&backend?.ready){
     const result=await backend.request<OperationResult>('initializeStartup',{});
-    if(result.outcome!=='Confirmed'&&window){show();await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.startupSetupIncomplete,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}
+    if(result.outcome!=='Confirmed'&&window&&!lifecycle.quietStartup){show();await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.startupSetupIncomplete,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}
   }
   await runLogin();
   if(lifecycle.shouldShowAtStartup(controller.state.snapshot?.settings,trayRegistered,controller.state.connection!=='ready'||controller.state.snapshot?.readOnly===true,controller.state.snapshot?.issues))show();
   if(window.isVisible())diagnostics?.initialReady();
 }
-async function startBackend():Promise<void> {
-  if(administration?.active)throw new Error(t.administrationPending);
-  if(stopExit.active)throw new Error(t.stopExitBusy);
-  if(quitting)throw new Error(t.closing);
-  if(!controller)throw new Error('Controller unavailable');
-  if(backend&&!backend.exited)throw new Error(t.backendStillAlive(backend.pid));
-  backend=new BackendClient({executable:packagedBackend(path.dirname(process.execPath)),hostExecutable:process.execPath,...(initialAdoption.descriptor?{startupAdoption:initialAdoption.descriptor}:{})});
-  if(adoptionPending)controller.setAdministrationPending(true);
-  controller.setAuthority(backend);controller.setConnection('starting');
-  backend.on('snapshot',(snapshot:ManagerSnapshot)=>controller?.setSnapshot(snapshot));
-  backend.on('unavailable',(error:Error)=>{if(!quitting)controller?.setConnection('failed',error.message);});
-  try{
+async function startBackend(): Promise<void> {
+  if (administration?.active) throw new Error(t.administrationPending);
+  if (stopExit.active) throw new Error(t.stopExitBusy);
+  if (quitting) throw new Error(t.closing);
+  if (!controller) throw new Error('Controller unavailable');
+  if (backend && !backend.exited) throw new Error(t.backendStillAlive(backend.pid));
+  backend = new BackendClient({
+    executable: packagedBackend(path.dirname(process.execPath)),
+    hostExecutable: process.execPath,
+    ...(initialAdoption.descriptor ? { startupAdoption: initialAdoption.descriptor } : {}),
+  });
+  if (adoptionPending) controller.setAdministrationPending(true);
+  controller.setAuthority(backend);
+  controller.setConnection('starting');
+  backend.on('snapshot', (snapshot: ManagerSnapshot) => controller?.setSnapshot(snapshot));
+  backend.on('unavailable', (error: Error) => {
+    if (!quitting) controller?.setConnection('failed', error.message);
+  });
+  try {
     await backend.start();
     controller.setHostAuthority(backend.authorityMode);
-    if(backend.profileRoot&&!lifecycle.loginRequested){
-      const exists=await fs.access(path.join(backend.profileRoot,'settings.json')).then(()=>true,()=>false);
-      if(!exists&&window){
-        const choice=await dialog.showMessageBox(window,{type:'question',title:t.welcomeTitle,message:t.welcomeQuestion,detail:t.welcomeDetail,buttons:[t.newProfile,t.chooseWinUiProfile],defaultId:0,cancelId:0,noLink:true});
-        if(choice.response===1)await controller.migrateProfile(true);
+    if (backend.profileRoot && !lifecycle.loginRequested && !lifecycle.quietStartup) {
+      const exists = await fs.access(path.join(backend.profileRoot, 'settings.json')).then(
+        () => true,
+        () => false,
+      );
+      if (!exists && window) {
+        const choice = await dialog.showMessageBox(window, {
+          type: 'question',
+          title: t.welcomeTitle,
+          message: t.welcomeQuestion,
+          detail: t.welcomeDetail,
+          buttons: [t.newProfile, t.chooseWinUiProfile],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        if (choice.response === 1) await controller.migrateProfile(true);
       }
     }
-    controller.setSnapshot(await backend.request<ManagerSnapshot>('load',{}));
+    controller.setSnapshot(await backend.request<ManagerSnapshot>('load', {}));
     controller.setConnection('ready');
-    if(initialAdoption.descriptor){
-      const result=await backend.request<OperationResult>('adoptStartupContinuation',{},150000);
-      adoptionPending=startupAdoptionBlocksInteraction(result);controller.setAdministrationPending(adoptionPending);
-      show();if(window)await dialog.showMessageBox(window,{type:result.outcome==='Confirmed'?'info':'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
+    if (initialAdoption.descriptor) {
+      const result = await backend.request<OperationResult>(
+        'adoptStartupContinuation',
+        {},
+        150000,
+      );
+      adoptionPending = startupAdoptionBlocksInteraction(result);
+      controller.setAdministrationPending(adoptionPending);
+      if (!lifecycle.quietStartup) show();
+      if (window && !lifecycle.quietStartup)
+        await dialog.showMessageBox(window, {
+          type: result.outcome === 'Confirmed' ? 'info' : 'warning',
+          title: t.loginResultTitle,
+          message: t.loginResultTitle,
+          detail: result.detail ?? t.loginFailure(result.code),
+          buttons: [t.confirm],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
     }
-  }catch(error){controller.setConnection('failed',safeError(error));show();}
+  } catch (error) {
+    controller.setConnection('failed', safeError(error));
+    if (!lifecycle.quietStartup) show();
+  }
 }
-async function reportLoginResult(result:OperationResult):Promise<void> {
-  try{continuationOffer=backend?.ready?await backend.request<StartupContinuationOffer|null>('startupContinuation',{}):null;}catch{continuationOffer=null;}updateTray();
-  await reportStartupWithContinuation(result,continuationOffer?.canResume===true,requestStartupContinuation,{show,warn:async value=>{if(window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:value.detail??t.loginFailure(value.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});}});
+async function reportLoginResult(result: OperationResult): Promise<void> {
+  try {
+    continuationOffer = backend?.ready
+      ? await backend.request<StartupContinuationOffer | null>('startupContinuation', {})
+      : null;
+  } catch {
+    continuationOffer = null;
+  }
+  updateTray();
+  await reportStartupWithContinuation(
+    result,
+    continuationOffer?.canResume === true &&
+      (!lifecycle.quietStartup || configuredLoginElevation(controller?.state.snapshot?.settings)),
+    () => requestStartupContinuation(lifecycle.quietStartup),
+    {
+      show,
+      warn: async (value) => {
+        if (window)
+          await dialog.showMessageBox(window, {
+            type: 'warning',
+            title: t.loginResultTitle,
+            message: t.loginResultTitle,
+            detail: value.detail ?? t.loginFailure(value.code),
+            buttons: [t.confirm],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          });
+      },
+    },
+    lifecycle.quietStartup,
+  );
 }
 async function checkStartupAdoption():Promise<void> {
   if(!adoptionPending||!backend?.ready||!controller||quitting)return;
@@ -309,30 +380,115 @@ async function checkStartupAdoption():Promise<void> {
     if(window)await dialog.showMessageBox(window,{type:result.outcome==='Confirmed'?'info':'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
   }catch{show();dialog.showErrorBox(t.loginResultTitle,t.administrationPending);}
 }
-async function requestStartupContinuation():Promise<boolean> {
-  if(adoptionPending||administration?.active||!backend?.ready||!controller||quitting)return false;
-  continuationOffer=await backend.request<StartupContinuationOffer|null>('startupContinuation',{});updateTray();
-  if(!continuationOffer?.canResume||!window)return false;
-  show();
-  const choice=await dialog.showMessageBox(window,{type:'warning',title:t.continuationTitle,message:t.continuationTitle,detail:t.continuationDetail(continuationOffer.scriptNames),buttons:[t.continuationContinue,t.continuationLater],defaultId:1,cancelId:1,noLink:true});
-  if(choice.response!==0)return false;
-  const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));
-  administrationLease=documentLease;
-  const result=await administration?.request(true,continuationOffer.operationId);
-  if(result&&result.outcome!=='Confirmed'&&window)await dialog.showMessageBox(window,{type:'warning',title:t.loginResultTitle,message:t.loginResultTitle,detail:result.detail??t.loginFailure(result.code),buttons:[t.confirm],defaultId:0,cancelId:0,noLink:true});
-  return result?.outcome==='Confirmed';
+async function requestStartupContinuation(quiet = false): Promise<boolean> {
+  if (adoptionPending || administration?.active || !backend?.ready || !controller || quitting)
+    return false;
+  if (quiet && !lifecycle.takeAutomaticElevation(controller.state.snapshot?.settings))
+    return false;
+  continuationOffer = await backend.request<StartupContinuationOffer | null>(
+    'startupContinuation',
+    {},
+  );
+  updateTray();
+  if (!continuationOffer?.canResume || !window) return false;
+  if (!quiet) {
+    show();
+    const choice = await dialog.showMessageBox(window, {
+      type: 'warning',
+      title: t.continuationTitle,
+      message: t.continuationTitle,
+      detail: t.continuationDetail(continuationOffer.scriptNames),
+      buttons: [t.continuationContinue, t.continuationLater],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (choice.response !== 0) return false;
+  }
+  const deadline = Date.now() + 3000;
+  while (!documentLease && !quitting && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  administrationLease = documentLease;
+  let result: OperationResult | undefined;
+  quietStartupTransfer = quiet;
+  try {
+    result = await administration?.request(true, continuationOffer.operationId, false, quiet);
+  } finally {
+    quietStartupTransfer = false;
+  }
+  if (result && result.outcome !== 'Confirmed' && window && !quiet)
+    await dialog.showMessageBox(window, {
+      type: 'warning',
+      title: t.loginResultTitle,
+      message: t.loginResultTitle,
+      detail: result.detail ?? t.loginFailure(result.code),
+      buttons: [t.confirm],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+  return result?.outcome === 'Confirmed';
 }
-async function runLogin():Promise<void> {
-  if(initialAdoption.descriptor!==null||adoptionPending||administration?.active||stopExit.active||quitting||!backend?.ready||!controller||!lifecycle.takeLogin())return;
-  try{await reportLoginResult(await controller.runLogin());}catch(error){controller.setConnection('failed',safeError(error));show();dialog.showErrorBox(t.loginResultTitle,safeError(error));}
+async function runLogin(): Promise<void> {
+  if (
+    initialAdoption.descriptor !== null ||
+    adoptionPending ||
+    administration?.active ||
+    stopExit.active ||
+    quitting ||
+    !backend?.ready ||
+    !controller ||
+    !lifecycle.takeLogin()
+  )
+    return;
+  try {
+    await reportLoginResult(await controller.runLogin());
+  } catch (error) {
+    controller.setConnection('failed', safeError(error));
+    if (!lifecycle.quietStartup) {
+      show();
+      dialog.showErrorBox(t.loginResultTitle, safeError(error));
+    }
+  }
 }
-async function requestAdministration(explicitCli=false,resumeLogin=false){
-  if(adoptionPending)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
-  if(administration?.processing)return {outcome:'CancelledBeforeDispatch' as const,code:'PendingOperation',detail:null,correlationId:null};
-  if(controller?.state.authorityMode==='Administrator'){show();return {outcome:'Confirmed' as const,code:'None',detail:null,correlationId:null};}
-  if(explicitCli){const deadline=Date.now()+3000;while(!documentLease&&!quitting&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));}
-  administrationLease=documentLease;
-  return administration?.request(explicitCli,undefined,resumeLogin)??{outcome:'CancelledBeforeDispatch' as const,code:'CapabilityUnverified',detail:null,correlationId:null};
+async function requestAdministration(explicitCli = false, resumeLogin = false, quiet = false) {
+  if (adoptionPending)
+    return {
+      outcome: 'CancelledBeforeDispatch' as const,
+      code: 'PendingOperation',
+      detail: null,
+      correlationId: null,
+    };
+  if (administration?.processing)
+    return {
+      outcome: 'CancelledBeforeDispatch' as const,
+      code: 'PendingOperation',
+      detail: null,
+      correlationId: null,
+    };
+  if (controller?.state.authorityMode === 'Administrator') {
+    if (!quiet) show();
+    return { outcome: 'Confirmed' as const, code: 'None', detail: null, correlationId: null };
+  }
+  if (explicitCli) {
+    const deadline = Date.now() + 3000;
+    while (!documentLease && !quitting && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  administrationLease = documentLease;
+  quietStartupTransfer = quiet;
+  try {
+    return (
+      (await administration?.request(explicitCli, undefined, resumeLogin)) ?? {
+        outcome: 'CancelledBeforeDispatch' as const,
+        code: 'CapabilityUnverified',
+        detail: null,
+        correlationId: null,
+      }
+    );
+  } finally {
+    quietStartupTransfer = false;
+  }
 }
 function createTray():void {
   try{
@@ -379,7 +535,7 @@ async function quit(administrativeAcknowledgement=false):Promise<void> {
   try{
     await Promise.race([orderly(),new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(t.shutdownDeadline(backend?.pid??null))),SHUTDOWN_DEADLINE_MS);})]);
     tray?.destroy();quitComplete=true;app.quit();
-  }catch(error){quitting=false;controller?.setConnection('failed',safeError(error));show();dialog.showErrorBox(t.shutdownUnconfirmed,safeError(error));}
+  }catch(error){quitting=false;controller?.setConnection('failed',safeError(error));if(!quietStartupTransfer){show();dialog.showErrorBox(t.shutdownUnconfirmed,safeError(error));}}
   finally{clearTimeout(timer);}
 }
 function registerIpc():void {

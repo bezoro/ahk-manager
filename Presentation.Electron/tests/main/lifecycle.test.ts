@@ -12,6 +12,7 @@ import {
   withinDeadline,
   reportStartupResult,
   reportStartupWithContinuation,
+  configuredLoginElevation,
   type ShutdownBoundary,
 } from '../../src/main/lifecycle.js';
 import { ManagerController } from '../../src/main/controller.js';
@@ -117,9 +118,69 @@ test('administrative CLI accepts foreground once and rejects login/background or
   ])
     assert.equal(administrationCli(args), 'invalid');
 });
+test('automatic login reports never open or focus Manager dialogs, including declined continuation', async () => {
+  for (const outcome of ['Partial', 'Failed', 'Unknown', 'CancelledBeforeDispatch'] as const)
+    for (const continuation of [false, true]) {
+      const events: string[] = [];
+      await reportStartupWithContinuation(
+        { outcome, code: 'AccessDenied', detail: 'Startup needs attention.', correlationId: null },
+        continuation,
+        async () => {
+          events.push('continuation');
+          return false;
+        },
+        {
+          show: () => events.push('show'),
+          warn: async () => {
+            events.push('dialog');
+          },
+        },
+        true,
+      );
+      assert.deepEqual(events, continuation ? ['continuation'] : []);
+    }
+});
+
+test('automatic elevation requires both persisted preferences and is dispatched once per login', () => {
+  for (const launchManagerAtLogin of [false, true])
+    for (const launchManagerAsAdministrator of [false, true]) {
+      const settings = {
+        ...snapshot().settings,
+        launchManagerAtLogin,
+        launchManagerAsAdministrator,
+      };
+      const permitted = launchManagerAtLogin && launchManagerAsAdministrator;
+      const login = new LifecycleIntent(true);
+      assert.equal(configuredLoginElevation(settings), permitted);
+      assert.equal(login.takeAutomaticElevation(settings), permitted);
+      assert.equal(
+        login.takeAutomaticElevation(settings),
+        false,
+        'Cancellation cannot retry automatically',
+      );
+      login.requestLogin();
+      assert.equal(
+        login.takeAutomaticElevation(settings),
+        false,
+        'Repeated login cannot reset the attempt',
+      );
+      assert.equal(new LifecycleIntent(false).takeAutomaticElevation(settings), false);
+      const explicit = new LifecycleIntent(true);
+      explicit.requestExplicitActivation();
+      assert.equal(explicit.takeAutomaticElevation(settings), false);
+      assert.equal(settings.launchManagerAtLogin, launchManagerAtLogin);
+      assert.equal(settings.launchManagerAsAdministrator, launchManagerAsAdministrator);
+    }
+  assert.equal(configuredLoginElevation(null), false);
+  assert.equal(configuredLoginElevation(undefined), false);
+});
 test('adoption descriptor selects pending intent and rejects generic login, duplicates and malformed authority hints', () => {
   const descriptor = `11111111-1111-1111-1111-111111111111|${'a'.repeat(64)}|10|100|${'b'.repeat(64)}`;
   assert.deepEqual(startupAdoptionCli([`--startup-adoption=${descriptor}`, '--foreground']), {
+    descriptor,
+    invalid: false,
+  });
+  assert.deepEqual(startupAdoptionCli([`--startup-adoption=${descriptor}`, '--background']), {
     descriptor,
     invalid: false,
   });
@@ -128,7 +189,8 @@ test('adoption descriptor selects pending intent and rejects generic login, dupl
     ['--startup-adoption'],
     ['--startup-adoption=forged'],
     [`--startup-adoption=${descriptor}`, '--login'],
-    [`--startup-adoption=${descriptor}`, '--background'],
+    [`--startup-adoption=${descriptor}`, '--background', '--background'],
+    [`--startup-adoption=${descriptor}`, '--background', '--foreground'],
     [`--startup-adoption=${descriptor}`, `--startup-adoption=${descriptor}`],
   ])
     assert.deepEqual(startupAdoptionCli(argv), { descriptor: null, invalid: true });
@@ -345,15 +407,44 @@ test('explicit reactivation and tray preferences override start in tray during e
     }
 });
 
-test('missing settings, recovery failures and unavailable tray keep hidden-start requests accessible', () => {
+test('manual recovery opens the Manager while quiet login keeps recovery in state and the tray', () => {
   for (const initialLogin of [false, true]) {
     const lifecycle = new LifecycleIntent(initialLogin);
     const settings = { ...snapshot().settings, startInTray: true };
     assert.equal(lifecycle.shouldShowAtStartup(settings, false), true);
-    assert.equal(lifecycle.shouldShowAtStartup(undefined, true), true);
-    assert.equal(lifecycle.shouldShowAtStartup(null, true), true);
-    assert.equal(lifecycle.shouldShowAtStartup(settings, true, true), true);
+    assert.equal(lifecycle.shouldShowAtStartup(undefined, true), !initialLogin);
+    assert.equal(lifecycle.shouldShowAtStartup(null, true), !initialLogin);
+    assert.equal(lifecycle.shouldShowAtStartup(settings, true, true), !initialLogin);
+    assert.equal(
+      lifecycle.shouldShowAtStartup(settings, true, false, [
+        { code: 'PendingOperation', detail: 'Recovery required.', scriptId: null },
+      ]),
+      !initialLogin,
+    );
   }
+});
+
+test('background scoped adoption respects window preferences without acquiring general login intent', () => {
+  const adoption = new LifecycleIntent(false, false, true);
+  assert.equal(adoption.quietStartup, true);
+  assert.equal(adoption.loginRequested, false);
+  assert.equal(adoption.takeLogin(), false);
+  for (const startInTray of [false, true])
+    for (const showWindowAtLogin of [false, true])
+      assert.equal(
+        adoption.shouldShowAtStartup(
+          { ...snapshot().settings, startInTray, showWindowAtLogin },
+          true,
+        ),
+        !startInTray && showWindowAtLogin,
+      );
+  adoption.requestPreferences();
+  assert.equal(adoption.quietStartup, false);
+  assert.equal(
+    adoption.shouldShowAtStartup({ ...snapshot().settings, startInTray: true }, true),
+    true,
+  );
+  assert.equal(adoption.takeLogin(), false);
 });
 
 test('saved maximized placement stays hidden and is retained until the window is actually shown', () => {

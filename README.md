@@ -21,6 +21,8 @@ Use the Windows x64 installer from [GitHub Releases](https://github.com/bezoro/a
 
 Running at Windows sign-in and administrator mode are enabled by default. Change them independently in **Preferences**. Elevated startup uses a scheduled task for the current user; standard startup uses a per-user sign-in entry. Windows may request approval when applying administrator settings. If registration cannot be completed, the application reports the pending setup.
 
+Automatic sign-in startup does not display manager dialogs. Windows UAC can still request permission. The main window follows your **Preferences**, and startup status remains available in the interface.
+
 Scripts marked for startup run at sign-in. A standard script stays under standard user privileges even when the manager is elevated. Reopening the manager, including after an application update, does not replay sign-in launches.
 
 Closing the window can keep the manager in the notification area. **Exit and keep scripts running** leaves independent scripts running. **Stop scripts and exit** asks for consent, considers the complete catalog and exits only after the approved processes are confirmed stopped. Cancelling further stop requests does not restart scripts that have already stopped.

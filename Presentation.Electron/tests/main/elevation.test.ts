@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   AdministrationPreflight,
+  administrationDocumentReady,
   ElevationCoordinator,
   type ElevationBoundary,
   type PreflightRequest,
@@ -9,6 +10,35 @@ import {
 import type { ElevationStatus } from '../../src/shared/contracts.js';
 
 const clean = { dirtyDrafts: false, dialogOpen: false, pendingWork: false };
+test('quiet preflight permits an unfocused trusted document but never a stale or missing window', async () => {
+  for (const quietStartup of [false, true])
+    for (const focused of [false, true])
+      for (const currentDocument of [false, true])
+        for (const windowAlive of [false, true])
+          assert.equal(
+            administrationDocumentReady({ currentDocument, windowAlive, focused, quietStartup }),
+            currentDocument && windowAlive && (focused || quietStartup),
+          );
+  for (const answer of [clean, { ...clean, dirtyDrafts: true }, { ...clean, dialogOpen: true }]) {
+    const gate = new AdministrationPreflight();
+    gate.register(true);
+    assert.equal(
+      await gate.check(
+        'quiet-login',
+        'begin',
+        (request) => gate.reply(request, answer),
+        () =>
+          administrationDocumentReady({
+            currentDocument: true,
+            windowAlive: true,
+            focused: false,
+            quietStartup: true,
+          }),
+      ),
+      answer === clean,
+    );
+  }
+});
 test('preflight binds operation, phase, nonce and current document, and rejects provider unmount', async () => {
   const gate = new AdministrationPreflight();
   gate.register(true);
@@ -194,6 +224,7 @@ test('automatic administrative launch preserves login intent only in its authent
   assert.equal((await login.coordinator.request(true, undefined, true)).outcome, 'Confirmed');
   assert.equal(login.calls[0]?.payload.resumeLogin, true);
   assert.equal(login.calls.filter((call) => call.action === 'beginAdministration').length, 1);
+  assert.equal(login.confirmations, 0);
   const manual = fixture();
   await manual.coordinator.request(true);
   assert.equal(manual.calls[0]?.payload.resumeLogin, undefined);
@@ -205,6 +236,57 @@ test('automatic administrative launch preserves login intent only in its authent
     undefined,
     'A scoped continuation must never rerun the general login loop',
   );
+});
+test('quiet scoped continuation skips the Manager confirmation and carries presentation only', async () => {
+  const continuationId = '33333333-3333-3333-3333-333333333333';
+  const quiet = fixture();
+  assert.equal(
+    (await quiet.coordinator.request(true, continuationId, false, true)).outcome,
+    'Confirmed',
+  );
+  assert.equal(quiet.confirmations, 0);
+  assert.deepEqual(quiet.phases, ['begin', 'begin', 'commit']);
+  assert.deepEqual(quiet.calls[0]?.payload, {
+    operationId: quiet.calls[0]?.payload.operationId,
+    continuationId,
+    backgroundStartup: true,
+  });
+  assert.equal(
+    quiet.calls.some((call) => call.action === 'beginAdministration'),
+    false,
+  );
+  const manual = fixture();
+  await manual.coordinator.request(false, continuationId);
+  assert.equal(manual.confirmations, 1);
+  assert.equal(manual.calls[0]?.payload.backgroundStartup, undefined);
+  const invalid = fixture();
+  assert.equal(
+    (await invalid.coordinator.request(true, undefined, true, true)).code,
+    'InvalidRequest',
+  );
+  assert.deepEqual(invalid.calls, []);
+});
+
+test('cancelled quiet startup does not commit, quit, replay Begin, or turn a scoped attempt into general login', async () => {
+  for (const continuationId of [undefined, '33333333-3333-3333-3333-333333333333']) {
+    const cancelled = fixture({
+      statuses: () => ({ state: 'Denied', canResumeNormal: true, reason: 'Cancelled' }),
+    });
+    assert.equal(
+      (await cancelled.coordinator.request(true, continuationId, !continuationId, !!continuationId))
+        .outcome,
+      'CancelledBeforeDispatch',
+    );
+    assert.equal(cancelled.confirmations, 0);
+    assert.deepEqual(
+      cancelled.calls.map((call) => call.action),
+      [continuationId ? 'beginStartupContinuation' : 'beginAdministration'],
+    );
+    assert.equal(cancelled.calls[0]?.payload.resumeLogin, continuationId ? undefined : true);
+    assert.deepEqual(cancelled.quiescence, [true, false]);
+    assert.equal(cancelled.quit, 0);
+    assert.equal(cancelled.coordinator.active, false);
+  }
 });
 test('drain and placement precede Begin; active lane blocks concurrent requests and quits only after receipt', async () => {
   let release!: () => void;

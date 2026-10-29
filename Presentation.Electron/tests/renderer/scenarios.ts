@@ -5,7 +5,13 @@ import type {
   ScriptSnapshot,
   ThemeState,
 } from '../../src/shared/contracts.js';
-import { operation, outcome, reason, text } from '../../src/renderer/resources/en-US.js';
+import {
+  operation,
+  outcome,
+  problemCount,
+  reason,
+  text,
+} from '../../src/renderer/resources/en-US.js';
 import type { UpdateState } from '../../src/shared/updates.js';
 
 declare global {
@@ -706,12 +712,12 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     await tick();
     assert(
       document
-        .getElementById('script-22222222-2222-2222-2222-222222222222')
+        .getElementById('script-11111111-1111-1111-1111-111111111111')
         ?.getAttribute('aria-selected') === 'true',
       'End did not select last row',
     );
     assert(
-      list.getAttribute('aria-activedescendant') === 'script-22222222-2222-2222-2222-222222222222',
+      list.getAttribute('aria-activedescendant') === 'script-11111111-1111-1111-1111-111111111111',
       'Active descendant stale',
     );
   });
@@ -812,8 +818,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       await tick();
       const footer = document.querySelector<HTMLElement>('.status-footer')!;
       assert(
-        footer.textContent?.includes('3 problemas informados') &&
-          footer.textContent.includes('Request in progress'),
+        footer.textContent?.includes(problemCount(3)) && footer.textContent.includes(text.pending),
         'Real problem/busy summary missing',
       );
       assert(footer.getAttribute('aria-live') === 'polite', 'Footer status inaccessible');
@@ -1244,7 +1249,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       grid.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
       await tick();
       assert(
-        grid.getAttribute('aria-activedescendant') === 'script-' + host.snapshot!.scripts[1]!.id,
+        grid.getAttribute('aria-activedescendant') === 'script-' + host.snapshot!.scripts[0]!.id,
         'Keyboard selection lost',
       );
       assert(
@@ -1946,7 +1951,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
           scripts: [
             {
               ...host.snapshot!.scripts[0]!,
-              description: 'Manual persistida',
+              description: 'Saved manual description',
               headerDescription: header,
             },
             host.snapshot!.scripts[1]!,
@@ -1970,7 +1975,10 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       const metadata = panel.querySelector<HTMLDetailsElement>('.metadata-expander')!;
       metadata.open = true;
       const manual = document.getElementById('draft-description') as HTMLTextAreaElement;
-      assert(String(manual.value) === 'Manual persistida', 'Header overwrote manual metadata');
+      assert(
+        String(manual.value) === 'Saved manual description',
+        'Header overwrote manual metadata',
+      );
       assert(
         panel.querySelector('.script-description')?.children.length === 1 &&
           !panel.querySelector('.description-guidance') &&
@@ -2028,7 +2036,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       });
       await tick();
       assert(
-        panel.querySelector('.description')?.textContent === 'Manual persistida' &&
+        panel.querySelector('.description')?.textContent === 'Saved manual description' &&
           manual.value === 'Manual description being edited',
         'Header removal did not restore snapshot manual fallback independently',
       );
