@@ -11,7 +11,10 @@
     "build": "node scripts/build.cjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.cjs",
-    "package": "electron-builder --config electron-builder.cjs --win nsis --x64"
+    "package": "electron-builder --config electron-builder.cjs --win nsis --x64",
+    "commits:check": "node scripts/check-commits.cjs",
+    "release:identity": "node scripts/compute-release.cjs",
+    "test:release": "node --test tests/tooling/release-identity.test.cjs"
   },
   "dependencies": {
     "@fluentui/react-components": "9.74.11",
@@ -22,13 +25,20 @@
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
     "@types/js-yaml": "4.0.9",
     "@types/node": "24.12.0",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "conventional-changelog-conventionalcommits": "10.4.1",
+    "conventional-changelog-writer": "9.3.0",
+    "conventional-commits-parser": "7.1.3",
     "electron": "45.0.0",
     "electron-builder": "26.15.3",
     "esbuild": "0.28.2",
+    "remove-markdown": "0.8.0",
+    "semver": "7.8.5",
     "typescript": "7.0.2"
   }
 }

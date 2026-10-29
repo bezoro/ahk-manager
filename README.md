@@ -1,14 +1,16 @@
-# AHK Manager 1.2, atualizações e histórico
+# AHK Manager: atualizações e canais
 
-A página **Atualizações** avisa quando há uma versão disponível, mostra o progresso do download e oferece **Atualizar** ou **Voltar para esta versão** no histórico. O Manager consulta o GitHub ao abrir e a cada 15 minutos. Cada mudança na `main` que passa pela CI produz uma versão numerada e um instalador permanente nas Releases. Branches e pull requests não são oferecidos como atualizações.
+A página **Atualizações** mostra a versão instalada, o canal selecionado e o histórico. O canal **Estável**, selecionado por padrão, recebe alterações da `main` que passaram pela CI. Escolha **Testes** para receber prévias de pull requests do próprio repositório antes do merge. Os dois canais usam o botão do aplicativo, sem baixar ou instalar arquivos manualmente.
 
-A atualização é sempre solicitada pelo usuário. O `electron-updater` baixa e verifica o instalador; o aplicador aguarda o encerramento normal do Manager, preserva uma cópia da instalação e só então aplica a versão escolhida. Os scripts AHK continuam em execução. Perfis, scripts e preferências de início com Windows são preservados. Uma falha confirmada na instalação restaura a cópia anterior; uma operação de resultado incerto fica bloqueada para não repetir efeitos.
+A seleção do canal permanece salva após reiniciar ou atualizar. Voltar a **Estável** oferece a versão estável mais recente, mesmo quando ela é anterior à prévia instalada. Escolher o canal apenas consulta as versões; baixar e instalar sempre dependem de uma ação do usuário. O Manager consulta o GitHub ao abrir e a cada 15 minutos, sem exigir login ou token.
 
-Com o repositório público, as atualizações funcionam sem login ou token. Se o repositório estiver privado ou o GitHub limitar as consultas, há um acesso opcional em **Atualizações > Acesso avançado ao GitHub**. O Windows protege essa credencial; ela não vai para o renderer, logs ou pacote. Os instaladores já preservados permitem voltar de versão mesmo sem conexão. O histórico publicado continua no GitHub.
+Versões anteriores ao seletor de canais recebem primeiro a atualização estável que habilita essa opção, pelo botão **Atualizar** existente. Depois disso, prévias de mudanças ainda em revisão ficam disponíveis ao selecionar **Testes**.
 
-O primeiro uso do atualizador exige instalar uma versão 1.2. Versões até 1.1 recusam atualização no mesmo local: saia do Manager, desinstale preservando o perfil e instale a 1.2. Se houver tarefa administrativa ativa, desative o início com Windows antes dessa primeira desinstalação e confirme novamente sua preferência depois. Nas atualizações seguintes, o aplicativo faz a troca pelo botão.
+O `electron-updater` baixa e verifica o instalador. O aplicador aguarda o encerramento normal do Manager, preserva uma cópia da instalação e aplica a versão escolhida. Os scripts AHK continuam em execução. Perfis, scripts e preferências de início com Windows são preservados. Uma falha confirmada na instalação restaura a cópia anterior; uma operação de resultado incerto fica bloqueada para não repetir efeitos.
 
-Consulte [UPDATES.md](UPDATES.md) para publicação, assinatura e recuperação. O instalador da CI de pull request usa a versão 1.2.1; versões de `main` usam `1.2.<número da execução>`.
+As versões seguem Semantic Versioning. Conventional Commits determinam o incremento estável: `feat` incrementa a minor, mudanças incompatíveis a major e demais tipos a patch. Prévias usam `X.Y.Z-test.<execução>.<tentativa>.<PR>`, com tag e instalador próprios. Publicar uma prévia não substitui a versão estável mais recente.
+
+Consulte [UPDATES.md](UPDATES.md) para publicação, assinatura, recuperação e migração de versões até 1.1. A CI do Windows valida os dois canais e preserva instaladores, capturas da interface e logs nos artefatos da execução.
 
 ## Comportamento de inicialização introduzido na 1.1
 

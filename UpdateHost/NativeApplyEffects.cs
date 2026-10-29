@@ -49,8 +49,8 @@ internal sealed class NativeApplyEffects(UpdatePlan plan, string operationDirect
         InstallationRegistration.Verify(plan.InstallDirectory, version);
         string host = Path.Combine(plan.InstallDirectory, "Bezoro.AhkManager.exe");
         using var lease = FileLease.Open(host, 512L * 1024 * 1024);
-        string? actualVersion = FileVersionInfo.GetVersionInfo(host).ProductVersion;
-        if (actualVersion is null || !UpdateProtocol.SameVersion(version, actualVersion)) throw new InvalidDataException("Installed Manager version does not match its receipt.");
+        var actualVersion = FileVersionInfo.GetVersionInfo(host);
+        if (!UpdateProtocol.InstalledImageVersionMatches(version, actualVersion.ProductVersion, actualVersion.FileVersion)) throw new InvalidDataException("Installed Manager version does not match its receipt.");
     }
     public void Launch()
     {

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { APP_URL, assetFromUrl, CSP, DocumentGuard, packagedBackend } from '../../src/main/security.js';
 import { parseStrictJson, snapshot as validatesSnapshot, decimal } from '../../src/shared/validation.js';
 import { snapshot } from './fixtures.js';
@@ -10,7 +11,8 @@ test('fixed app protocol allows only exact packaged assets and rejects network, 
   assert.equal(assetFromUrl(APP_URL,allow),'index.html');
   for(const url of ['https://app/index.html','file:///index.html','ahk-manager://other/index.html','ahk-manager://app/%2e%2e/secrets','ahk-manager://app/%2f../index.html','ahk-manager://app/app.js?remote=1','ahk-manager://app/app.js#x','ahk-manager://user@app/index.html','ahk-manager://app/package.json','ahk-manager://app/%5cindex.html'])assert.equal(assetFromUrl(url,allow),null,url);
   assert.match(CSP,/script-src 'self';/);assert.doesNotMatch(CSP,/unsafe-eval/);assert.match(CSP,/connect-src 'none'/);assert.match(CSP,/frame-src 'none'/);
-  assert.equal(packagedBackend('C:\\App'),'C:\\App\\backend\\AhkManager.Backend.exe');
+  const installation=path.resolve('packaged-app');
+  assert.equal(packagedBackend(installation),path.join(installation,'backend','AhkManager.Backend.exe'));
   assert.throws(()=>packagedBackend('relative'));
 });
 test('document guard rejects subframes, origins, stale generation and stale async state sends',()=>{

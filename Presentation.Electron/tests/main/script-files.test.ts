@@ -7,7 +7,7 @@ import { scriptFileStamp } from '../../src/main/script-files.js';
 import { snapshot as validSnapshot, hotkey } from '../../src/shared/validation.js';
 import { snapshot } from './fixtures.js';
 
-test('host stamp refuses changed hash, multiply linked file, directory, UNC and junction ancestors',async()=>{
+test('host stamp refuses changed hash, multiply linked file, directory, UNC and junction ancestors',{skip:process.platform!=='win32'?'Requires Windows drive paths and junction semantics; covered by Windows CI.':false},async()=>{
   const root=await fs.mkdtemp(path.join(process.env.AHK_DIAGNOSTICS_TEST_ROOT!,'script-files-'));
   const target=path.join(root,'inert.ahk');const body='F13::return\n';await fs.writeFile(target,body);
   const file={path:target,fileId:'backend-verified',hash:createHash('sha256').update(body).digest('hex')};

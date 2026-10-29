@@ -523,106 +523,524 @@ export async function previewPreferences(): Promise<AssertionRecord[]> {
 
 function updateFixture(): UpdateState {
   return {
-    currentVersion: '1.2.1', phase: 'idle', availableVersion: '1.2.2', lastCheckedAt: '2026-10-28T11:30:00Z', error: null, accessConfigured: false, progress: null,
+    channel: 'stable',
+    currentVersion: '1.2.1',
+    phase: 'idle',
+    availableVersion: '1.2.2',
+    lastCheckedAt: '2026-10-28T11:30:00Z',
+    error: null,
+    accessConfigured: false,
+    progress: null,
     releases: [
-      { id: 'fixture-new-122', version: '1.2.2', publishedAt: '2026-10-28T10:00:00Z', notes: 'Melhora o início dos scripts e a organização das preferências.\nNotas de exemplo da fixture.', commit: 'a'.repeat(40), installed: false, canInstall: true, cached: false },
-      { id: 'fixture-installed-121', version: '1.2.1', publishedAt: '2026-10-25T10:00:00Z', notes: 'Versão instalada nesta fixture.', commit: 'b'.repeat(40), installed: true, canInstall: false, cached: true },
-      { id: 'fixture-cached-120', version: '1.2.0', publishedAt: '2026-10-19T10:00:00Z', notes: 'Versão anterior disponível neste computador. <img src=x onerror=alert(1)>', commit: 'c'.repeat(40), installed: false, canInstall: true, cached: true },
+      {
+        id: 'fixture-new-122',
+        version: '1.2.2',
+        publishedAt: '2026-10-28T10:00:00Z',
+        notes:
+          'Melhora o início dos scripts e a organização das preferências.\nNotas de exemplo da fixture.',
+        commit: 'a'.repeat(40),
+        installed: false,
+        canInstall: true,
+        cached: false,
+      },
+      {
+        id: 'fixture-installed-121',
+        version: '1.2.1',
+        publishedAt: '2026-10-25T10:00:00Z',
+        notes: 'Versão instalada nesta fixture.',
+        commit: 'b'.repeat(40),
+        installed: true,
+        canInstall: false,
+        cached: true,
+      },
+      {
+        id: 'fixture-cached-120',
+        version: '1.2.0',
+        publishedAt: '2026-10-19T10:00:00Z',
+        notes: 'Versão anterior disponível neste computador. <img src=x onerror=alert(1)>',
+        commit: 'c'.repeat(40),
+        installed: false,
+        canInstall: true,
+        cached: true,
+      },
+    ],
+  };
+}
+
+function testUpdateFixture(): UpdateState {
+  const updates = updateFixture();
+  const version = '1.3.0-test.18.1.2';
+  return {
+    ...updates,
+    channel: 'test',
+    availableVersion: version,
+    releases: [
+      {
+        ...updates.releases[0]!,
+        id: 'fixture-test-130',
+        version,
+        notes:
+          'Prévia da organização do aplicativo e dos canais de atualização. Disponível para avaliação antes do lançamento estável.',
+      },
+      ...updates.releases,
     ],
   };
 }
 
 export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
   const results: AssertionRecord[] = [];
-  const host = state(), updates = updateFixture();
+  const host = state(),
+    updates = updateFixture();
   const outstanding = new Set<string>();
   async function check(name: string, test: () => Promise<void>): Promise<void> {
-    try { await test(); results.push({ name, passed: true }); }
-    catch (error) { results.push({ name, passed: false, detail: String(error) }); }
-    finally {
-      for (const method of outstanding) { try { await window.fixtureHarness.resolveResponse(method, { value: updates }); } catch { /* A completed fake request needs no release. */ } } outstanding.clear();
-      await tick(); await window.fixtureHarness.resetResponses();
-      const modal = document.querySelector('[role="dialog"]'); if (modal) button(text.cancel, modal).click();
-      await window.fixtureHarness.setState(host); await window.fixtureHarness.setUpdates(updates); await tick(); button(text.scripts).click(); await tick();
-      for (const row of host.snapshot!.scripts) { selectScript(row.id); await tick(); const discard = document.querySelector<HTMLButtonElement>('.inspector .form-actions button:last-child'); if (discard && !discard.disabled) discard.click(); await tick(); }
+    try {
+      await test();
+      results.push({ name, passed: true });
+    } catch (error) {
+      results.push({ name, passed: false, detail: String(error) });
+    } finally {
+      for (const method of outstanding) {
+        try {
+          await window.fixtureHarness.resolveResponse(method, { value: updates });
+        } catch {
+          /* A completed fake request needs no release. */
+        }
+      }
+      outstanding.clear();
+      await tick();
+      await window.fixtureHarness.resetResponses();
+      const modal = document.querySelector('[role="dialog"]');
+      if (modal) button(text.cancel, modal).click();
+      await window.fixtureHarness.setState(host);
+      await window.fixtureHarness.setUpdates(updates);
+      await tick();
+      button(text.scripts).click();
+      await tick();
+      for (const row of host.snapshot!.scripts) {
+        selectScript(row.id);
+        await tick();
+        const discard = document.querySelector<HTMLButtonElement>(
+          '.inspector .form-actions button:last-child',
+        );
+        if (discard && !discard.disabled) discard.click();
+        await tick();
+      }
     }
   }
-  await check('update navigation announces availability and check keeps escaped permanent history on error', async () => {
-    await window.fixtureHarness.setState(host); await window.fixtureHarness.setUpdates(updates); await tick();
-    assert(document.querySelector('.update-nav-dot') && button(text.updateOpen), 'New version indicator absent');
-    button(text.updateOpen).click(); await tick();
-    assert(document.querySelector('h1')?.textContent === text.updates && button(text.updateInstall), 'Update page or primary action absent');
-    assert(document.querySelectorAll('.update-release').length === 3 && !document.querySelector('.update-release-notes img'), 'History is incomplete or interpreted release markup');
-    await window.fixtureHarness.clearCalls();
-    await window.fixtureHarness.setResponse('checkUpdates', { value: { ...updates, phase: 'error', error: 'Sem conexão. As versões locais foram preservadas.' } });
-    button(text.updateCheck).click(); await untilCall('checkUpdates'); await tick();
-    assert(document.querySelectorAll('.update-release').length === 3 && document.querySelector('.update-feedback')?.textContent?.includes('preservadas'), 'Check error discarded history');
-  });
-  await check('rollback remains available with no backend and dispatches one opaque release ID', async () => {
-    await window.fixtureHarness.setState({ snapshot: null, connection: 'failed', error: 'Fixture de falha da biblioteca.', busy: false, authorityMode: null, administrationPending: false });
-    await window.fixtureHarness.setUpdates({ ...updates, availableVersion: null, phase: 'error', error: 'Sem conexão com o GitHub.', releases: updates.releases.filter(release => release.cached) }); await tick(); button(text.updates).click(); await tick();
-    const cachedCard = [...document.querySelectorAll<HTMLElement>('.update-release')].find(card => card.querySelector('h3')?.textContent === '1.2.0');
-    assert(cachedCard, 'Cached rollback version is missing');
-    const rollback = button(text.updateRollback, cachedCard);
-    assert(!rollback.disabled && document.querySelector('.update-recovery-notice')?.textContent === text.updateRecoveryHint, 'Backend failure disabled recovery');
-    await window.fixtureHarness.clearCalls(); await window.fixtureHarness.setResponse('installUpdate', { pending: true }); outstanding.add('installUpdate');
-    rollback.click(); rollback.click(); await untilCall('installUpdate'); await tick();
-    const calls = (await window.fixtureHarness.calls()).filter(call => call.method === 'installUpdate');
-    assert(calls.length === 1, 'Rollback repeated its request');
-    assert(calls[0]!.args[0] === 'fixture-cached-120', 'Rollback did not send the cached opaque release ID');
-    assert(rollback.disabled, 'Pending rollback action remains enabled');
-    assert(document.querySelector('.updates-availability')?.textContent === text.updateLatestUnknown, 'Failed check falsely reports the installed version as latest');
-    const checked = new Date(updates.lastCheckedAt!).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-    assert(document.querySelector('.updates-summary')?.textContent?.includes(checked), 'Last successful check lost its date and time');
-    const guard = window.fixtureHarness.readGuard(); assert(guard && !guard.dirtyDrafts && !guard.dialogOpen && !guard.pendingWork, 'Install button pending state blocks its own host preflight');
-    await window.fixtureHarness.resolveResponse('installUpdate', { value: updates }); outstanding.delete('installUpdate'); await tick();
-  });
-  await check('dirty script drafts and active modal block update installation without losing edits', async () => {
-    await window.fixtureHarness.setState(host); await window.fixtureHarness.setUpdates(updates); await tick(); button(text.scripts).click(); selectScript(host.snapshot!.scripts[0]!.id); await tick();
-    const field = document.getElementById('draft-name') as HTMLInputElement; edit(field, 'Rascunho preservado antes de atualizar'); await tick();
-    button(text.updates).click(); await tick(); await window.fixtureHarness.clearCalls();
-    assert(button(text.updateInstall).disabled && document.querySelector('.update-recovery-notice')?.textContent === text.updateDirtyGuard, 'Dirty metadata did not block update');
-    button(text.updateInstall).click(); await tick(); assert(!(await window.fixtureHarness.calls()).some(call => call.method === 'installUpdate'), 'Dirty draft dispatched installation');
-    button(text.scripts).click(); await tick(); assert((document.getElementById('draft-name') as HTMLInputElement).value === 'Rascunho preservado antes de atualizar', 'Update navigation discarded draft');
-    button(text.discard, document.querySelector('.inspector')!).click(); await tick(); button(text.updates).click(); await tick();
-    assert(!button(text.updateInstall).disabled, 'Discarded draft kept installation blocked');
-    button(text.help).click(); await tick(); assert(button(text.updateInstall).disabled, 'Open modal did not block update action');
-    button(text.close, document.querySelector('[role="dialog"]')!).click(); await tick();
-  });
-  await check('GitHub token is masked, cleared before save resolves, never echoed and removable', async () => {
-    await window.fixtureHarness.setState(host); await window.fixtureHarness.setUpdates(updates); await tick(); button(text.updates).click(); await tick();
-    const access = document.querySelector<HTMLDetailsElement>('.update-access')!; access.open = true;
-    const field = document.getElementById('update-token') as HTMLInputElement; const fixtureCredential = 'fixture-only-token-never-a-real-secret';
-    assert(field.type === 'password' && !field.value, 'Credential field is unmasked or prepopulated');
-    assert(access.textContent?.includes('repositório público funcionam sem token') && access.textContent?.includes('é opcional') && document.querySelector('.update-access-state')?.textContent === text.updateAccessMissing, 'Public updates incorrectly require authentication');
-    edit(field, fixtureCredential); await tick(); await window.fixtureHarness.clearCalls(); await window.fixtureHarness.setResponse('setUpdateToken', { pending: true }); outstanding.add('setUpdateToken');
-    button(text.updateSaveAccess).click(); await untilCall('setUpdateToken'); await tick();
-    assert(!field.value && !document.body.textContent?.includes(fixtureCredential), 'Saved credential stayed in the rendered page');
-    assert((await window.fixtureHarness.calls()).find(call => call.method === 'setUpdateToken')?.args[0] === '[redacted]', 'Fixture log retained credential');
-    await window.fixtureHarness.resolveResponse('setUpdateToken', { value: { ...updates, accessConfigured: true } }); outstanding.delete('setUpdateToken'); await tick();
-    assert(!button(text.updateRemoveAccess).disabled && document.querySelector('.update-access-state')?.textContent === text.updateAccessConfigured, 'Configured access not reflected');
-    await window.fixtureHarness.setResponse('setUpdateToken', { value: updates }); button(text.updateRemoveAccess).click(); await tick();
-    const last = (await window.fixtureHarness.calls()).filter(call => call.method === 'setUpdateToken').at(-1);
-    assert(last?.args[0] === null && document.querySelector('.update-access-state')?.textContent === text.updateAccessMissing, 'Remove access did not send null');
-  });
-  await window.fixtureHarness.setUpdates({ ...updates, availableVersion: null, releases: [] }); await tick();
+  await check(
+    'changing channel dispatches once, disables conflicting actions and never installs automatically',
+    async () => {
+      await window.fixtureHarness.setState(host);
+      await window.fixtureHarness.setUpdates(updates);
+      await tick();
+      button(text.updates).click();
+      await tick();
+      const selector = document.getElementById('update-channel') as HTMLSelectElement;
+      assert(
+        selector.value === 'stable' && !selector.disabled,
+        'Stable channel is not the default',
+      );
+      assert(
+        selector.labels?.[0]?.textContent === text.updateChannel,
+        'Channel label is not associated',
+      );
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('setUpdateChannel', { pending: true });
+      outstanding.add('setUpdateChannel');
+      selector.value = 'test';
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+      await untilCall('setUpdateChannel');
+      await tick();
+      assert(
+        selector.disabled && button(text.updateInstall).disabled,
+        'Pending channel switch allowed another update action',
+      );
+      const calls = await window.fixtureHarness.calls();
+      assert(
+        calls.filter((call) => call.method === 'setUpdateChannel').length === 1,
+        'Channel change was repeated',
+      );
+      assert(
+        calls.find((call) => call.method === 'setUpdateChannel')?.args[0] === 'test',
+        'Channel request differs from selection',
+      );
+      await window.fixtureHarness.resolveResponse('setUpdateChannel', {
+        value: testUpdateFixture(),
+      });
+      outstanding.delete('setUpdateChannel');
+      await tick();
+      assert(
+        selector.value === 'test' && !selector.disabled,
+        'Selected test channel is not reflected',
+      );
+      assert(
+        document.querySelector('.update-release-badges')?.textContent?.includes(text.updatePreview),
+        'Test release lacks a visible preview label',
+      );
+      assert(
+        !(await window.fixtureHarness.calls()).some((call) => call.method === 'installUpdate'),
+        'Changing channel installed a version automatically',
+      );
+    },
+  );
+  await check(
+    'returning to stable offers an explicit rollback from an installed test version',
+    async () => {
+      const preview = testUpdateFixture();
+      preview.currentVersion = preview.availableVersion!;
+      preview.availableVersion = null;
+      preview.releases = preview.releases.map((release) => ({
+        ...release,
+        installed: release.version === preview.currentVersion,
+        canInstall: release.version !== preview.currentVersion,
+      }));
+      await window.fixtureHarness.setUpdates(preview);
+      await tick();
+      button(text.updates).click();
+      await tick();
+      const stable = { ...updates, currentVersion: preview.currentVersion };
+      await window.fixtureHarness.setResponse('setUpdateChannel', { value: stable });
+      await window.fixtureHarness.clearCalls();
+      const selector = document.getElementById('update-channel') as HTMLSelectElement;
+      selector.value = 'stable';
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+      await untilCall('setUpdateChannel');
+      await tick();
+      assert(
+        document.querySelector('.updates-availability')?.textContent ===
+          `${text.updateStableAvailable} ${stable.availableVersion}`,
+        'Stable version is described as a newer preview',
+      );
+      const rollback = button(
+        text.updateRollback,
+        document.querySelector('.updates-summary-actions')!,
+      );
+      assert(!rollback.disabled && selector.value === 'stable', 'Stable rollback is not available');
+      assert(
+        !(await window.fixtureHarness.calls()).some((call) => call.method === 'installUpdate'),
+        'Returning to stable installed without an explicit action',
+      );
+      await window.fixtureHarness.setResponse('installUpdate', { value: stable });
+      rollback.click();
+      await untilCall('installUpdate');
+      assert(
+        (await window.fixtureHarness.calls()).find((call) => call.method === 'installUpdate')
+          ?.args[0] === 'fixture-new-122',
+        'Stable rollback selected the wrong release',
+      );
+    },
+  );
+  await check(
+    'failed channel persistence retains the previous selection and shows an error',
+    async () => {
+      await window.fixtureHarness.setUpdates(updates);
+      await tick();
+      button(text.updates).click();
+      await tick();
+      await window.fixtureHarness.setResponse('setUpdateChannel', {
+        error: 'Fixture persistence failure',
+      });
+      const selector = document.getElementById('update-channel') as HTMLSelectElement;
+      selector.value = 'test';
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+      await until(
+        () =>
+          selector.value === 'stable' &&
+          !selector.disabled &&
+          document.querySelector('[role="alert"]')?.textContent === text.updateChannelFailed,
+        'Failed channel change did not restore the previous choice and announce the error',
+      );
+      assert(
+        document.querySelector('[role="alert"]')?.textContent === text.updateChannelFailed,
+        'Channel failure is not announced',
+      );
+    },
+  );
+  await check(
+    'update navigation announces availability and check keeps escaped permanent history on error',
+    async () => {
+      await window.fixtureHarness.setState(host);
+      await window.fixtureHarness.setUpdates(updates);
+      await tick();
+      assert(
+        document.querySelector('.update-nav-dot') && button(text.updateOpen),
+        'New version indicator absent',
+      );
+      button(text.updateOpen).click();
+      await tick();
+      assert(
+        document.querySelector('h1')?.textContent === text.updates && button(text.updateInstall),
+        'Update page or primary action absent',
+      );
+      assert(
+        document.querySelectorAll('.update-release').length === 3 &&
+          !document.querySelector('.update-release-notes img'),
+        'History is incomplete or interpreted release markup',
+      );
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('checkUpdates', {
+        value: {
+          ...updates,
+          phase: 'error',
+          error: 'Sem conexão. As versões locais foram preservadas.',
+        },
+      });
+      button(text.updateCheck).click();
+      await untilCall('checkUpdates');
+      await tick();
+      assert(
+        document.querySelectorAll('.update-release').length === 3 &&
+          document.querySelector('.update-feedback')?.textContent?.includes('preservadas'),
+        'Check error discarded history',
+      );
+    },
+  );
+  await check(
+    'rollback remains available with no backend and dispatches one opaque release ID',
+    async () => {
+      await window.fixtureHarness.setState({
+        snapshot: null,
+        connection: 'failed',
+        error: 'Fixture de falha da biblioteca.',
+        busy: false,
+        authorityMode: null,
+        administrationPending: false,
+      });
+      await window.fixtureHarness.setUpdates({
+        ...updates,
+        availableVersion: null,
+        phase: 'error',
+        error: 'Sem conexão com o GitHub.',
+        releases: updates.releases.filter((release) => release.cached),
+      });
+      await tick();
+      button(text.updates).click();
+      await tick();
+      const cachedCard = [...document.querySelectorAll<HTMLElement>('.update-release')].find(
+        (card) => card.querySelector('h3')?.textContent === '1.2.0',
+      );
+      assert(cachedCard, 'Cached rollback version is missing');
+      const rollback = button(text.updateRollback, cachedCard);
+      assert(
+        !rollback.disabled &&
+          document.querySelector('.update-recovery-notice')?.textContent ===
+            text.updateRecoveryHint,
+        'Backend failure disabled recovery',
+      );
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('installUpdate', { pending: true });
+      outstanding.add('installUpdate');
+      rollback.click();
+      rollback.click();
+      await untilCall('installUpdate');
+      await tick();
+      const calls = (await window.fixtureHarness.calls()).filter(
+        (call) => call.method === 'installUpdate',
+      );
+      assert(calls.length === 1, 'Rollback repeated its request');
+      assert(
+        calls[0]!.args[0] === 'fixture-cached-120',
+        'Rollback did not send the cached opaque release ID',
+      );
+      assert(rollback.disabled, 'Pending rollback action remains enabled');
+      assert(
+        document.querySelector('.updates-availability')?.textContent === text.updateLatestUnknown,
+        'Failed check falsely reports the installed version as latest',
+      );
+      const checked = new Date(updates.lastCheckedAt!).toLocaleString('pt-BR', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      });
+      assert(
+        document.querySelector('.updates-summary')?.textContent?.includes(checked),
+        'Last successful check lost its date and time',
+      );
+      const guard = window.fixtureHarness.readGuard();
+      assert(
+        guard && !guard.dirtyDrafts && !guard.dialogOpen && !guard.pendingWork,
+        'Install button pending state blocks its own host preflight',
+      );
+      await window.fixtureHarness.resolveResponse('installUpdate', { value: updates });
+      outstanding.delete('installUpdate');
+      await tick();
+    },
+  );
+  await check(
+    'dirty script drafts and active modal block update installation without losing edits',
+    async () => {
+      await window.fixtureHarness.setState(host);
+      await window.fixtureHarness.setUpdates(updates);
+      await tick();
+      button(text.scripts).click();
+      selectScript(host.snapshot!.scripts[0]!.id);
+      await tick();
+      const field = document.getElementById('draft-name') as HTMLInputElement;
+      edit(field, 'Rascunho preservado antes de atualizar');
+      await tick();
+      button(text.updates).click();
+      await tick();
+      await window.fixtureHarness.clearCalls();
+      assert(
+        button(text.updateInstall).disabled &&
+          document.querySelector('.update-recovery-notice')?.textContent === text.updateDirtyGuard,
+        'Dirty metadata did not block update',
+      );
+      button(text.updateInstall).click();
+      await tick();
+      assert(
+        !(await window.fixtureHarness.calls()).some((call) => call.method === 'installUpdate'),
+        'Dirty draft dispatched installation',
+      );
+      button(text.scripts).click();
+      await tick();
+      assert(
+        (document.getElementById('draft-name') as HTMLInputElement).value ===
+          'Rascunho preservado antes de atualizar',
+        'Update navigation discarded draft',
+      );
+      button(text.discard, document.querySelector('.inspector')!).click();
+      await tick();
+      button(text.updates).click();
+      await tick();
+      assert(!button(text.updateInstall).disabled, 'Discarded draft kept installation blocked');
+      button(text.help).click();
+      await tick();
+      assert(button(text.updateInstall).disabled, 'Open modal did not block update action');
+      button(text.close, document.querySelector('[role="dialog"]')!).click();
+      await tick();
+    },
+  );
+  await check(
+    'GitHub token is masked, cleared before save resolves, never echoed and removable',
+    async () => {
+      await window.fixtureHarness.setState(host);
+      await window.fixtureHarness.setUpdates(updates);
+      await tick();
+      button(text.updates).click();
+      await tick();
+      const access = document.querySelector<HTMLDetailsElement>('.update-access')!;
+      access.open = true;
+      const field = document.getElementById('update-token') as HTMLInputElement;
+      const fixtureCredential = 'fixture-only-token-never-a-real-secret';
+      assert(
+        field.type === 'password' && !field.value,
+        'Credential field is unmasked or prepopulated',
+      );
+      assert(
+        access.textContent?.includes('repositório público funcionam sem token') &&
+          access.textContent?.includes('é opcional') &&
+          document.querySelector('.update-access-state')?.textContent === text.updateAccessMissing,
+        'Public updates incorrectly require authentication',
+      );
+      edit(field, fixtureCredential);
+      await tick();
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('setUpdateToken', { pending: true });
+      outstanding.add('setUpdateToken');
+      button(text.updateSaveAccess).click();
+      await untilCall('setUpdateToken');
+      await tick();
+      assert(
+        !field.value && !document.body.textContent?.includes(fixtureCredential),
+        'Saved credential stayed in the rendered page',
+      );
+      assert(
+        (await window.fixtureHarness.calls()).find((call) => call.method === 'setUpdateToken')
+          ?.args[0] === '[redacted]',
+        'Fixture log retained credential',
+      );
+      await window.fixtureHarness.resolveResponse('setUpdateToken', {
+        value: { ...updates, accessConfigured: true },
+      });
+      outstanding.delete('setUpdateToken');
+      await tick();
+      assert(
+        !button(text.updateRemoveAccess).disabled &&
+          document.querySelector('.update-access-state')?.textContent ===
+            text.updateAccessConfigured,
+        'Configured access not reflected',
+      );
+      await window.fixtureHarness.setResponse('setUpdateToken', { value: updates });
+      button(text.updateRemoveAccess).click();
+      await tick();
+      const last = (await window.fixtureHarness.calls())
+        .filter((call) => call.method === 'setUpdateToken')
+        .at(-1);
+      assert(
+        last?.args[0] === null &&
+          document.querySelector('.update-access-state')?.textContent === text.updateAccessMissing,
+        'Remove access did not send null',
+      );
+    },
+  );
+  await window.fixtureHarness.setUpdates({ ...updates, availableVersion: null, releases: [] });
+  await tick();
   return results;
 }
 
-export async function previewUpdates(recovery = false): Promise<AssertionRecord[]> {
-  const modal = document.querySelector('[role="dialog"]'); if (modal) button(text.cancel, modal).click();
+export async function previewUpdates(
+  recovery = false,
+  testChannel = false,
+): Promise<AssertionRecord[]> {
+  const modal = document.querySelector('[role="dialog"]');
+  if (modal) button(text.cancel, modal).click();
   await window.fixtureHarness.resetResponses();
-  const updates = updateFixture(); updates.releases[2] = { ...updates.releases[2]!, notes: 'Correções de estabilidade e recuperação de arquivos. Esta versão foi preservada neste computador.' };
-  if (recovery) { updates.availableVersion = null; updates.phase = 'error'; updates.error = 'Não foi possível verificar versões online. As versões locais continuam disponíveis.'; updates.releases = [updates.releases[2]!, updates.releases[1]!, { ...updates.releases[0]!, canInstall: false }]; }
+  const updates = testChannel ? testUpdateFixture() : updateFixture();
+  const cachedIndex = updates.releases.findIndex((release) => release.id === 'fixture-cached-120');
+  updates.releases[cachedIndex] = {
+    ...updates.releases[cachedIndex]!,
+    notes:
+      'Correções de estabilidade e recuperação de arquivos. Esta versão foi preservada neste computador.',
+  };
+  if (recovery) {
+    updates.availableVersion = null;
+    updates.phase = 'error';
+    updates.error =
+      'Não foi possível verificar versões online. As versões locais continuam disponíveis.';
+    updates.releases = [
+      updates.releases[2]!,
+      updates.releases[1]!,
+      { ...updates.releases[0]!, canInstall: false },
+    ];
+  }
   await window.fixtureHarness.setUpdates(updates);
-  await window.fixtureHarness.setState(recovery ? { snapshot: null, connection: 'failed', error: 'Fixture de recuperação.', busy: false, authorityMode: null, administrationPending: false } : state());
-  await tick(); button(text.updates).click(); await tick();
-  const scroll = document.querySelector<HTMLElement>('.updates-page'); if (scroll) scroll.scrollTop = 0;
-  assert(scroll && scroll.clientHeight > 0 && scroll.scrollWidth <= scroll.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth, 'Update page overflows its viewport');
+  await window.fixtureHarness.setState(
+    recovery
+      ? {
+          snapshot: null,
+          connection: 'failed',
+          error: 'Fixture de recuperação.',
+          busy: false,
+          authorityMode: null,
+          administrationPending: false,
+        }
+      : state(),
+  );
+  await tick();
+  button(text.updates).click();
+  await tick();
+  const scroll = document.querySelector<HTMLElement>('.updates-page');
+  if (scroll) scroll.scrollTop = 0;
+  assert(
+    scroll &&
+      scroll.clientHeight > 0 &&
+      scroll.scrollWidth <= scroll.clientWidth + 1 &&
+      document.documentElement.scrollWidth <= innerWidth,
+    'Update page overflows its viewport',
+  );
   if (recovery && innerWidth < 700) {
     const history = document.querySelector<HTMLElement>('.update-history')!;
     scroll.scrollTop = history.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 8;
     await tick();
   }
-  return [{ name: 'updates preview shows new version and cached rollback history', passed: !!document.querySelector('.update-release-list') }];
+  return [
+    {
+      name: 'updates preview shows new version and cached rollback history',
+      passed:
+        !!document.querySelector('.update-release-list') &&
+        (document.getElementById('update-channel') as HTMLSelectElement)?.value ===
+          (testChannel ? 'test' : 'stable'),
+    },
+  ];
 }

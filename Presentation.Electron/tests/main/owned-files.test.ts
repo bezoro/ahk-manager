@@ -83,7 +83,7 @@ test('packager version override controls APP_VERSION and cache receipt version f
     const icon=path.join(root,'icon.ico');fs.writeFileSync(icon,'fixture icon');
     const installer=fs.readFileSync(path.resolve('scripts/installer.nsh'),'utf8');
     assert.match(installer,/version\$\\":\$\\"\$\{APP_VERSION\}/);
-    for(const version of ['1.2.0','1.2.1']){
+    for(const version of ['1.2.0','1.2.1','1.3.0-test.18.1.2']){
       const output=path.join(root,version);fs.mkdirSync(output);
       await writeOwnedFiles({appOutDir:app,packager:{appInfo:{version}}},output,icon);
       const header=fs.readFileSync(path.join(output,'owned-files.nsh'),'utf8');

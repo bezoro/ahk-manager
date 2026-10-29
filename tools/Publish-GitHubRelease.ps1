@@ -4,11 +4,15 @@ param(
     [Parameter(Mandatory = $true)][string]$ManifestPath,
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$Commit,
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+    [ValidateSet('stable', 'test')][string]$Channel = 'stable',
+    [long]$TestRunId = 0
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Release-Limits.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Release-GitTags.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
 if (-not [IO.Path]::IsPathFullyQualified($InstallerPath) -or -not [IO.Path]::IsPathFullyQualified($ManifestPath)) { throw 'Release paths must be absolute.' }
 if ([IO.Path]::GetFileName($ManifestPath) -cne 'ahk-manager-release.json') { throw 'Unexpected release manifest name.' }
 $manifestFile = Get-Item -LiteralPath $ManifestPath
@@ -37,7 +41,8 @@ try {
     }
 }
 finally { $document.Dispose() }
-if ($manifest.schemaVersion -ne 1 -or $manifest.updateProtocol -ne 1 -or $manifest.version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' -or $manifest.commit -cne $Commit.ToLowerInvariant() -or $manifest.notes -isnot [string] -or $manifest.notes.Length -gt 4000 -or $manifest.notes.Contains([char]0)) { throw 'Invalid release identity.' }
+if ($manifest.schemaVersion -ne 1 -or $manifest.updateProtocol -ne 1 -or -not (Test-ReleaseVersion $manifest.version) -or $manifest.commit -cne $Commit.ToLowerInvariant() -or $manifest.notes -isnot [string] -or $manifest.notes.Length -gt 4000 -or $manifest.notes.Contains([char]0)) { throw 'Invalid release identity.' }
+$releaseChannel = Get-ReleaseVersionChannel $manifest.version
 $date = [DateTimeOffset]::MinValue
 if ($manifest.publishedAt -isnot [string] -or $manifest.publishedAt -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$' -or -not [DateTimeOffset]::TryParse($manifest.publishedAt, [ref]$date)) { throw 'Invalid publication timestamp.' }
 $installer = Get-Item -LiteralPath $InstallerPath
@@ -47,9 +52,27 @@ $sha512 = [Convert]::ToBase64String([Convert]::FromHexString((Get-FileHash -Lite
 if ($manifest.installer.sha256 -cne $sha256 -or $manifest.installer.sha512 -cne $sha512) { throw 'Release installer hash mismatch.' }
 if ($ValidateOnly) { Write-Host "Release $($manifest.version) validated; no network or publication performed."; return }
 
-if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_REF -ne 'refs/heads/main' -or $env:GITHUB_REPOSITORY -cne $Repository -or $env:GITHUB_SHA -cne $Commit) { throw 'Publication requires the approved main-branch GitHub Actions job.' }
+if ($releaseChannel -cne $Channel -or $env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_REF -ne 'refs/heads/main' -or $env:GITHUB_REPOSITORY -cne $Repository) { throw 'Publication requires the approved channel and main-branch GitHub Actions job.' }
+if ($Channel -ceq 'stable' -and ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_SHA -cne $Commit)) { throw 'Stable publication requires an approved main-branch push.' }
+if ($Channel -ceq 'test' -and ($env:GITHUB_EVENT_NAME -ne 'workflow_run' -or $TestRunId -le 0)) { throw 'Test publication requires a trusted workflow_run publisher.' }
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'The release job token is missing.' }
 $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'Bezoro-AhkManager-Release' }
+$invoke = Get-Command Invoke-RestMethod
+$request = {
+    param($Method, $Uri, $Body)
+    $parameters = @{ Method = $Method; Uri = $Uri; Headers = $headers }
+    if ($null -ne $Body) { $parameters.ContentType = 'application/json'; $parameters.Body = $Body }
+    & $invoke @parameters
+}.GetNewClosure()
+$testContext = $null
+if ($Channel -ceq 'test') {
+    Import-Module (Join-Path $PSScriptRoot 'TestReleaseContext.psm1') -Force
+    $readContext = { param($Uri) & $invoke -Method Get -Uri $Uri -Headers $headers }.GetNewClosure()
+    $testContext = Get-TestReleaseContext -Repository $Repository -RunId $TestRunId -Request $readContext
+    $suffix = "-test.$($testContext.RunNumber).$($testContext.Attempt).$($testContext.PullRequest)"
+    if ($testContext.Commit -cne $Commit -or -not $manifest.version.EndsWith($suffix, [StringComparison]::Ordinal)) { throw 'The test release identity does not match the approved run.' }
+}
+$isPrerelease = $Channel -ceq 'test'
 $base = "https://api.github.com/repos/$Repository/releases"
 $tag = 'v' + $manifest.version
 $release = $null
@@ -60,11 +83,17 @@ catch {
 }
 if ($null -ne $release) {
     # Published releases are never patched, replaced, deleted or re-uploaded.
-    if ($release.target_commitish -cne $Commit -or $release.tag_name -cne $tag) { throw 'Existing draft belongs to a different commit.' }
+    if ($release.target_commitish -cne $Commit -or $release.tag_name -cne $tag -or $release.prerelease -isnot [bool] -or $release.prerelease -ne $isPrerelease) { throw 'Existing release belongs to a different commit or channel.' }
     $alreadyPublished = -not $release.draft
+    if ($alreadyPublished) {
+        $actual = Get-ReleaseGitTagCommit -Repository $Repository -TagName $tag -Request $request
+        if ($null -eq $actual -or $actual -cne $Commit) { throw 'The published release tag no longer identifies the approved commit.' }
+    }
+    else { $null = Ensure-ReleaseGitTag -Repository $Repository -TagName $tag -Commit $Commit -Request $request }
 }
 else {
-    $body = @{ tag_name = $tag; target_commitish = $Commit; name = "AHK Manager $($manifest.version)"; body = $manifest.notes; draft = $true; prerelease = $false; make_latest = 'false' } | ConvertTo-Json
+    $null = Ensure-ReleaseGitTag -Repository $Repository -TagName $tag -Commit $Commit -Request $request
+    $body = @{ tag_name = $tag; target_commitish = $Commit; name = "AHK Manager $($manifest.version)"; body = $manifest.notes; draft = $true; prerelease = $isPrerelease; make_latest = 'false' } | ConvertTo-Json
     $release = Invoke-RestMethod -Method Post -Uri $base -Headers $headers -ContentType 'application/json' -Body $body
 }
 
@@ -81,12 +110,24 @@ foreach ($file in @($installer, $manifestFile)) {
     $asset = Invoke-RestMethod -Method Post -Uri $upload -Headers $headers -ContentType $contentType -InFile $file.FullName
     if ($asset.name -cne $file.Name -or $asset.size -ne $file.Length -or $asset.state -cne 'uploaded') { throw 'GitHub did not confirm the complete asset upload; the release remains a draft.' }
 }
+$actual = Get-ReleaseGitTagCommit -Repository $Repository -TagName $tag -Request $request
+if ($null -eq $actual -or $actual -cne $Commit) { throw 'The release tag changed before publication; no release will be published.' }
 if ($alreadyPublished) { Write-Host "Release $tag is already published with identical assets; no changes were made."; return }
 $release = Invoke-RestMethod -Uri "$base/$($release.id)" -Headers $headers
-foreach ($name in @($installer.Name, $manifestFile.Name)) {
-    if (@($release.assets | Where-Object { $_.name -ceq $name -and $_.state -ceq 'uploaded' }).Count -ne 1) { throw 'The release is missing an uploaded asset and remains a draft.' }
+if ($release.tag_name -cne $tag -or $release.target_commitish -cne $Commit -or $release.prerelease -isnot [bool] -or $release.prerelease -ne $isPrerelease) { throw 'The release identity or channel changed before publication.' }
+foreach ($file in @($installer, $manifestFile)) {
+    $assets = @($release.assets | Where-Object { $_.name -ceq $file.Name -and $_.state -ceq 'uploaded' })
+    $digest = 'sha256:' + (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($assets.Count -ne 1 -or $assets[0].size -ne $file.Length -or $null -eq $assets[0].PSObject.Properties['digest'] -or $assets[0].digest -cne $digest) { throw 'An uploaded asset changed before publication; the release remains a draft.' }
 }
 if (-not $release.draft) { Write-Host "Release $tag was published concurrently; verified assets were preserved without further changes."; return }
-$published = Invoke-RestMethod -Method Patch -Uri "$base/$($release.id)" -Headers $headers -ContentType 'application/json' -Body (@{ draft = $false; make_latest = 'true' } | ConvertTo-Json)
+$actual = Get-ReleaseGitTagCommit -Repository $Repository -TagName $tag -Request $request
+if ($null -eq $actual -or $actual -cne $Commit) { throw 'The release tag changed before publication; the release remains a draft.' }
+if ($Channel -ceq 'test') {
+    $currentContext = Get-TestReleaseContext -Repository $Repository -RunId $TestRunId -Request $readContext
+    if ($currentContext.Commit -cne $testContext.Commit -or $currentContext.Attempt -ne $testContext.Attempt -or $currentContext.ArtifactId -ne $testContext.ArtifactId -or $currentContext.ArtifactDigest -cne $testContext.ArtifactDigest) { throw 'The test run changed before publication; its release remains a draft.' }
+}
+$latest = if ($isPrerelease) { 'false' } else { 'legacy' }
+$published = Invoke-RestMethod -Method Patch -Uri "$base/$($release.id)" -Headers $headers -ContentType 'application/json' -Body (@{ draft = $false; prerelease = $isPrerelease; make_latest = $latest } | ConvertTo-Json)
 if ($published.draft) { throw 'GitHub did not confirm release publication.' }
 Write-Host "Published $($published.html_url) with its manifest and installer."

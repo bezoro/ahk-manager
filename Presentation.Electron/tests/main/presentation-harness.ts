@@ -60,6 +60,7 @@ app.whenReady().then(async()=>{
     if(method==='getUpdateState')return updates;
     if(method==='checkUpdates'){updates={...updates,phase:'idle',lastCheckedAt:new Date().toISOString()};window.webContents.send('fixture:updates',updates);return updates;}
     if(method==='installUpdate')return {...updates,phase:'installing'};
+    if(method==='setUpdateChannel'){const channel=requireValid<'stable'|'test'>(args[0],oneOf('stable','test'),'fixture update channel');updates={...updates,channel,phase:'idle'};window.webContents.send('fixture:updates',updates);return updates;}
     if(method==='setUpdateToken'){updates={...updates,accessConfigured:args[0]!==null};window.webContents.send('fixture:updates',updates);return updates;}
     if(method==='refresh'||method==='retryBackend'){emitState();return;}
     if(method==='updateSelection'||method==='copyText')return;
@@ -91,7 +92,7 @@ app.whenReady().then(async()=>{
     else if(command.action==='startInTray'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.runStartInTrayScenario()');write('assertions-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='checkPrimary'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.checkPrimaryLabel()');write('primary-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='deleteScopes'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.runDeleteSelectionScopes()');write('assertions-'+command.id+'.json',{assertions,fixture:true});}
-    else if(command.action==='updates'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.previewUpdates('+Boolean(command.recovery)+')');write('updates-'+command.id+'.json',{assertions,fixture:true});}
+    else if(command.action==='updates'&&scenarios){const assertions=await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.previewUpdates('+Boolean(command.recovery)+', '+Boolean(command.testChannel)+')');write('updates-'+command.id+'.json',{assertions,fixture:true});}
     else if(command.action==='preferences'){if(scenarios)await window.webContents.executeJavaScript(scenarios+'\nAhkRendererScenarios.previewPreferences()');else window.webContents.send('fixture:preferences');report();}
     else if(command.action==='close'){nativeTheme.themeSource='system';write('closed.json',{themeRestored:nativeTheme.themeSource,fixture:true});app.quit();}
     else throw new Error('Unknown fixture command');
