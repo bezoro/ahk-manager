@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shutdownForUpdate } from '../../src/main/update-shutdown.js';
+import { shutdownForUpdate } from '../../src/main/updates/update-shutdown.js';
 import type { ShutdownBoundary } from '../../src/main/lifecycle.js';
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));

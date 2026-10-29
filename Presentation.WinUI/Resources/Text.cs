@@ -1,5 +1,5 @@
 using Microsoft.Windows.ApplicationModel.Resources;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Models;
 
 namespace Bezoro.AhkManager.WinUI.Resources;
 

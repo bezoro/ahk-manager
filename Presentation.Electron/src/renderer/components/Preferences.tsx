@@ -1,5 +1,16 @@
 import * as React from 'react';
-import { Button, Checkbox, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, Input, Textarea } from '@fluentui/react-components';
+import {
+  Button,
+  Checkbox,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Input,
+  Textarea,
+} from '@fluentui/react-components';
 import type { ManagerSettings } from '../../shared/contracts.js';
 import { text } from '../resources/en-US.js';
 import { OperationNotice, type Notice } from './OperationNotice.js';
@@ -16,79 +27,180 @@ interface Props {
   onTransferStartup(): void;
 }
 
-export function Preferences({ settings, busy, readonly, notice, onDismissNotice, onClose, onSave, onPick, onTransferStartup }: Props): React.ReactElement {
-  const [draft, setDraft] = React.useState(() => ({ ...settings, editorArguments: [...settings.editorArguments] }));
+export function Preferences({
+  settings,
+  busy,
+  readonly,
+  notice,
+  onDismissNotice,
+  onClose,
+  onSave,
+  onPick,
+  onTransferStartup,
+}: Props): React.ReactElement {
+  const [draft, setDraft] = React.useState(() => ({
+    ...settings,
+    editorArguments: [...settings.editorArguments],
+  }));
   const [argumentsText, setArgumentsText] = React.useState(settings.editorArguments.join('\n'));
   const [picking, setPicking] = React.useState(false);
-  const change = (patch: Partial<ManagerSettings>) => setDraft(value => ({ ...value, ...patch }));
+  const change = (patch: Partial<ManagerSettings>) => setDraft((value) => ({ ...value, ...patch }));
   async function choose(kind: 'interpreter' | 'editor'): Promise<void> {
     if (picking || busy) return;
     setPicking(true);
     try {
       const path = await onPick(kind);
       if (path) change(kind === 'editor' ? { editorPath: path } : { interpreterPath: path });
-    } finally { setPicking(false); }
+    } finally {
+      setPicking(false);
+    }
   }
-  const save = (): void => onSave({ ...draft, window: settings.window, editorArguments: argumentsText.split(/\r?\n/).filter(value => value.length > 0) });
-  return <Dialog open onOpenChange={(_, data) => { if (!data.open && !busy) onClose(); }}>
-    <DialogSurface className="preferences-dialog"><DialogBody>
-      <DialogTitle>{text.preferences}</DialogTitle>
-      <DialogContent>
-        <OperationNotice notice={notice} onDismiss={onDismissNotice} />
-        <fieldset disabled={readonly || busy || picking}>
-          <legend className="sr-only">{text.preferences}</legend>
-          <section className="preference-section startup-preferences" aria-labelledby="settings-startup-title">
-            <h3 id="settings-startup-title">{text.startup}</h3>
-            <Checkbox id="settings-launch-at-login" checked={draft.launchManagerAtLogin} label={text.launchManager} onChange={(_, data) => change({ launchManagerAtLogin: data.checked === true })} />
-            <p className="muted">{text.startupHint}</p>
-            <Checkbox id="settings-administrator" checked={draft.launchManagerAsAdministrator} label={text.launchManagerAsAdministrator} onChange={(_, data) => change({ launchManagerAsAdministrator: data.checked === true })} />
-            <p className="muted">{text.managerAdministratorHint}</p>
-            <Checkbox id="settings-start-in-tray" checked={draft.startInTray} label={text.startInTray} onChange={(_, data) => change({ startInTray: data.checked === true })} />
-            <p className="muted">{text.startInTrayHint}</p>
-            <Checkbox id="settings-show-at-login" checked={draft.showWindowAtLogin} disabled={draft.startInTray} label={text.showAtLogin} onChange={(_, data) => change({ showWindowAtLogin: data.checked === true })} />
-          </section>
-          <section className="preference-section" aria-labelledby="settings-editor-title">
-            <h3 id="settings-editor-title">{text.editor}</h3>
-            <div className="picker-row">
-              <Input aria-label={text.editor} readOnly value={draft.editorPath ?? ''} placeholder={text.editorDefault} />
-              <Button onClick={() => void choose('editor')}>{text.choose}</Button>
-              <Button appearance="subtle" onClick={() => change({ editorPath: null })}>{text.clear}</Button>
-            </div>
-            <p className="muted">{text.safeEditHint}</p>
-            <details className="preference-advanced"><summary>{text.editorAdvanced}</summary>
-              <label htmlFor="settings-editor-arguments">{text.editorArguments}</label>
-              <Textarea id="settings-editor-arguments" resize="vertical" value={argumentsText} onChange={(_, data) => setArgumentsText(data.value)} rows={3} />
-              <p className="muted">{text.editorArgumentsHint}</p>
-            </details>
-          </section>
-          <section className="preference-section" aria-labelledby="settings-appearance-title">
-            <h3 id="settings-appearance-title">{text.appearance}</h3>
-            <label htmlFor="settings-theme">{text.theme}</label>
-            <select id="settings-theme" value={draft.theme} onChange={event => change({ theme: event.target.value as ManagerSettings['theme'] })}>
-              <option value="System">{text.system}</option><option value="Light">{text.light}</option><option value="Dark">{text.dark}</option>
-            </select>
-            <p className="muted">{text.themeHint}</p>
-            <label htmlFor="settings-close-behavior">{text.closeBehavior}</label>
-            <select id="settings-close-behavior" value={draft.closeBehavior} onChange={event => change({ closeBehavior: event.target.value as ManagerSettings['closeBehavior'] })}>
-              <option value="HideToTray">{text.hideToTray}</option><option value="Exit">{text.exit}</option>
-            </select>
-            <p className="muted">{text.exitHint}</p>
-          </section>
-          <section className="preference-section" aria-labelledby="settings-interpreter-title">
-            <h3 id="settings-interpreter-title">{text.interpreter}</h3>
-            <div className="picker-row">
-              <Input aria-label={text.interpreter} readOnly value={draft.interpreterPath ?? ''} placeholder={text.notConfigured} />
-              <Button onClick={() => void choose('interpreter')}>{text.choose}</Button>
-              <Button appearance="subtle" onClick={() => change({ interpreterPath: null })}>{text.clear}</Button>
-            </div>
-            <details className="preference-advanced"><summary>{text.startupAdvanced}</summary>
-              <Button onClick={onTransferStartup}>{text.transferStartup}</Button>
-              <p className="muted">{text.transferStartupHint}</p>
-            </details>
-          </section>
-        </fieldset>
-      </DialogContent>
-      <DialogActions><Button disabled={busy} onClick={onClose}>{text.cancel}</Button><Button appearance="primary" disabled={readonly || busy || picking} onClick={save}>{text.save}</Button></DialogActions>
-    </DialogBody></DialogSurface>
-  </Dialog>;
+  const save = (): void =>
+    onSave({
+      ...draft,
+      window: settings.window,
+      editorArguments: argumentsText.split(/\r?\n/).filter((value) => value.length > 0),
+    });
+  return (
+    <Dialog
+      open
+      onOpenChange={(_, data) => {
+        if (!data.open && !busy) onClose();
+      }}
+    >
+      <DialogSurface className="preferences-dialog">
+        <DialogBody>
+          <DialogTitle>{text.preferences}</DialogTitle>
+          <DialogContent>
+            <OperationNotice notice={notice} onDismiss={onDismissNotice} />
+            <fieldset disabled={readonly || busy || picking}>
+              <legend className="sr-only">{text.preferences}</legend>
+              <section
+                className="preference-section startup-preferences"
+                aria-labelledby="settings-startup-title"
+              >
+                <h3 id="settings-startup-title">{text.startup}</h3>
+                <Checkbox
+                  id="settings-launch-at-login"
+                  checked={draft.launchManagerAtLogin}
+                  label={text.launchManager}
+                  onChange={(_, data) => change({ launchManagerAtLogin: data.checked === true })}
+                />
+                <p className="muted">{text.startupHint}</p>
+                <Checkbox
+                  id="settings-administrator"
+                  checked={draft.launchManagerAsAdministrator}
+                  label={text.launchManagerAsAdministrator}
+                  onChange={(_, data) =>
+                    change({ launchManagerAsAdministrator: data.checked === true })
+                  }
+                />
+                <p className="muted">{text.managerAdministratorHint}</p>
+                <Checkbox
+                  id="settings-start-in-tray"
+                  checked={draft.startInTray}
+                  label={text.startInTray}
+                  onChange={(_, data) => change({ startInTray: data.checked === true })}
+                />
+                <p className="muted">{text.startInTrayHint}</p>
+                <Checkbox
+                  id="settings-show-at-login"
+                  checked={draft.showWindowAtLogin}
+                  disabled={draft.startInTray}
+                  label={text.showAtLogin}
+                  onChange={(_, data) => change({ showWindowAtLogin: data.checked === true })}
+                />
+              </section>
+              <section className="preference-section" aria-labelledby="settings-editor-title">
+                <h3 id="settings-editor-title">{text.editor}</h3>
+                <div className="picker-row">
+                  <Input
+                    aria-label={text.editor}
+                    readOnly
+                    value={draft.editorPath ?? ''}
+                    placeholder={text.editorDefault}
+                  />
+                  <Button onClick={() => void choose('editor')}>{text.choose}</Button>
+                  <Button appearance="subtle" onClick={() => change({ editorPath: null })}>
+                    {text.clear}
+                  </Button>
+                </div>
+                <p className="muted">{text.safeEditHint}</p>
+                <details className="preference-advanced">
+                  <summary>{text.editorAdvanced}</summary>
+                  <label htmlFor="settings-editor-arguments">{text.editorArguments}</label>
+                  <Textarea
+                    id="settings-editor-arguments"
+                    resize="vertical"
+                    value={argumentsText}
+                    onChange={(_, data) => setArgumentsText(data.value)}
+                    rows={3}
+                  />
+                  <p className="muted">{text.editorArgumentsHint}</p>
+                </details>
+              </section>
+              <section className="preference-section" aria-labelledby="settings-appearance-title">
+                <h3 id="settings-appearance-title">{text.appearance}</h3>
+                <label htmlFor="settings-theme">{text.theme}</label>
+                <select
+                  id="settings-theme"
+                  value={draft.theme}
+                  onChange={(event) =>
+                    change({ theme: event.target.value as ManagerSettings['theme'] })
+                  }
+                >
+                  <option value="System">{text.system}</option>
+                  <option value="Light">{text.light}</option>
+                  <option value="Dark">{text.dark}</option>
+                </select>
+                <p className="muted">{text.themeHint}</p>
+                <label htmlFor="settings-close-behavior">{text.closeBehavior}</label>
+                <select
+                  id="settings-close-behavior"
+                  value={draft.closeBehavior}
+                  onChange={(event) =>
+                    change({
+                      closeBehavior: event.target.value as ManagerSettings['closeBehavior'],
+                    })
+                  }
+                >
+                  <option value="HideToTray">{text.hideToTray}</option>
+                  <option value="Exit">{text.exit}</option>
+                </select>
+                <p className="muted">{text.exitHint}</p>
+              </section>
+              <section className="preference-section" aria-labelledby="settings-interpreter-title">
+                <h3 id="settings-interpreter-title">{text.interpreter}</h3>
+                <div className="picker-row">
+                  <Input
+                    aria-label={text.interpreter}
+                    readOnly
+                    value={draft.interpreterPath ?? ''}
+                    placeholder={text.notConfigured}
+                  />
+                  <Button onClick={() => void choose('interpreter')}>{text.choose}</Button>
+                  <Button appearance="subtle" onClick={() => change({ interpreterPath: null })}>
+                    {text.clear}
+                  </Button>
+                </div>
+                <details className="preference-advanced">
+                  <summary>{text.startupAdvanced}</summary>
+                  <Button onClick={onTransferStartup}>{text.transferStartup}</Button>
+                  <p className="muted">{text.transferStartupHint}</p>
+                </details>
+              </section>
+            </fieldset>
+          </DialogContent>
+          <DialogActions>
+            <Button disabled={busy} onClick={onClose}>
+              {text.cancel}
+            </Button>
+            <Button appearance="primary" disabled={readonly || busy || picking} onClick={save}>
+              {text.save}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
 }

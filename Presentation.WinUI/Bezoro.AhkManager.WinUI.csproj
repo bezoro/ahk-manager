@@ -35,6 +35,9 @@
     <Content Include="../Assets/AppIcon.ico" Link="Assets/AppIcon.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../Assets/AppIcon-32.png" Link="Assets/AppIcon-32.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Core/AhkManager.Core.csproj" />
+  </ItemGroup>
   <Target Name="PublishNativeXamlResources" AfterTargets="Publish">
     <ItemGroup>
       <NativeXamlPublishResource Include="$(TargetDir)$(AssemblyName).pri" />

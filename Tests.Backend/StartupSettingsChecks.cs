@@ -1,9 +1,9 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using Bezoro.AhkManager.Backend;
-using Bezoro.AhkManager.WinUI.Infrastructure;
-using Bezoro.AhkManager.WinUI.Models;
-using Bezoro.AhkManager.WinUI.Services;
+using Bezoro.AhkManager.Core.Infrastructure;
+using Bezoro.AhkManager.Core.Models;
+using Bezoro.AhkManager.Core.Services;
 
 namespace Tests.Backend;
 
@@ -182,7 +182,7 @@ internal static class StartupSettingsChecks
         foreach (bool hostExited in new[] { false, true })
         {
             int notifications = 0;
-            ManagerElevation.ReportActivationFailure(
+            ElevationActivation.ReportActivationFailure(
                 result,
                 normalExited,
                 hostExited,

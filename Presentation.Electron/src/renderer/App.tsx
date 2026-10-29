@@ -1,156 +1,237 @@
 import * as React from 'react';
-import { Button, createDarkTheme, createLightTheme, FluentProvider, Input, Menu, MenuItem, MenuList, MenuPopover, MenuTrigger, Spinner, Tooltip } from '@fluentui/react-components';
-import { AddRegular, ArrowClockwiseRegular, ArrowDownloadRegular, ChevronDownRegular, DismissRegular, DocumentRegular, FolderRegular, HistoryRegular, InfoRegular, KeyboardRegular, MoreHorizontalRegular, PanelRightRegular, SearchRegular, SettingsRegular } from '@fluentui/react-icons';
-import type { CatalogResult, HostState, ManagerSettings, OperationResult, ScriptOperation, ScriptQuery } from '../shared/contracts.js';
-import { actionReason, brandPalette, defaultQuery, metadataOf, nextQuery, newDraft, rebaseRowPreference, reconcileDraft, visibleScripts, type Draft, type RowPreference } from './model.js';
+import { createDarkTheme, createLightTheme, FluentProvider } from '@fluentui/react-components';
+import type { Page } from './appTypes.js';
+import { brandPalette, newDraft } from './model.js';
 import { useHost, useNarrow, useTheme, useUpdates } from './hooks.js';
-import { catalogSummary, connectionStatus, operation, outcome, problemCount, reason, scriptCount, text } from './resources/en-US.js';
-import { time } from './format.js';
-import { ScriptList } from './components/ScriptList.js';
-import { Inspector } from './components/Inspector.js';
-import { Preferences } from './components/Preferences.js';
+import { useAdministration } from './hooks/useAdministration.js';
+import { useDialogs } from './hooks/useDialogs.js';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js';
+import { useLibrarySelection } from './hooks/useLibrarySelection.js';
+import { useManagerActions } from './hooks/useManagerActions.js';
+import { useMetadataDrafts } from './hooks/useMetadataDrafts.js';
+import { useOperations } from './hooks/useOperations.js';
 import { Activity } from './components/Activity.js';
+import { AppDialogs } from './components/AppDialogs.js';
+import { AppNavigation } from './components/AppNavigation.js';
+import { NativeTitle, PageHeading, StatusFooter, UpdateBanner } from './components/AppChrome.js';
+import { DisconnectedPage } from './components/DisconnectedPage.js';
 import { Hotkeys } from './components/Hotkeys.js';
+import { InspectorPanel } from './components/InspectorPanel.js';
+import { LibraryNotices } from './components/LibraryNotices.js';
+import { OperationNotice } from './components/OperationNotice.js';
+import { ScriptContextMenu } from './components/ScriptContextMenu.js';
+import { ScriptsPage } from './components/ScriptsPage.js';
 import { Updates } from './components/Updates.js';
-import { CollectionDialog, HelpDialog, ImportDialog } from './components/Dialogs.js';
-import { OperationNotice, type Notice } from './components/OperationNotice.js';
 
-type Page = 'scripts' | 'hotkeys' | 'activity' | 'updates';
-type DialogSession = { kind: 'preferences' | 'collection' | 'import' };
-type PreferenceAttempt = { previous: boolean | null; requested: boolean };
-type DeleteScope = { scriptId:string; path:string; query:ScriptQuery; authorityMode:HostState['authorityMode'] };
 export function App(): React.ReactElement {
-  const host = useHost(); const updates = useUpdates(); const appearance = useTheme(); const narrow = useNarrow(); const snapshot = host.snapshot;
-  const [page, setPage] = React.useState<Page>('scripts'); const [query, setQuery] = React.useState(defaultQuery); const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  const [deleteScope,setDeleteScope]=React.useState<DeleteScope|null>(null);
-  const [drafts, replaceDrafts] = React.useState<Record<string, Draft>>({});
-  const draftState = React.useRef(drafts);
-  const setDrafts = React.useCallback((update: React.SetStateAction<Record<string, Draft>>) => { const next = typeof update === 'function' ? update(draftState.current) : update; draftState.current = next; replaceDrafts(next); }, []);
-  const [pendingPreference, setPendingPreference] = React.useState<{ scriptId: string; field: RowPreference } | null>(null);
-  const preferenceReadbacks = React.useRef(new Map<string, Map<RowPreference, PreferenceAttempt>>());
-  const [preferences, setPreferences] = React.useState(false); const [help, setHelp] = React.useState(false); const [collectionDialog, setCollectionDialog] = React.useState<{ id: string | null; name: string } | null>(null);
-  const [preview, setPreview] = React.useState<Awaited<ReturnType<typeof window.ahkManager.previewImport>>>(null); const [notice, setNotice] = React.useState<Notice | null>(null); const [pending, setPending] = React.useState(false); const inFlight = React.useRef(false);
-  const dialogSession = React.useRef<DialogSession | null>(null); const [dialogNotice, setDialogNotice] = React.useState<Notice | null>(null);
-  const beginDialog = (kind: DialogSession['kind']): DialogSession => { const session = { kind }; dialogSession.current = session; setDialogNotice(null); setHelp(false); setPreferences(false); setCollectionDialog(null); setPreview(null); return session; };
-  const closeDialog = (): void => { dialogSession.current = null; setDialogNotice(null); setPreferences(false); setCollectionDialog(null); setPreview(null); };
-  const openPreferences = (): void => { if (dialogSession.current?.kind === 'preferences') return; beginDialog('preferences'); setPreferences(true); };
-  const openCollection = (value: { id: string | null; name: string }): void => { beginDialog('collection'); setCollectionDialog(value); };
-  const [showDetails, setShowDetails] = React.useState(false); const search = React.useRef<HTMLInputElement>(null); const inspector = React.useRef<HTMLElement>(null);
-  const [context, setContext] = React.useState<{ id: string; x: number; y: number } | null>(null); const contextRef = React.useRef<HTMLDivElement>(null);
-  const busy = pending || host.busy || host.administrationPending; const ready = host.connection === 'ready'; const readonly = !ready || !!snapshot?.readOnly;
-  const dialogOpen = preferences || help || !!preview || !!collectionDialog;
-  const updateBlockedReason = Object.values(drafts).some(draft => draft.dirty) ? text.updateDirtyGuard : dialogOpen ? text.updateDialogGuard : busy || preferenceReadbacks.current.size > 0 ? text.updatePendingGuard : null;
-  const administrativeGuard = React.useRef({dialogOpen, pendingWork:false});
-  administrativeGuard.current = {dialogOpen, pendingWork:host.busy || preferenceReadbacks.current.size > 0};
-  React.useEffect(() => window.ahkManager.onAdministrationPreflight(() => ({dirtyDrafts:Object.values(draftState.current).some(draft => draft.dirty),dialogOpen:administrativeGuard.current.dialogOpen,pendingWork:inFlight.current || administrativeGuard.current.pendingWork})), []);
-  const theme = React.useMemo(() => { const value = (appearance.dark ? createDarkTheme : createLightTheme)(brandPalette(appearance.accent)); return { ...value, fontFamilyBase: '"Segoe UI Variable", "Segoe UI", sans-serif' }; }, [appearance.dark, appearance.accent]);
-  const rows = React.useMemo(() => snapshot ? visibleScripts(snapshot, query) : [], [snapshot, query]);
-  const deleteScopeMatches=!!deleteScope&&page==='scripts'&&selectedId===deleteScope.scriptId&&query===deleteScope.query&&host.connection==='ready'&&host.authorityMode===deleteScope.authorityMode&&!host.administrationPending&&!!snapshot&&!snapshot.readOnly&&snapshot.effectsAvailable;
-  const deleteCandidate=deleteScopeMatches?snapshot?.scripts.find(script=>script.id===deleteScope.scriptId):null;
-  const retainedDelete=deleteCandidate&&deleteCandidate.path.toLowerCase()===deleteScope!.path.toLowerCase()&&!deleteCandidate.process&&(deleteCandidate.status==='Stopped'||deleteCandidate.status==='Unknown'&&deleteCandidate.issues.some(issue=>issue.code==='PendingOperation'))&&!deleteCandidate.issues.some(issue=>['ObservationIncomplete','IdentityChanged','MultipleInstances','AccessDenied','EffectOwnerUnavailable','StorageFailure','MissingFile','LegacyGuard'].includes(issue.code))?deleteCandidate:null;
-  const selected = page === 'scripts' ? rows.find(script => script.id === selectedId) ?? retainedDelete ?? null : null;
-  const selectionKey = selected?.id ?? null;
-  React.useEffect(() => { if (snapshot) setDrafts(previous => { const ids = new Set(snapshot.collections.map(collection => collection.id)); return Object.fromEntries(snapshot.scripts.map(script => [script.id, reconcileDraft(previous[script.id], script, ids)])); }); }, [snapshot]);
-  React.useEffect(()=>{if(deleteScope&&!deleteScopeMatches)setDeleteScope(current=>current===deleteScope?null:current);},[deleteScope,deleteScopeMatches]);
-  React.useEffect(() => { if (selectedId && page === 'scripts' && !rows.some(script => script.id === selectedId) && retainedDelete?.id!==selectedId) setSelectedId(null); }, [selectedId, rows, page,retainedDelete]);
-  React.useEffect(() => { if (query.collectionId && snapshot && !snapshot.collections.some(collection => collection.id === query.collectionId)) setQuery(previous => nextQuery(previous, { collectionId: null })); }, [snapshot, query.collectionId]);
-  // Query/selection changes invalidate undispatched plans. Own pending snapshot revisions do not self-cancel.
-  React.useEffect(() => { window.ahkManager.updateSelection(selectionKey && snapshot && ready ? { scriptId: selectionKey, query, stateRevision: snapshot.revision } : null); }, [selectionKey, query, ready]);
-  React.useEffect(() => setContext(null), [query]);
-  React.useEffect(() => window.ahkManager.onOpenPreferences(openPreferences), []);
-  const showNotice = React.useCallback((value: Notice, destination: DialogSession | null = null) => { setNotice(value); if (destination && dialogSession.current === destination) setDialogNotice(value); }, []);
-  const onError = React.useCallback((error: unknown, destination: DialogSession | null = null) => showNotice({ title: text.error, message: text.unknownError, detail: error instanceof Error ? error.message : String(error), warning: true }, destination), [showNotice]);
-  const report = React.useCallback((result: OperationResult, destination: DialogSession | null = null) => { if (result.outcome === 'CancelledBeforeDispatch') return; showNotice({ title: outcome(result.outcome), message: reason(result.code), detail: result.detail, warning: result.outcome !== 'Confirmed' }, destination); }, [showNotice]);
-  const run = React.useCallback(async <T,>(task: () => Promise<T>, complete?: (value: T) => void, destination: DialogSession | null = null): Promise<void> => { if (inFlight.current || host.busy || host.administrationPending) return; if (destination && dialogSession.current === destination) setDialogNotice(null); inFlight.current = true; setPending(true); try { const value = await task(); complete?.(value); } catch (error) { onError(error, destination); } finally { inFlight.current = false; setPending(false); } }, [onError, host.busy, host.administrationPending]);
-  const perform = (task: () => Promise<OperationResult | null>, complete?: () => void, destination: DialogSession | null = null): void => { void run(task, result => { if (result) { report(result, destination); if (result.outcome === 'Confirmed') complete?.(); } }, destination); };
-  const performDialog = (task: () => Promise<OperationResult | null>, closeOnSuccess = true): void => { const destination = dialogSession.current; perform(task, () => { if (closeOnSuccess && dialogSession.current === destination) closeDialog(); }, destination); };
-  const copy = (value: string): void => { void window.ahkManager.copyText(value).then(() => setNotice({ title: text.copied, message: '', warning: false })).catch(error => onError(error)); };
-  const add = (folder = false): void => { void run(() => folder ? window.ahkManager.addFolder() : window.ahkManager.addFiles(), (result: CatalogResult | null) => { if (result) { if (result.result.outcome !== 'CancelledBeforeDispatch') setNotice({ title: outcome(result.result.outcome), message: [catalogSummary(result.added.length, result.duplicateCount), reason(result.result.code), ...result.issues.map(issue => reason(issue.code))].filter(Boolean).join(' · '), detail: [result.result.detail, ...result.issues.map(issue => issue.detail)].filter(Boolean).join('\n') || null, warning: result.result.outcome !== 'Confirmed' || result.issues.length > 0 }); if (result.added[0]) { setPage('scripts'); setQuery(previous => nextQuery(previous, { search: '', status: 'All', collectionId: null })); setSelectedId(result.added[0]); } } }); };
-  const changeQuery = (patch: Partial<Omit<ScriptQuery, 'version'>>): void => setQuery(previous => nextQuery(previous, patch));
-  const select = (id: string): void => { setSelectedId(id); if (narrow) setShowDetails(true); };
-  const navigateScript = (id: string): void => { setPage('scripts'); changeQuery({ search: '', status: 'All', collectionId: null }); select(id); };
-  const action = (value: ScriptOperation): void => { if (!selected || !snapshot || busy) return; const blocked = actionReason(host, selected, value); if (blocked) { setNotice({ title: text.unavailable, message: reason(blocked), warning: true }); return; } const selection = { scriptId: selected.id, query, stateRevision: snapshot.revision }; window.ahkManager.updateSelection(selection); perform(() => window.ahkManager.operate(value, selection)); };
-  const remove = (): void => { if (selected && snapshot && !readonly && !busy && !drafts[selected.id]?.dirty) perform(() => window.ahkManager.removeScript(selected.id, snapshot.revision)); };
-  const fileAction = (kind:'locate'|'delete'):void => { if (!selected || !snapshot || readonly || busy || drafts[selected.id]?.dirty) return; const selection={scriptId:selected.id,query,stateRevision:snapshot.revision}; window.ahkManager.updateSelection(selection); perform(async()=>{const scope:DeleteScope={scriptId:selected.id,path:selected.path,query,authorityMode:host.authorityMode};if(kind==='delete')setDeleteScope(scope);try{return await(kind==='locate'?window.ahkManager.locateScript(selection):window.ahkManager.deleteScriptFile(selection));}finally{if(kind==='delete')setDeleteScope(current=>current===scope?null:current);}}); };
-  const showMetadata = (): void => { setShowDetails(true); setContext(null); requestAnimationFrame(() => { const expander = inspector.current?.querySelector<HTMLDetailsElement>('.metadata-expander'); if (expander) { expander.open = true; expander.querySelector<HTMLInputElement>('input')?.focus(); } }); };
-  const openImport = (): void => { if (inFlight.current || host.busy || host.administrationPending) return; setHelp(false); const destination = beginDialog('import'); void run(() => window.ahkManager.previewImport(), value => { if (dialogSession.current === destination) { if (value) setPreview(value); else closeDialog(); } }, destination); };
-  const readPreferenceState = async (): Promise<HostState> => {
-    await window.ahkManager.refresh(); const current = await window.ahkManager.getState();
-    if (current.connection !== 'ready' || !current.snapshot || current.snapshot.readOnly) throw new Error(text.preferenceReadbackFailed);
-    setDrafts(previous => { const next = { ...previous }; for (const [id, fields] of preferenceReadbacks.current) { const row = current.snapshot!.scripts.find(script => script.id === id); if (!row) continue; let draft = previous[id] ?? newDraft(row); for (const [field, attempt] of fields) if (attempt.previous !== attempt.requested && row[field] === attempt.requested) draft = rebaseRowPreference(draft, field, row); next[id] = draft; } return next; });
-    preferenceReadbacks.current.clear(); return current;
+  const host = useHost();
+  const updates = useUpdates();
+  const appearance = useTheme();
+  const narrow = useNarrow();
+  const dialogs = useDialogs();
+  const operations = useOperations(host, dialogs);
+  const library = useLibrarySelection(host, narrow);
+  const metadata = useMetadataDrafts(host.snapshot, operations);
+  const administration = useAdministration(host, dialogs, metadata, operations);
+  const actions = useManagerActions(host, library, metadata, dialogs, operations);
+  useKeyboardShortcuts(host, library, dialogs, operations, actions);
+
+  const { snapshot } = host;
+  const { page, query, selected, showDetails } = library;
+  const busy = operations.pending || host.busy || host.administrationPending;
+  const ready = host.connection === 'ready';
+  const readonly = !ready || !!snapshot?.readOnly;
+  const theme = React.useMemo(() => {
+    const value = (appearance.dark ? createDarkTheme : createLightTheme)(
+      brandPalette(appearance.accent),
+    );
+    return { ...value, fontFamilyBase: '"Segoe UI Variable", "Segoe UI", sans-serif' };
+  }, [appearance.dark, appearance.accent]);
+
+  const navigate = (destination: Page): void => {
+    library.setPage(destination);
+    library.setContext(null);
+    if (destination === 'updates') operations.setNotice(null);
+    if (destination === 'scripts') library.changeQuery({ collectionId: null });
   };
-  const savePreference = (id: string, field: RowPreference, value: boolean): void => { void run(async () => {
-    setPendingPreference({ scriptId: id, field });
-    try {
-      const current = preferenceReadbacks.current.size ? await readPreferenceState() : await window.ahkManager.getState();
-      if (current.connection !== 'ready' || !current.snapshot || current.snapshot.readOnly) throw new Error(text.preferenceReadbackFailed);
-      const target = current.snapshot.scripts.find(script => script.id === id); if (!target) throw new Error(reason('StaleSelection'));
-      const fields = preferenceReadbacks.current.get(id) ?? new Map<RowPreference, PreferenceAttempt>(); fields.set(field, { previous: target[field], requested: value }); preferenceReadbacks.current.set(id, fields);
-      let result: OperationResult;
-      try { result = await window.ahkManager.saveMetadata(id, { ...metadataOf(target), [field]: value }, current.snapshot.revision); }
-      catch (error) { try { await readPreferenceState(); } catch { /* Keep unresolved fields until a later explicit action can read authority. */ } throw error; }
-      if (result.outcome === 'Confirmed' || result.outcome === 'Partial' || result.outcome === 'Unknown') {
-        const observed = await readPreferenceState(); const row = observed.snapshot!.scripts.find(script => script.id === id);
-        if (result.outcome === 'Confirmed' && (!row || row[field] !== value)) { showNotice({ title: text.preferenceReadbackFailed, message: text.preferenceChanged, warning: true }); return; }
-      } else { fields.delete(field); if (!fields.size) preferenceReadbacks.current.delete(id); }
-      if (result.outcome === 'CancelledBeforeDispatch') showNotice({ title: text.preferenceCancelled, message: '', warning: false }); else report(result);
-    } finally { setPendingPreference(null); }
-  }); };
-  const saveDraft = (): void => { if (!selected) return; const id = selected.id; void run(async () => {
-    const current = preferenceReadbacks.current.size ? await readPreferenceState() : await window.ahkManager.getState();
-    if (current.connection !== 'ready' || !current.snapshot || current.snapshot.readOnly || !current.snapshot.scripts.some(script => script.id === id)) throw new Error(text.preferenceReadbackFailed);
-    const draft = draftState.current[id]; if (!draft) return; const savedValue = JSON.stringify(draft.value);
-    const result = await window.ahkManager.saveMetadata(id, draft.value, current.snapshot.revision); report(result);
-    if (result.outcome === 'Confirmed') setDrafts(previous => { const latest = previous[id]; if (!latest || JSON.stringify(latest.value) !== savedValue) return previous; return { ...previous, [id]: { ...latest, base: savedValue, dirty: false } }; });
-  }); };
-  const saveSettings = (value: ManagerSettings): void => {
-    const destination = dialogSession.current;
-    let needsAdministration = false;
-    void run(() => window.ahkManager.saveSettings(value), result => {
-      report(result, destination);
-      if (dialogSession.current !== destination) return;
-      if (result.outcome === 'Confirmed') closeDialog();
-      else if (result.outcome === 'Partial' && result.code === 'ManualElevationRequired') {
-        closeDialog();
-        needsAdministration = true;
-      }
-    }, destination).then(async () => {
-      if (!needsAdministration) return;
-      // Let the closed dialog and completed save leave the live preflight guard first.
-      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      requestAdministration();
-    }).catch(error => onError(error));
+  const openUpdates = (): void => {
+    operations.setNotice(null);
+    library.setPage('updates');
   };
-  React.useEffect(() => { function key(event: KeyboardEvent): void { if (host.administrationPending) return; const editing = event.target instanceof HTMLElement && (!!event.target.closest('input,textarea,select,[contenteditable="true"],[role="dialog"]')); if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && page === 'scripts' && !preferences && !help && !collectionDialog && !preview) { event.preventDefault(); search.current?.focus(); } else if (event.key === 'F5') { event.preventDefault(); if (!busy && ready) void run(() => window.ahkManager.refresh()); } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n' && !editing && !readonly && !busy) { event.preventDefault(); add(); } else if (event.key === 'Delete' && !editing && page === 'scripts') { event.preventDefault(); remove(); } else if (event.key === 'Escape') setContext(null); } window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key); });
-  React.useEffect(() => { if (!context) return; contextRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); const close = (event: PointerEvent): void => { if (!contextRef.current?.contains(event.target as Node)) setContext(null); }; window.addEventListener('pointerdown', close); return () => window.removeEventListener('pointerdown', close); }, [context]);
-  const pageTitle = page === 'scripts' ? text.scripts : page === 'hotkeys' ? text.hotkeys : page === 'updates' ? text.updates : text.activity;
-  const requestAdministration = (): void => { void window.ahkManager.requestAdministration().then(result => { if (result.outcome === 'CancelledBeforeDispatch') showNotice({title:outcome(result.outcome),message:reason(result.code),warning:false}); else report(result); }).catch(error => onError(error)); };
-  return <FluentProvider applyStylesToPortals={false} theme={theme} className="app-root" data-material={appearance.material} data-dark={appearance.dark} data-contrast={appearance.highContrast} data-reduced-motion={appearance.reducedMotion}>
-    <header className="native-title"><DocumentRegular /><span>{text.app}</span><span className="authority-badge" role="status">{host.authorityMode === 'Administrator' ? text.authorityAdministrator : host.authorityMode === 'Normal' ? text.authorityNormal : text.authorityUnverified}</span>{ready && host.authorityMode === 'Normal' && <Button className="administration-action" size="small" disabled={!host.administrationPending && busy} onClick={requestAdministration}>{host.administrationPending ? text.checkAdministration : text.requestAdministration}</Button>}</header>
-    <div className="app-shell" inert={host.administrationPending}><nav className="navigation" aria-label={text.library}><div className="nav-primary">{([{ id: 'scripts', label: text.scripts, icon: <DocumentRegular /> }, { id: 'hotkeys', label: text.hotkeys, icon: <KeyboardRegular /> }, { id: 'activity', label: text.activity, icon: <HistoryRegular /> }, { id: 'updates', label: text.updates, icon: <ArrowDownloadRegular /> }] as const).map(item => <Button key={item.id} appearance="subtle" className={'nav-item ' + (page === item.id ? 'active' : '')} icon={item.icon} aria-label={item.label} aria-description={item.id === 'updates' && updates.state.availableVersion ? `${text.updateAvailableVersion} ${updates.state.availableVersion}` : undefined} title={item.label} aria-current={page === item.id ? 'page' : undefined} onClick={() => { setPage(item.id); setContext(null); if (item.id === 'updates') setNotice(null); if (item.id === 'scripts') changeQuery({ collectionId: null }); }}><span className="nav-label">{item.label}</span>{item.id === 'updates' && updates.state.availableVersion && <span className="update-nav-dot" role="img" aria-label={`${text.updateAvailableVersion} ${updates.state.availableVersion}`} />}</Button>)}</div><div className="nav-collections"><div className="section-heading"><span className="nav-heading">{text.collections}</span><Tooltip content={text.createCollection} relationship="label"><Button size="small" appearance="subtle" icon={<AddRegular />} aria-label={text.createCollection} disabled={readonly || busy} onClick={() => openCollection({ id: null, name: '' })} /></Tooltip></div><div className="collection-scroll">{snapshot?.collections.map(collection => <div className="collection-nav" key={collection.id}><Button appearance="subtle" className={'nav-item ' + (page === 'scripts' && query.collectionId === collection.id ? 'active' : '')} icon={<FolderRegular />} aria-current={page === 'scripts' && query.collectionId === collection.id ? 'page' : undefined} onClick={() => { setPage('scripts'); changeQuery({ collectionId: collection.id }); }}>{collection.name}</Button><Menu><MenuTrigger disableButtonEnhancement><Button className="collection-options" appearance="subtle" size="small" aria-label={text.manageCollection + ': ' + collection.name} icon={<MoreHorizontalRegular />} disabled={readonly || busy} /></MenuTrigger><MenuPopover><MenuList><MenuItem onClick={() => openCollection({ id: collection.id, name: collection.name })}>{text.renameCollection}</MenuItem><MenuItem onClick={() => { if (snapshot) perform(() => window.ahkManager.removeCollection(collection.id, snapshot.revision)); }}>{text.deleteCollection}</MenuItem></MenuList></MenuPopover></Menu></div>)}</div></div><div className="nav-bottom"><Button className="nav-item" appearance="subtle" icon={<SettingsRegular />} onClick={openPreferences}>{text.preferences}</Button><Button className="nav-item" appearance="subtle" icon={<InfoRegular />} onClick={() => setHelp(true)}>{text.help}</Button></div></nav>
-    <main className={'workspace ' + (page === 'scripts' ? 'with-inspector' : '') + (showDetails ? ' details-open' : '')}>
-      <div className="main-column"><div className="page-heading"><div><h1>{pageTitle}</h1><p>{page === 'updates' ? text.updatesDescription : snapshot ? page === 'scripts' ? scriptCount(snapshot.scripts.length, snapshot.scripts.filter(script => script.status === 'Running').length) : page === 'hotkeys' ? text.hotkeysDescription : text.activityDescription : text.starting}</p></div><div className="heading-actions">{page !== 'updates' && <Tooltip content={text.refresh} relationship="label"><Button icon={<ArrowClockwiseRegular />} aria-label={text.refresh} disabled={!ready || busy} onClick={() => void run(() => window.ahkManager.refresh())} /></Tooltip>}{page === 'scripts' && <Menu><MenuTrigger disableButtonEnhancement><Button appearance="primary" icon={<AddRegular />} disabled={readonly || busy}>{text.add}<ChevronDownRegular /></Button></MenuTrigger><MenuPopover><MenuList><MenuItem onClick={() => add()}>{text.addFiles}</MenuItem><MenuItem onClick={() => add(true)}>{text.addFolder}</MenuItem></MenuList></MenuPopover></Menu>}{page === 'scripts' && narrow && <Button icon={<PanelRightRegular />} aria-label={text.details} aria-expanded={showDetails} onClick={() => setShowDetails(value => !value)} />}</div></div>
-      {page !== 'updates' && updates.state.availableVersion && <div className="update-available-banner" role="status"><span>{text.updateAvailableVersion} {updates.state.availableVersion}</span><Button size="small" onClick={() => { setNotice(null); setPage('updates'); }}>{text.updateOpen}</Button></div>}
-      <OperationNotice notice={notice} onDismiss={() => setNotice(null)} onCopy={copy} />
-      {page !== 'updates' && snapshot && !ready && <div className="library-notice" role="alert"><strong>{host.connection === 'closing' ? text.closing : text.disconnected}</strong><p>{text.disconnectedHint}</p>{host.error && <details><summary>{text.technicalDetails}</summary><pre>{host.error}</pre></details>}<Button size="small" disabled={busy || host.connection === 'closing'} onClick={() => void run(() => window.ahkManager.retryBackend())}>{text.retry}</Button></div>}
-      {page !== 'updates' && snapshot && (snapshot.readOnly || !snapshot.effectsAvailable || snapshot.issues.length > 0) && <div className="library-notice">
-        <details><summary>{snapshot.readOnly ? text.readonly : snapshot.issues.some(issue => issue.code === 'PendingOperation') ? text.pendingRecovery : reason(snapshot.issues[0]?.code ?? 'None') || text.unavailable}</summary>
-          <ul>{snapshot.issues.map((issue, index) => <li key={issue.code + index}>{reason(issue.code)}{issue.detail && <pre className="selectable">{issue.detail}</pre>}</li>)}</ul>
-        </details>
-        <div className="form-actions">
-          {snapshot.issues.some(issue => issue.code === 'PendingOperation') && <Button size="small" disabled={!ready || busy} onClick={() => perform(() => window.ahkManager.recoverPending())}>{text.recover}</Button>}
-          {snapshot.readOnly && <Button size="small" disabled={!ready || busy} onClick={() => perform(() => window.ahkManager.restoreBackup())}>{text.restoreBackup}</Button>}
-          {snapshot.issues.some(issue => issue.code === 'ImportAvailable' || issue.code === 'LegacyGuard') && <Button size="small" disabled={!ready || busy} onClick={openImport}>{text.importLegacy}</Button>}
-        </div>
-      </div>}
-      {page === 'updates' ? <Updates state={updates.state} onState={updates.accept} installBlockedReason={updateBlockedReason} recovery={host.connection === 'failed'} /> : !snapshot ? <div className="empty-page">{host.connection === 'starting' ? <Spinner label={text.starting} /> : <><h2>{host.connection === 'closing' ? text.closing : text.disconnected}</h2><p>{text.disconnectedHint}</p>{host.error && <details><summary>{text.technicalDetails}</summary><pre>{host.error}</pre></details>}<Button appearance="primary" disabled={busy || host.connection === 'closing'} onClick={() => void run(() => window.ahkManager.retryBackend())}>{text.retry}</Button></>}</div> : page === 'scripts' ? <><div className="script-filters"><Input ref={search} contentBefore={<SearchRegular />} aria-label={text.search} placeholder={text.search} value={query.search} onChange={(_, data) => changeQuery({ search: data.value })} /><select aria-label={text.status} value={query.status} onChange={event => changeQuery({ status: event.target.value as ScriptQuery['status'] })}><option value="All">{text.allStatus}</option><option value="Running">{text.running}</option><option value="Stopped">{text.stopped}</option><option value="Problems">{text.problems}</option></select><select aria-label={text.sort} value={query.sort} onChange={event => changeQuery({ sort: event.target.value as ScriptQuery['sort'] })}><option value="Name">{text.name}</option><option value="Status">{text.status}</option><option value="Collection">{text.collection}</option></select></div>{rows.length ? <ScriptList rows={rows} selectedId={selected?.id ?? null} onSelect={select} onContext={(id, x, y) => { select(id); setContext({ id, x, y }); }} queryVersion={query.version} preferencesDisabled={readonly || busy} pendingPreference={pendingPreference} onPreference={savePreference} /> : <div className="empty-page"><DocumentRegular /><h2>{snapshot.scripts.length ? text.noMatches : text.empty}</h2><p>{snapshot.scripts.length ? text.noMatchesDescription : text.emptyDescription}</p>{snapshot.scripts.length ? <Button onClick={() => changeQuery({ search: '', status: 'All', collectionId: null })}>{text.clearFilters}</Button> : <Button appearance="primary" icon={<AddRegular />} disabled={readonly || busy} onClick={() => add()}>{text.add}</Button>}</div>}</> : page === 'hotkeys' ? <Hotkeys snapshot={snapshot} onScript={navigateScript} /> : <Activity snapshot={snapshot} onCopy={copy} onError={onError} />}
-      </div>{page === 'scripts' && <aside ref={inspector} className="inspector" aria-label={text.details} hidden={narrow && !showDetails}>{narrow && <Button className="close-inspector" appearance="subtle" icon={<DismissRegular />} aria-label={text.hideDetails} onClick={() => setShowDetails(false)} />}<Inspector host={host} script={selected} draft={selected ? drafts[selected.id] ?? newDraft(selected) : null} busy={busy} onDraft={draft => { if (!host.administrationPending && selected) setDrafts(previous => ({ ...previous, [selected.id]: draft })); }} onSave={saveDraft} onDiscard={() => { if (selected) setDrafts(previous => ({ ...previous, [selected.id]: newDraft(selected) })); }} onAction={action} onCopy={copy} onLocate={()=>fileAction('locate')} onRemove={remove} onDelete={()=>fileAction('delete')} /></aside>}
-    </main></div><footer className="status-footer" aria-label={text.statusSummary} role="status" aria-live="polite" aria-atomic="true"><span className="footer-state" title={connectionStatus(host.connection) + (busy ? ' · ' + text.pending : '')}>{connectionStatus(host.connection)}{busy ? ' · ' + text.pending : ''}</span><span className="footer-counts">{snapshot ? scriptCount(snapshot.scripts.length, snapshot.scripts.filter(script => script.status === 'Running').length) : ''}{snapshot?.problemCount !== undefined ? ' · ' + problemCount(snapshot.problemCount) : ''}</span><span className="footer-observed">{snapshot?.observedAt ? text.observedAt + ' ' + time(snapshot.observedAt) : text.neverObserved}</span></footer>
-    {context && selected?.id === context.id && !dialogOpen && <div ref={contextRef} role="menu" aria-label={text.more} className="script-context" style={{ left: Math.min(context.x, window.innerWidth - 244), top: Math.min(context.y, window.innerHeight - 365) }} onKeyDown={event => { if (event.key === 'Escape') { setContext(null); document.querySelector<HTMLElement>('[role="grid"]')?.focus(); } if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]; const index = buttons.indexOf(document.activeElement as HTMLButtonElement); buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); } }}>{(['Start', 'Stop', 'Restart', 'TogglePause', 'ToggleSuspend', 'Edit', 'OpenFolder', 'Recover'] as ScriptOperation[]).map(value => <Button key={value} role="menuitem" appearance="subtle" disabled={busy || !!actionReason(host, selected, value)} title={actionReason(host, selected, value) ? reason(actionReason(host, selected, value)!) : operation(value)} onClick={() => { setContext(null); action(value); }}>{operation(value)}</Button>)}<Button role="menuitem" appearance="subtle" onClick={showMetadata}>{text.metadata}</Button><Button role="menuitem" appearance="subtle" disabled={busy || readonly || !!drafts[selected.id]?.dirty} onClick={() => { setContext(null); remove(); }}>{text.remove}</Button></div>}
-    {preferences && snapshot && <Preferences settings={snapshot.settings} busy={busy} readonly={readonly} notice={dialogNotice} onDismissNotice={() => setDialogNotice(null)} onClose={closeDialog} onSave={saveSettings} onPick={async kind => { const destination = dialogSession.current; setDialogNotice(null); try { const path = await (kind === 'editor' ? window.ahkManager.pickEditor() : window.ahkManager.pickInterpreter()); return dialogSession.current === destination ? path : null; } catch (error) { onError(error, destination); return null; } }} onTransferStartup={() => performDialog(() => window.ahkManager.transferStartup(), false)} />}
-    {help && <HelpDialog busy={busy || !ready} onClose={() => setHelp(false)} onImport={openImport} onBackup={() => { setHelp(false); perform(() => window.ahkManager.restoreBackup()); }} />}
-    {collectionDialog && <CollectionDialog initialName={collectionDialog.name} rename={collectionDialog.id !== null} busy={busy} notice={dialogNotice} onDismissNotice={() => setDialogNotice(null)} onClose={closeDialog} onSave={name => performDialog(() => window.ahkManager.saveCollection(collectionDialog.id, name))} />}
-    {preview && <ImportDialog preview={preview.preview} busy={busy} notice={dialogNotice} onDismissNotice={() => setDialogNotice(null)} onClose={closeDialog} onCommit={() => performDialog(() => window.ahkManager.commitImport(preview.token))} />}
-  </FluentProvider>;
+  const retryBackend = (): void => {
+    void operations.run(() => window.ahkManager.retryBackend());
+  };
+
+  return (
+    <FluentProvider
+      applyStylesToPortals={false}
+      theme={theme}
+      className="app-root"
+      data-material={appearance.material}
+      data-dark={appearance.dark}
+      data-contrast={appearance.highContrast}
+      data-reduced-motion={appearance.reducedMotion}
+    >
+      <NativeTitle host={host} busy={busy} onRequestAdministration={administration.request} />
+      <div className="app-shell" inert={host.administrationPending}>
+        <AppNavigation
+          page={page}
+          query={query}
+          collections={snapshot?.collections}
+          availableVersion={updates.state.availableVersion}
+          readonly={readonly}
+          busy={busy}
+          onNavigate={navigate}
+          onCollection={(id) => {
+            library.setPage('scripts');
+            library.changeQuery({ collectionId: id });
+          }}
+          onOpenCollection={dialogs.openCollection}
+          onRemoveCollection={(id) => {
+            if (snapshot)
+              operations.perform(() => window.ahkManager.removeCollection(id, snapshot.revision));
+          }}
+          onPreferences={dialogs.openPreferences}
+          onHelp={() => dialogs.setHelp(true)}
+        />
+        <main
+          className={
+            'workspace ' +
+            (page === 'scripts' ? 'with-inspector' : '') +
+            (showDetails ? ' details-open' : '')
+          }
+        >
+          <div className="main-column">
+            <PageHeading
+              page={page}
+              snapshot={snapshot}
+              ready={ready}
+              busy={busy}
+              readonly={readonly}
+              narrow={narrow}
+              showDetails={showDetails}
+              onRefresh={() => void operations.run(() => window.ahkManager.refresh())}
+              onAdd={actions.add}
+              onToggleDetails={() => library.setShowDetails((value) => !value)}
+            />
+            {page !== 'updates' && updates.state.availableVersion && (
+              <UpdateBanner version={updates.state.availableVersion} onOpen={openUpdates} />
+            )}
+            <OperationNotice
+              notice={operations.notice}
+              onDismiss={() => operations.setNotice(null)}
+              onCopy={operations.copy}
+            />
+            {page !== 'updates' && (
+              <LibraryNotices
+                host={host}
+                busy={busy}
+                onRetry={retryBackend}
+                onRecover={() => operations.perform(() => window.ahkManager.recoverPending())}
+                onRestoreBackup={() => operations.perform(() => window.ahkManager.restoreBackup())}
+                onImport={actions.openImport}
+              />
+            )}
+            {page === 'updates' ? (
+              <Updates
+                state={updates.state}
+                onState={updates.accept}
+                installBlockedReason={administration.updateBlockedReason}
+                recovery={host.connection === 'failed'}
+              />
+            ) : !snapshot ? (
+              <DisconnectedPage host={host} busy={busy} onRetry={retryBackend} />
+            ) : page === 'scripts' ? (
+              <ScriptsPage
+                rows={library.rows}
+                selectedId={selected?.id ?? null}
+                query={query}
+                scriptCount={snapshot.scripts.length}
+                readonly={readonly}
+                busy={busy}
+                searchRef={library.search}
+                pendingPreference={metadata.pendingPreference}
+                onQuery={library.changeQuery}
+                onSelect={library.select}
+                onContext={library.setContext}
+                onPreference={metadata.savePreference}
+                onAdd={() => actions.add()}
+              />
+            ) : page === 'hotkeys' ? (
+              <Hotkeys snapshot={snapshot} onScript={library.navigateScript} />
+            ) : (
+              <Activity snapshot={snapshot} onCopy={operations.copy} onError={operations.onError} />
+            )}
+          </div>
+          {page === 'scripts' && (
+            <InspectorPanel
+              inspectorRef={library.inspector}
+              narrow={narrow}
+              showDetails={showDetails}
+              onHideDetails={() => library.setShowDetails(false)}
+              host={host}
+              script={selected}
+              draft={selected ? (metadata.drafts[selected.id] ?? newDraft(selected)) : null}
+              busy={busy}
+              onDraft={(draft) => {
+                if (!host.administrationPending && selected)
+                  metadata.setDrafts((previous) => ({ ...previous, [selected.id]: draft }));
+              }}
+              onSave={() => {
+                if (selected) metadata.saveDraft(selected.id);
+              }}
+              onDiscard={() => {
+                if (selected)
+                  metadata.setDrafts((previous) => ({
+                    ...previous,
+                    [selected.id]: newDraft(selected),
+                  }));
+              }}
+              onAction={actions.action}
+              onCopy={operations.copy}
+              onLocate={() => actions.fileAction('locate')}
+              onRemove={actions.remove}
+              onDelete={() => actions.fileAction('delete')}
+            />
+          )}
+        </main>
+      </div>
+      <StatusFooter host={host} busy={busy} />
+      {library.context && selected?.id === library.context.id && !dialogs.open && (
+        <ScriptContextMenu
+          host={host}
+          selected={selected}
+          context={library.context}
+          contextRef={library.contextRef}
+          busy={busy}
+          readonly={readonly}
+          draftDirty={!!metadata.drafts[selected.id]?.dirty}
+          onClose={() => library.setContext(null)}
+          onAction={actions.action}
+          onMetadata={library.showMetadata}
+          onRemove={actions.remove}
+        />
+      )}
+      <AppDialogs
+        dialogs={dialogs}
+        settings={snapshot?.settings ?? null}
+        busy={busy}
+        readonly={readonly}
+        ready={ready}
+        onSaveSettings={administration.saveSettings}
+        onPick={actions.pickExecutable}
+        onTransferStartup={() =>
+          operations.performDialog(() => window.ahkManager.transferStartup(), false)
+        }
+        onImport={actions.openImport}
+        onBackup={() => operations.perform(() => window.ahkManager.restoreBackup())}
+        onSaveCollection={(id, name) =>
+          operations.performDialog(() => window.ahkManager.saveCollection(id, name))
+        }
+        onCommitImport={(token) =>
+          operations.performDialog(() => window.ahkManager.commitImport(token))
+        }
+      />
+    </FluentProvider>
+  );
 }

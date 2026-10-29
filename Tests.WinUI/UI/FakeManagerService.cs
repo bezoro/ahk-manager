@@ -1,5 +1,5 @@
 using System.Collections.Immutable;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Models;
 
 namespace Bezoro.AhkManager.WinUI.Tests.UI;
 

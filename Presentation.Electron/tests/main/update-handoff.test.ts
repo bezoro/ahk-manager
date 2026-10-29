@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { preparedUpdateControl } from '../../src/main/update-handoff.js';
-import { UpdateStore } from '../../src/main/update-store.js';
-import { shutdownAndCommitUpdate } from '../../src/main/update-shutdown.js';
+import { preparedUpdateControl } from '../../src/main/updates/update-handoff.js';
+import { UpdateStore } from '../../src/main/updates/update-store.js';
+import { shutdownAndCommitUpdate } from '../../src/main/updates/update-shutdown.js';
 import type { ShutdownBoundary } from '../../src/main/lifecycle.js';
 
 async function fixture(t: TestContext) {

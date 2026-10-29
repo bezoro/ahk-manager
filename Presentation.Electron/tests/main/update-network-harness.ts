@@ -2,9 +2,9 @@ import { app, net, session } from 'electron';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { GitHubUpdateClient } from '../../src/main/github-updates.js';
-import { createElectronUpdateFetch } from '../../src/main/electron-update-fetch.js';
-import { configureUpdateNetwork } from '../../src/main/update-network-policy.js';
+import { GitHubUpdateClient } from '../../src/main/updates/github-updates.js';
+import { createElectronUpdateFetch } from '../../src/main/updates/electron-update-fetch.js';
+import { configureUpdateNetwork } from '../../src/main/updates/update-network-policy.js';
 
 const argument = process.argv.indexOf('--output');
 const output = process.argv[argument + 1];

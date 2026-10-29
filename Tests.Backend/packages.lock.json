@@ -18,6 +18,12 @@
       "ahkmanager.backend": {
         "type": "Project",
         "dependencies": {
+          "AhkManager.Core": "[1.0.0, )"
+        }
+      },
+      "ahkmanager.core": {
+        "type": "Project",
+        "dependencies": {
           "System.Management": "[10.0.13, 10.0.13]"
         }
       }

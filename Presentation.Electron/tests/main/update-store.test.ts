@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { UpdateStore, type CachedInstaller } from '../../src/main/update-store.js';
+import { UpdateStore, type CachedInstaller } from '../../src/main/updates/update-store.js';
 
 const sha = (bytes: Buffer | string): string => createHash('sha256').update(bytes).digest('hex');
 

@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Windows.Graphics;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Models;
 using Bezoro.AhkManager.WinUI.Views;
 
 namespace Bezoro.AhkManager.WinUI.Tests.UI;

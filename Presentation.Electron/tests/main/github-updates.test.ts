@@ -5,7 +5,7 @@ import {
   compareVersions,
   GitHubUpdateClient,
   validUpdateVersion,
-} from '../../src/main/github-updates.js';
+} from '../../src/main/updates/github-updates.js';
 
 const API = 'https://api.github.com/repos/bezoro/ahk-manager';
 const LIST = `${API}/releases?per_page=100&page=1`;

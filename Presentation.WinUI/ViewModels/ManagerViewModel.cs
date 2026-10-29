@@ -1,9 +1,9 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Models;
 using Bezoro.AhkManager.WinUI.Resources;
-using Bezoro.AhkManager.WinUI.Services;
+using Bezoro.AhkManager.Core.Services;
 
 namespace Bezoro.AhkManager.WinUI.ViewModels;
 

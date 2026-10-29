@@ -1,0 +1,32 @@
+# Dependencies and build outputs
+**/node_modules/
+**/bin/
+**/obj/
+**/dist/
+**/out/
+**/coverage/
+**/publish*/
+**/artifacts/
+**/TestResults/
+**/evidence/
+**/.tools/
+**/.vs/
+**/.idea/
+.git/
+.codex/
+
+# Historical validation records and their immutable inventories
+VALIDATION.md
+tools/safe-tests/
+
+# Generated fixtures and files whose bytes are part of a test or package identity
+**/fixtures/
+**/__fixtures__/
+**/*-fixtures/
+**/*.generated.*
+**/package-lock.json
+**/packages.lock.json
+**/yarn.lock
+**/pnpm-lock.yaml
+**/catalog.json*
+**/operations.log*

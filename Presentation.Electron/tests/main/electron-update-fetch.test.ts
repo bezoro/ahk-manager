@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ClientRequest, ClientRequestConstructorOptions, Session } from 'electron';
-import { createElectronUpdateFetch } from '../../src/main/electron-update-fetch.js';
+import { createElectronUpdateFetch } from '../../src/main/updates/electron-update-fetch.js';
 
 class RequestFixture extends EventEmitter {
   aborted = false;

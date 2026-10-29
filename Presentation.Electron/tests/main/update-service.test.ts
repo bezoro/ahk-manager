@@ -4,12 +4,12 @@ import {
   UpdateService,
   type UpdateBoundary,
   type UpdateStorePort,
-} from '../../src/main/update-service.js';
+} from '../../src/main/updates/update-service.js';
 import {
   compareVersions,
   type RemoteUpdateRelease,
-} from '../../src/main/github-updates.js';
-import type { CachedInstaller } from '../../src/main/update-store.js';
+} from '../../src/main/updates/github-updates.js';
+import type { CachedInstaller } from '../../src/main/updates/update-store.js';
 import type { UpdateChannel, UpdateState } from '../../src/shared/updates.js';
 
 function deferred<T>(): {

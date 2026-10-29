@@ -96,6 +96,11 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Restore pinned CSharpier formatter
+        run: |
+          dotnet tool restore --configfile NuGet.Config
+          if ($LASTEXITCODE -ne 0) { throw 'CSharpier tool restore failed.' }
+
       - name: Set isolated output path
         run: |
           "CI_OUTPUT=$(Join-Path $env:RUNNER_TEMP 'ahk-manager-ci')" >> $env:GITHUB_ENV
@@ -129,6 +134,15 @@ jobs:
           "AHK_SOURCE_COMMIT=$($identity.commit)" >> $env:GITHUB_ENV
           "version=$($identity.version)" >> $env:GITHUB_OUTPUT
 
+      - name: Check formatting and architecture boundaries
+        if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          npm.cmd run format:check
+          if ($LASTEXITCODE -ne 0) { throw 'Formatting check failed. Run npm run format in Presentation.Electron.' }
+          npm.cmd run architecture:check
+          if ($LASTEXITCODE -ne 0) { throw 'Architecture boundaries failed.' }
+
       - name: Prepare read-only AutoHotkey version fixture
         id: ahk-fixture
         if: ${{ !cancelled() }}
@@ -151,6 +165,13 @@ jobs:
         run: |
           dotnet restore Tests.Backend/Tests.Backend.csproj --locked-mode --configfile NuGet.Config -r win-x64
           if ($LASTEXITCODE -ne 0) { throw 'NuGet restore failed.' }
+
+      - name: Check active Core, backend and test C# formatting
+        if: ${{ !cancelled() && steps.backend-dependencies.outcome == 'success' }}
+        working-directory: Presentation.Electron
+        run: |
+          node.exe scripts/format-dotnet.cjs --check Core Backend Tests.Backend
+          if ($LASTEXITCODE -ne 0) { throw 'C# formatting check failed. Run npm run format:dotnet in Presentation.Electron.' }
 
       - name: Publish backend tests
         id: backend-publish
@@ -247,6 +268,8 @@ jobs:
         run: |
           dotnet restore UpdateHost/AhkManager.UpdateHost.csproj --locked-mode --configfile NuGet.Config -r win-x64
           if ($LASTEXITCODE -ne 0) { throw 'Update host restore failed.' }
+          node.exe Presentation.Electron/scripts/format-dotnet.cjs --check UpdateHost
+          if ($LASTEXITCODE -ne 0) { throw 'Update host C# formatting check failed. Run npm run format:dotnet in Presentation.Electron.' }
           dotnet publish UpdateHost/AhkManager.UpdateHost.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$env:AHK_RELEASE_VERSION" "-p:SourceRevisionId=$env:AHK_SOURCE_COMMIT" -o "$env:CI_OUTPUT/backend-publish/update"
           if ($LASTEXITCODE -ne 0) { throw 'Update host publish failed.' }
 

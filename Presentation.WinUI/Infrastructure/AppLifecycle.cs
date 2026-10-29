@@ -1,6 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Windowing;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Models;
 using Bezoro.AhkManager.WinUI.Resources;
 using Bezoro.AhkManager.WinUI.Views;
 

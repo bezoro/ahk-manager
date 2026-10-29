@@ -15,6 +15,10 @@
   <WarningsNotAsErrors>$(WarningsNotAsErrors);CS0436</WarningsNotAsErrors>
  </PropertyGroup>
  <ItemGroup><ApplicationDefinition Include="TestHost.xaml"/><Page Remove="TestHost.xaml"/><ProjectReference Include="../Presentation.WinUI/Bezoro.AhkManager.WinUI.csproj"/><PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="[10.0.26100.9169]" PrivateAssets="all"/></ItemGroup>
+ <ItemGroup>
+  <Compile Include="../Tests.Backend/Core/*.cs" Link="Core/%(Filename)%(Extension)" />
+  <Compile Include="../Tests.Backend/Fixtures/FixtureProcessObservation.cs" Link="Integration/FixtureProcessObservation.cs" />
+ </ItemGroup>
  <Target Name="PublishNativeXamlResources" AfterTargets="Publish">
   <ItemGroup><NativeXamlPublishResource Include="$(TargetDir)*.pri;$(TargetDir)**\*.xbf"/></ItemGroup>
   <Copy SourceFiles="@(NativeXamlPublishResource)" DestinationFiles="@(NativeXamlPublishResource->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true"/>

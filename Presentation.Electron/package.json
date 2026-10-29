@@ -9,12 +9,17 @@
   "main": "dist/main/index.cjs",
   "scripts": {
     "build": "node scripts/build.cjs",
-    "typecheck": "tsc --noEmit",
-    "test": "node scripts/test.cjs",
-    "package": "electron-builder --config electron-builder.cjs --win nsis --x64",
+    "format": "prettier --write .. --ignore-path ../.prettierignore",
+    "format:check": "prettier --check .. --ignore-path ../.prettierignore",
+    "format:dotnet": "node scripts/format-dotnet.cjs",
+    "format:dotnet:check": "node scripts/format-dotnet.cjs --check",
+    "architecture:check": "node scripts/verify-boundaries.cjs",
     "commits:check": "node scripts/check-commits.cjs",
     "release:identity": "node scripts/compute-release.cjs",
-    "test:release": "node --test tests/tooling/release-identity.test.cjs"
+    "test:release": "node --test tests/tooling/release-identity.test.cjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.cjs",
+    "package": "electron-builder --config electron-builder.cjs --win nsis --x64"
   },
   "dependencies": {
     "@fluentui/react-components": "9.74.11",
@@ -37,6 +42,7 @@
     "electron": "45.0.0",
     "electron-builder": "26.15.3",
     "esbuild": "0.28.2",
+    "prettier": "3.9.10",
     "remove-markdown": "0.8.0",
     "semver": "7.8.5",
     "typescript": "7.0.2"

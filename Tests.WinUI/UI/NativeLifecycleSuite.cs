@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Bezoro.AhkManager.WinUI.Infrastructure;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Infrastructure;
+using Bezoro.AhkManager.Core.Models;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 

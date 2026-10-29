@@ -7,10 +7,11 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Windowing;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics;
-using Bezoro.AhkManager.WinUI.Models;
+using Bezoro.AhkManager.Core.Models;
 using Bezoro.AhkManager.WinUI.Resources;
 using Bezoro.AhkManager.WinUI.ViewModels;
 using Bezoro.AhkManager.WinUI.Infrastructure;
+using Bezoro.AhkManager.Core.Infrastructure;
 
 namespace Bezoro.AhkManager.WinUI.Views;
 

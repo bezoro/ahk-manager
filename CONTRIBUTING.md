@@ -1,49 +1,128 @@
 # Contributing
 
-Use English for source identifiers, comments, documentation, commit messages, issues and pull request descriptions. The application interface uses English. Preserve user-provided script text, filenames, descriptions and profile data as entered.
+Use English for code, comments, application text, documentation, commit messages, issues, and pull requests. Preserve user-authored script contents, names, paths, historical records, and compatibility identifiers in their original form.
 
-## Set up
+Start with [ARCHITECTURE.md](ARCHITECTURE.md). Current product changes belong in `Core/`, `Backend/`, `UpdateHost/`, and `Presentation.Electron/`. Archived WinUI/WPF projects do not validate the Electron interface.
 
-Use Windows 11 x64, the Node.js version pinned by CI and the .NET SDK pinned by `global.json`. Install dependencies from the lock files:
+## Environment
+
+Clone the full Git history and tags. Run `git fetch --tags` if tags are missing. Local builds calculate their version from Git; when building without history, pass `-ReleaseVersion` explicitly to `tools/Build-Electron.ps1`.
+
+Use Windows x64 and PowerShell 7 for packaging and native checks. CI pins Node.js 24.22.0 and the .NET SDK in `global.json`. Install dependencies from the existing lock files. AutoHotkey v2 is needed for interpreter discovery checks; CI prepares an official portable copy for read-only inspection.
+
+Restore the pinned CSharpier formatter from the repository root:
 
 ```powershell
-cd Presentation.Electron
-npm.cmd ci --ignore-scripts
-npm.cmd run typecheck
-npm.cmd run test:release
-npm.cmd test -- --out C:\Temp\ahk-manager-node-tests
+dotnet tool restore --configfile NuGet.Config
+$work = Join-Path $env:TEMP ('ahk-manager-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $work | Out-Null
 ```
 
-Use a fresh absolute output path for every run. Never run tests against a personal application profile, startup registration or operational AHK script. Dependency lifecycle hooks remain disabled; the build explicitly downloads the pinned Electron runtime with its official installer.
+Commands below start at the repository root. Each test/build output must be an absolute directory that does not already exist, preserving evidence from earlier runs.
 
-The repository's current layout is documented in [README.md](README.md). Shared services still linked from archived WinUI folders are active backend dependencies; do not assume that a folder name makes their contents unused.
+## Frontend
 
-## Choose validation that matches the change
+```powershell
+Push-Location Presentation.Electron
+npm.cmd ci --ignore-scripts
+npm.cmd run format:check
+npm.cmd run architecture:check
+npm.cmd run typecheck
+npm.cmd test -- --out "$work/node-tests"
+npm.cmd run build -- --out "$work/frontend"
+Pop-Location
+```
 
-Run typechecking and relevant Node tests for Electron changes. Use the Windows CI for actual process observation, native backend behavior, Electron networking and installer behavior. The presentation harness runs the production renderer with an isolated bridge and captures light/dark themes, narrow windows and large zoom levels.
+`npm.cmd run format` applies Prettier according to `.prettierrc.json` and `.prettierignore`. `.editorconfig` covers other source files. `architecture:check` validates layer dependencies and isolation from historical sources.
 
-For update changes, preserve the separate trust boundaries between PR builds, trusted publication, the renderer, the Electron host and the native applicator. Verify the actual Electron transport when changing networking; Node's Fetch behavior is not sufficient evidence for Electron's redirect behavior. See [UPDATES.md](UPDATES.md).
+Node checks use adapters and temporary profiles. The Windows file-identity check is explicitly skipped on other operating systems. Three integration checks require snapshots from the .NET backend suite; CI supplies these inputs:
 
-Keep serialized field names, enum values, startup fingerprints, registry paths, profile names and command-line flags compatible. Translating user-facing text does not authorize renaming persisted contracts or reinterpreting script syntax.
+```powershell
+$env:AHK_HEADER_SNAPSHOT_INPUT = "$work/backend/header-description-snapshot.json"
+$env:AHK_FOREGROUND_ARGUMENTS_INPUT = "$work/backend/foreground-host-arguments.txt"
+$env:AHK_STARTUP_RECOVERY_INPUT = "$work/backend/startup-recovery-snapshot.json"
+```
 
-Process effects require current, verified identities and explicit consent where applicable. Do not add forced termination or automatic replay as a timeout fallback. Report uncertainty and preserve recovery evidence.
+For updater transport changes, also run the real Electron network checks used by Windows CI. A successful Node fetch test does not prove Chromium/Electron redirect behavior.
 
 ## Commits and versions
 
-Use Conventional Commits, for example:
+Use Conventional Commits with an optional scope:
 
 ```text
-fix(updates): handle public release asset redirects
-feat(settings): add an independent startup preference
-refactor(controller): separate selection policies
+fix(startup): preserve the configured login preference
+feat(updates): add a release history filter
+refactor(core): separate process observation from catalog operations
+build: update the Windows packaging tools
 ```
 
-Use `!` or a `BREAKING CHANGE` footer only when the change is incompatible. Stable releases follow Semantic Versioning. Preview versions include the workflow run, attempt and PR identifiers and never reserve the next stable tag.
+Accepted types are `feat`, `fix`, `perf`, `refactor`, `docs`, `ci`, `build`, `style`, `test`, `chore`, and `revert`. Explain decisions in the body when the subject is insufficient. Breaking changes use `!` or a `BREAKING CHANGE:` footer describing compatibility and migration.
 
-A pull request should explain the triggering problem, resulting behavior and relevant validation. Include screenshots for visible interface changes and describe any material limitations of the checks. Keep unrelated edits separate.
+CI checks only new PR/push commits. Stable versions follow Semantic Versioning: `feat` increments minor, breaking changes increment major, and other types increment patch. The highest required increment wins. In `Presentation.Electron`:
 
-When a shared prerequisite PR and a follow-up PR depend on common commit ancestry, preserve that ancestry with a merge commit as documented in the PR. The release tooling relies on actual ancestry when excluding changes already released on `main`.
+```powershell
+npm.cmd run commits:check
+npm.cmd run test:release
+npm.cmd run release:identity
+```
 
-## Release credentials
+`release:identity` reads Git without changing tags. `node scripts/compute-release.cjs --json` exposes the same identity for tools. `package.json.version` is a development template and does not determine official versions.
 
-The application is a public-release client and does not accept GitHub tokens. GitHub Actions uses its short-lived job token for trusted publication. Never add credentials to renderer state, source files, fixtures, logs, installers or examples. Code-signing credentials belong only in the trusted signing jobs described in [UPDATES.md](UPDATES.md).
+Stable publication runs on `main` after Windows CI passes. Approved open PRs from this repository produce previews named `X.Y.Z-test.<run>.<attempt>.<PR>`. The publisher runs trusted code from `main`, rejects fork or stale-head builds, and never replaces existing release assets. PR builds do not receive signing or publication credentials. See [UPDATES.md](UPDATES.md) for channel selection, retries, signing, and older-client recovery.
+
+## Backend and Core
+
+```powershell
+dotnet restore Tests.Backend/Tests.Backend.csproj --locked-mode --configfile NuGet.Config -r win-x64
+dotnet publish Tests.Backend/Tests.Backend.csproj -c Release -r win-x64 --self-contained true --no-restore -o "$work/test-bin"
+& "$work/test-bin/Tests.Backend.exe" --backend --root "$work/backend"
+& "$work/test-bin/Tests.Backend.exe" --core --root "$work/core"
+& "$work/test-bin/Tests.Backend.exe" --corrections --root "$work/corrections"
+& "$work/test-bin/Tests.Backend.exe" --startup-inspection --root "$work/startup-inspection"
+```
+
+These selectors use temporary profiles and effect adapters. Startup inspection reads Windows WMI without changing registration. Core and correction checks also require a discoverable AutoHotkey v2 installation. Shared test adapters belong in `Tests.Backend/Fixtures`; Core cases belong in `Tests.Backend/Core`.
+
+In `Presentation.Electron`, `npm.cmd run format:dotnet:check -- Core Backend Tests.Backend` checks CSharpier formatting; `format:dotnet` applies it. With no project list, both commands include UpdateHost. Formatting does not require project restore.
+
+The separate `--ahk-owned` suite executes temporary scripts and requires additional setup. It is outside ordinary CI; read [SAFE-TESTS.md](SAFE-TESTS.md) before using it. Do not use a personal profile as a test root.
+
+For update-host changes:
+
+```powershell
+dotnet restore UpdateHost/AhkManager.UpdateHost.csproj --locked-mode --configfile NuGet.Config -r win-x64
+dotnet publish UpdateHost/AhkManager.UpdateHost.csproj -c Release -r win-x64 --self-contained true --no-restore -o "$work/update-host"
+& "$work/update-host/AhkManager.UpdateHost.exe" --self-test --root "$work/update-host-tests"
+```
+
+## Windows interface and package
+
+Use the production renderer bundle with the synthetic presentation host:
+
+```powershell
+Push-Location Presentation.Electron
+node.exe node_modules/electron/install.js
+Pop-Location
+./tools/Test-ElectronPresentation.ps1 -FrontendRoot "$work/frontend" -HarnessRoot "$work/ui-harness" -OutputRoot "$work/ui-evidence"
+```
+
+The harness owns its window, exercises the renderer, and saves screenshots and assertions. It does not connect to the backend or run user scripts. It covers themes, narrow layouts, and zoom; it does not establish interactive UAC, real sign-in behavior, or Mica composition.
+
+Build the complete distribution with fresh paths:
+
+```powershell
+./tools/Build-Electron.ps1 -OutputRoot "$work/build"
+./tools/Package-Electron.ps1 -BuildRoot "$work/build" -OutputRoot "$work/package"
+```
+
+The build uses Electron's official runtime installer, checks types, runs Node tests, and publishes Backend and UpdateHost. Packaging creates NSIS and an exact owned-file inventory. `-DirectoryOnly` produces an unpacked app directory.
+
+`tools/Test-UpdateInstallation.ps1` installs, updates, and rolls back between real packages. Use a disposable Windows environment without a prior installation/profile, as described in [SAFE-TESTS.md](SAFE-TESTS.md). CI prepares that environment. A local package build never publishes a GitHub release.
+
+## Preparing a change
+
+Keep process/persistence rules in Core, protocol validation in Backend, native integration in Electron main, and presentation in the renderer. Preload methods must remain specific; do not expose arbitrary commands, module paths, or Node access.
+
+When contracts change, review `Core/Models`, `Backend/Protocol.cs`, `Presentation.Electron/src/shared`, JSON contexts, and runtime validators together. Preserve existing profile, registry, and mutex identifiers. Format changes need prior-profile and invalid-data coverage.
+
+Describe the reproduction, resulting behavior, and relevant validation in the PR. Inspect harness screenshots for visual changes. CI preserves logs and artifacts on failure. Historical native-test limits remain documented in [VALIDATION.md](VALIDATION.md).
