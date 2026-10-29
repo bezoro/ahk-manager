@@ -1,14 +1,14 @@
 import type { ProcessSnapshot } from '../shared/contracts.js';
-import { text } from './resources/pt-BR.js';
+import { text } from './resources/en-US.js';
 export function date(value: string | null): string {
   if (!value || !Number.isFinite(Date.parse(value))) return '—';
-  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'medium' }).format(
+  return new Intl.DateTimeFormat('en-US', { dateStyle: 'short', timeStyle: 'medium' }).format(
     new Date(value),
   );
 }
 export function time(value: string | null): string {
   if (!value || !Number.isFinite(Date.parse(value))) return '—';
-  return new Intl.DateTimeFormat('pt-BR', {
+  return new Intl.DateTimeFormat('en-US', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',

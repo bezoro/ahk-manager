@@ -12,6 +12,7 @@ Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'This installation smoke test requires a disposable GitHub-hosted Windows runner.'
 }
+Add-Type -Path (Join-Path $PSScriptRoot 'test-support/InstallerUi.cs')
 
 $productGuid = '62d1c352-a9c4-556f-981c-2237ce4d0b68'
 $installKey = 'Software\' + $productGuid
@@ -85,7 +86,8 @@ function Save-InstallerDiagnostics([string]$Version) {
     }
 }
 
-function Invoke-Installer([string]$Path, [bool]$Updated) {
+function Invoke-Installer([string]$Path, [bool]$Updated, [switch]$Repair, [switch]$RefuseExisting,
+    [ValidateSet('None', 'Decline', 'Approve')][string]$Interactive = 'None') {
     $Path = Local-Path $Path -File
     $expectedHash = Hash $Path
     $start = [Diagnostics.ProcessStartInfo]::new($Path)
@@ -93,20 +95,60 @@ function Invoke-Installer([string]$Path, [bool]$Updated) {
     $start.WorkingDirectory = $OutputRoot
     # NSIS consumes the unquoted remainder after /D=. Keep it last. FileName is
     # separate and no shell interprets the validated path or these fixed switches.
-    $start.Arguments = '/S' + $(if ($Updated) { ' --updated' } else { '' }) + ' /D=' + $installRoot
+    $start.Arguments = $(if ($Interactive -eq 'None') { '/S' } else { '' }) + $(if ($Updated) { ' --updated' } else { '' }) + $(if ($Repair) { ' --repair' } else { '' })
+    if (-not $Repair -and $Interactive -eq 'None') { $start.Arguments += ' /D=' + $installRoot }
     if ((Hash $Path) -ne $expectedHash) { throw 'Installer changed before dispatch.' }
-    Trace "Dispatch installer $([IO.Path]::GetFileName($Path)); updated=$Updated; sha256=$expectedHash"
+    Trace "Dispatch installer $([IO.Path]::GetFileName($Path)); updated=$Updated; repair=$Repair; interactive=$Interactive; sha256=$expectedHash"
     $process = [Diagnostics.Process]::Start($start)
     try {
-        if (-not $process.WaitForExit($InstallerTimeoutSeconds * 1000)) {
+        $exited = $false
+        if ($Interactive -eq 'None') { $exited = $process.WaitForExit($InstallerTimeoutSeconds * 1000) }
+        else {
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            $decided = $false
+            $startedAt = $process.StartTime.ToUniversalTime()
+            while (-not $process.HasExited -and $clock.Elapsed.TotalSeconds -lt $InstallerTimeoutSeconds) {
+                foreach ($action in [AhkManager.TestSupport.InstallerUi]::Advance($process.Id, $Path, $startedAt, $installRoot, $Interactive -eq 'Approve', [ref]$decided)) { Trace "Installer UI $action" }
+                Start-Sleep -Milliseconds 100
+                $process.Refresh()
+            }
+            $exited = $process.HasExited
+            if ($exited) { Assert-Check $decided "interactive repair obtained its explicit $Interactive decision" }
+        }
+        if (-not $exited) {
             $script:unknownInstaller = $true
             throw 'Installer exit was not observed. The test will not repeat or kill it.'
         }
         $exitCode = $process.ExitCode
         Trace "Installer exitCode=$exitCode; updated=$Updated"
-        Assert-Check ($exitCode -eq 0) "installer exits successfully; updated=$Updated; exitCode=$exitCode"
+        if ($RefuseExisting -or $Interactive -eq 'Decline') {
+            Assert-Check ($exitCode -eq 2) "unauthorized or declined maintenance is refused; exitCode=$exitCode"
+        }
+        else { Assert-Check ($exitCode -eq 0) "installer exits successfully; updated=$Updated; repair=$Repair; interactive=$Interactive; exitCode=$exitCode" }
+    }
+    catch {
+        $dispatchFailure = $_
+        $observedExit = $false
+        try { $observedExit = $process.HasExited } catch { }
+        if (-not $observedExit) { $script:unknownInstaller = $true }
+        throw $dispatchFailure
     }
     finally { Save-InstallerDiagnostics (Installer-Version $Path); $process.Dispose() }
+}
+
+function Installation-Inventory {
+    $inventory = @{}
+    foreach ($file in Get-ChildItem -LiteralPath $installRoot -File -Recurse -Force) {
+        $inventory[$file.FullName] = Hash $file.FullName
+    }
+    return $inventory
+}
+
+function Check-UnchangedInstallation([hashtable]$Expected) {
+    $current = Installation-Inventory
+    Assert-Check ($current.Count -eq $Expected.Count) 'refused maintenance leaves the installation file inventory unchanged'
+    $changed = @($Expected.Keys | Where-Object { -not $current.ContainsKey($_) -or $current[$_] -cne $Expected[$_] })
+    Assert-Check ($changed.Count -eq 0) "refused maintenance preserves all $($Expected.Count) installed and foreign files"
 }
 
 function Read-Uninstaller {
@@ -217,6 +259,8 @@ try {
     Assert-Check ([version]($baselineVersion.Split('-')[0]) -ge [version]'1.2.0' -and [version]($targetVersion.Split('-')[0]) -ge [version]'1.2.0') 'both fixtures support the update protocol compatibility floor'
     $startupCommand = '"' + (Join-Path $installRoot 'Bezoro.AhkManager.exe') + '" --login --background'
 
+    Invoke-Installer $TargetInstaller $false -Repair -RefuseExisting
+    Assert-Check (-not (Test-Path -LiteralPath $profileRoot)) 'repair without a registered installation does not create a profile or installer cache'
     Invoke-Installer $BaselineInstaller $false
     $script:lastUninstaller = Read-Uninstaller
     $script:installationObserved = $true
@@ -235,22 +279,38 @@ try {
     try { $key.SetValue($runValue, $startupCommand, [Microsoft.Win32.RegistryValueKind]::String); $script:startupWritten = $true }
     finally { $key.Dispose() }
 
-    Invoke-Installer $TargetInstaller $true
+    $beforeRefusal = Installation-Inventory
+    Invoke-Installer $TargetInstaller $false -RefuseExisting
+    Check-UnchangedInstallation $beforeRefusal
+    Check-Preserved $preserved
+    Invoke-Installer $TargetInstaller $false -Interactive Decline
+    Check-UnchangedInstallation $beforeRefusal
+    Check-Preserved $preserved
+    Assert-Check (-not (Test-Path -LiteralPath (Join-Path $profileRoot "Updates/installers/$targetVersion"))) 'refused maintenance does not create a target installer cache'
+    Check-Installation $baselineVersion $BaselineInstaller
+
+    # The interactive child exercises the assisted installer's last destination
+    # guard. No /D argument or silent switch is supplied to this recovery path.
+    Invoke-Installer $TargetInstaller $false -Interactive Approve
     Check-Installation $targetVersion $TargetInstaller
     Check-Preserved $preserved
     $preserved[(Join-Path $profileRoot "Updates/installers/$targetVersion/installer.exe")] = Hash $TargetInstaller
 
+    Invoke-Installer $TargetInstaller $false -Repair
+    Check-Installation $targetVersion $TargetInstaller
+    Check-Preserved $preserved
+
     # Exercise explicit rollback through the same verified protocol. These two
-    # packages are CI fixtures from the same source, not a legacy migration test.
+    # packages include the published legacy baseline when configured by CI.
     Invoke-Installer $BaselineInstaller $true
     Check-Installation $baselineVersion $BaselineInstaller
     Check-Preserved $preserved
-    Trace 'Installation, update, explicit rollback and preservation checks passed.'
+    Trace 'Installation, declined and authorized maintenance, explicit rollback and preservation checks passed.'
 }
 catch { $script:failure = $_.Exception.Message; Write-Error -ErrorAction Continue $script:failure }
 finally {
     if ($null -ne $registry) {
-        if ($script:startupWritten) {
+        if ($script:startupWritten -and -not $script:unknownInstaller) {
             $key = $registry.OpenSubKey($runKey, $true)
             try {
                 if ($null -ne $key -and $key.GetValue($runValue) -eq $startupCommand) { $key.DeleteValue($runValue, $false) }

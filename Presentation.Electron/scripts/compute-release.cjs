@@ -71,7 +71,7 @@ function plainNotes(markdown) {
     .replace(/\r\n/g, '\n')
     .trim();
   if (text.length <= 4000) return text;
-  const suffix = '\n\nNotas resumidas para caber no histórico de atualizações.';
+  const suffix = '\n\nNotes shortened to fit the update history.';
   let clipped = text.slice(0, 4000 - suffix.length);
   if (/[\uD800-\uDBFF]$/.test(clipped)) clipped = clipped.slice(0, -1);
   return clipped.trimEnd() + suffix;

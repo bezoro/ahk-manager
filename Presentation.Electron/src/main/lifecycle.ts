@@ -13,11 +13,13 @@ export class LifecycleIntent {
   private explicit = false;
   private login: boolean;
   private loginDispatched = false;
+  private automaticElevationDispatched = false;
   private preferencesPending = false;
   private restoreMaximized = false;
   constructor(
     private readonly initialLogin: boolean,
     initialExplicit = false,
+    private readonly initialBackground = false,
   ) {
     this.login = initialLogin;
     this.explicit = initialExplicit;
@@ -39,6 +41,19 @@ export class LifecycleIntent {
   }
   get loginRequested(): boolean {
     return this.login;
+  }
+  get quietStartup(): boolean {
+    return (this.initialLogin || this.initialBackground) && !this.explicit;
+  }
+  takeAutomaticElevation(settings: ManagerSettings | null | undefined): boolean {
+    if (
+      !this.quietStartup ||
+      !configuredLoginElevation(settings) ||
+      this.automaticElevationDispatched
+    )
+      return false;
+    this.automaticElevationDispatched = true;
+    return true;
   }
   takeLogin(): boolean {
     if (!this.login || this.loginDispatched) return false;
@@ -69,10 +84,13 @@ export class LifecycleIntent {
     return (
       this.explicit ||
       !trayRegistered ||
-      !settings ||
-      recoveryRequired ||
-      issues.some((issue) => issue.code === 'PendingOperation' && issue.scriptId === null) ||
-      (!settings.startInTray && (!this.initialLogin || settings.showWindowAtLogin))
+      (!this.quietStartup &&
+        (!settings ||
+          recoveryRequired ||
+          issues.some((issue) => issue.code === 'PendingOperation' && issue.scriptId === null))) ||
+      (!!settings &&
+        !settings.startInTray &&
+        (!(this.initialLogin || this.initialBackground) || settings.showWindowAtLogin))
     );
   }
   closeAction(preference: 'HideToTray' | 'Exit', trayRegistered: boolean): 'hide' | 'exit' {
@@ -100,11 +118,13 @@ export class StopExitIntent {
   }
 }
 
-/** A partial login must stay visible even when startup preferences hide the window. */
+/** Manual reports remain explicit; automatic sign-in results stay in activity and state. */
 export async function reportStartupResult(
   result: OperationResult,
   boundary: { show(): void; warn(result: OperationResult): Promise<void> },
+  quiet = false,
 ): Promise<void> {
+  if (quiet) return;
   if (!['Partial', 'Failed', 'Unknown'].includes(result.outcome)) return;
   boundary.show();
   await boundary.warn(result);
@@ -115,9 +135,14 @@ export async function reportStartupWithContinuation(
   offerAvailable: boolean,
   continueStartup: () => Promise<boolean>,
   boundary: { show(): void; warn(result: OperationResult): Promise<void> },
+  quiet = false,
 ): Promise<void> {
   if (offerAvailable && (await continueStartup())) return;
-  await reportStartupResult(result, boundary);
+  await reportStartupResult(result, boundary, quiet);
+}
+
+export function configuredLoginElevation(settings: ManagerSettings | null | undefined): boolean {
+  return settings?.launchManagerAtLogin === true && settings.launchManagerAsAdministrator === true;
 }
 
 export const SHUTDOWN_DEADLINE_MS = 15000;
@@ -145,7 +170,9 @@ export function startupAdoptionCli(argv: readonly string[]): {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\|[0-9a-f]{64}\|[1-9][0-9]{0,9}\|[1-9][0-9]{0,18}\|[0-9a-f]{64}$/.test(
       descriptor,
     ) &&
-    !argv.some((value) => ['--login', '--background', '--request-administrator'].includes(value));
+    !argv.some((value) => ['--login', '--request-administrator'].includes(value)) &&
+    argv.filter((value) => value === '--background').length <= 1 &&
+    !(argv.includes('--background') && argv.includes('--foreground'));
   return { descriptor: valid ? descriptor : null, invalid: !valid };
 }
 /** A completed unknown receipt opens recovery; domain evidence still blocks script effects. */

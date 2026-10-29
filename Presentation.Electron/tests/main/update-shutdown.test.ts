@@ -41,7 +41,7 @@ test('a late drain after update deadline cannot persist placement or shut down t
     return () => {};
   });
   expire();
-  await assert.rejects(request, /prazo/);
+  await assert.rejects(request, /in time/);
   release();
   await tick();
   assert.deepEqual(f.calls, []);
@@ -59,7 +59,7 @@ test('a late placement completion cannot close the backend after a cancelled upd
   });
   await tick();
   expire();
-  await assert.rejects(request, /prazo/);
+  await assert.rejects(request, /in time/);
   release();
   await tick();
   assert.deepEqual(f.calls, ['drain']);
@@ -69,5 +69,5 @@ test('a shutdown acknowledgement without observed backend exit never permits app
   f.boundary.shutdownBackend = async () => {
     f.calls.push('unconfirmed');
   };
-  await assert.rejects(shutdownForUpdate(f.boundary, 1000), /não confirmou/);
+  await assert.rejects(shutdownForUpdate(f.boundary, 1000), /did not confirm/);
 });

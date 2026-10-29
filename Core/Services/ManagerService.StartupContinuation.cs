@@ -424,7 +424,7 @@ public sealed partial class ManagerService
                             .ConfigureAwait(false);
                     }
                     string detail =
-                        $"Continuação do início com Windows. Iniciados: {started}. Já em execução: {running}. Não iniciados ou não confirmados: {failed}.\n"
+                        $"Windows startup continuation. Started: {started}. Already running: {running}. Not started or unconfirmed: {failed}.\n"
                         + string.Join("\n", details.Take(24));
                     var summary = new OperationResult(
                         failed == 0 ? Outcome.Confirmed : Outcome.Partial,
@@ -511,7 +511,7 @@ public sealed partial class ManagerService
             var invalidated = new OperationResult(
                 Outcome.CancelledBeforeDispatch,
                 ReasonCode.StaleSelection,
-                "A oferta de continuação foi cancelada porque um dos scripts recebeu outro pedido de início. Confira o estado e use uma nova ação manual para os demais scripts; essa oferta não será repetida."
+                "The startup continuation offer was cancelled because one of its scripts received another start request. Check the status and use a new manual action for the remaining scripts; this offer will not be replayed."
             );
             await Continuations
                 .WriteAsync(
@@ -553,7 +553,7 @@ public sealed partial class ManagerService
             storageIssues = storageIssues.Remove(startupRecoveryIssue);
         startupRecoveryIssue = new(
             ReasonCode.PendingOperation,
-            "Não foi possível confirmar os registros de continuação. Novas execuções estão bloqueadas. Use Recuperar pendências para conferir os processos e preservar os registros inválidos, sem repetir execuções.\n"
+            "The startup continuation records could not be verified. New launches are blocked. Use Check pending results to check processes and preserve invalid records without replaying launches.\n"
                 + ex.Message
         );
         storageIssues = storageIssues.Add(startupRecoveryIssue);
@@ -596,7 +596,7 @@ public sealed partial class ManagerService
                             Result = new(
                                 Outcome.Partial,
                                 ReasonCode.Cancelled,
-                                "A tentativa de continuação expirou. Nenhuma solicitação de execução foi repetida."
+                                "The startup continuation attempt expired. No launch request was replayed."
                             ),
                         },
                         record
@@ -647,7 +647,7 @@ public sealed partial class ManagerService
                             Result = new(
                                 Outcome.Partial,
                                 ReasonCode.LaunchUncertain,
-                                "A solicitação anterior foi encerrada após conferir os processos. Nenhuma execução foi repetida."
+                                "The previous request was closed after checking processes. No launch was replayed."
                             ),
                         },
                         record
@@ -671,7 +671,7 @@ public sealed partial class ManagerService
                         ScriptOperation.Recover,
                         new(
                             Outcome.Confirmed,
-                            Detail: $"Recuperação explícita: {preserved.Length} registro(s) inválido(s) preservado(s) em {Path.GetDirectoryName(preserved[0])}. Nenhum script foi iniciado ou repetido."
+                            Detail: $"Explicit recovery: {preserved.Length} invalid record(s) preserved in {Path.GetDirectoryName(preserved[0])}. No script was started or relaunched."
                         ),
                         CancellationToken.None
                     )

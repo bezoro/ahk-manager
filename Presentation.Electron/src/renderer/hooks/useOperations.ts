@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { HostState, OperationResult } from '../../shared/contracts.js';
 import type { DialogSession } from '../appTypes.js';
 import type { Notice } from '../components/OperationNotice.js';
-import { outcome, reason, text } from '../resources/pt-BR.js';
+import { outcome, reason, text } from '../resources/en-US.js';
 import type { Dialogs } from './useDialogs.js';
 
 export function useOperations(host: HostState, dialogs: Dialogs) {

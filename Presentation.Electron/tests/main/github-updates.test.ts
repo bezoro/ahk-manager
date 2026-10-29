@@ -9,7 +9,7 @@ import {
 
 const API = 'https://api.github.com/repos/bezoro/ahk-manager';
 const LIST = `${API}/releases?per_page=100&page=1`;
-const TOKEN = 'github_pat_private_value_1234567890';
+const PRIVATE_SERVER_VALUE = 'private_server_fixture_value_1234567890';
 const DATE = '2026-10-28T12:00:00.000Z';
 const COMMIT = 'a'.repeat(40);
 const SHA512 = Buffer.alloc(64, 0x5a).toString('base64');
@@ -21,7 +21,7 @@ function fixture(version = '1.2.7', id = 10) {
     version,
     commit: COMMIT,
     publishedAt: DATE,
-    notes: 'Correção de inicialização.',
+    notes: 'Startup fix.',
     installer: {
       name: `AHK-Manager-${version}-Setup-x64.exe`,
       sha256: 'b'.repeat(64),
@@ -59,6 +59,8 @@ function fixture(version = '1.2.7', id = 10) {
 function clientFor(handler: (url: string, init: RequestInit) => Response | Promise<Response>) {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+    assert.equal(new Headers(init?.headers).has('authorization'), false);
+    assert.equal(new Headers(init?.headers).has('cookie'), false);
     const url = String(input);
     calls.push({ url, init: init! });
     return handler(url, init!);
@@ -112,7 +114,7 @@ test('only complete stable protocol releases are offered, sorted by version, usi
         ])
       : json(manifests.get(url)),
   );
-  const result = await client.releases(TOKEN);
+  const result = await client.releases();
   assert.deepEqual(
     result.map((item) => item.version),
     ['1.2.10', '1.2.9'],
@@ -137,13 +139,14 @@ test('only complete stable protocol releases are offered, sorted by version, usi
   );
   for (const call of calls) {
     const headers = new Headers(call.init.headers);
-    assert.equal(headers.get('authorization'), `Bearer ${TOKEN}`);
+    assert.equal(headers.has('authorization'), false);
+    assert.equal(call.init.credentials, 'omit');
     assert.equal(call.init.redirect, 'manual');
     assert.ok(call.init.signal instanceof AbortSignal);
   }
 });
 
-test('private asset redirects strip credentials and API-specific headers before the trusted CDN request', async () => {
+test('public asset redirects omit credentials and API-specific headers before the trusted CDN request', async () => {
   const { release, manifest } = fixture();
   const cdn =
     'https://release-assets.githubusercontent.com/github-production-release-asset/123?sig=opaque';
@@ -154,7 +157,7 @@ test('private asset redirects strip credentials and API-specific headers before 
         ? new Response(null, { status: 302, headers: { location: cdn } })
         : json(manifest),
   );
-  assert.equal((await client.releases(TOKEN)).length, 1);
+  assert.equal((await client.releases()).length, 1);
   assert.equal(calls.at(-1)!.url, cdn);
   const headers = new Headers(calls.at(-1)!.init.headers);
   for (const name of ['authorization', 'cookie', 'x-github-api-version', 'if-none-match'])
@@ -177,7 +180,7 @@ test('asset redirects reject HTTP, credentials, arbitrary origins, ports, API re
         ? json([release])
         : new Response(null, { status: 302, headers: { location: target } }),
     );
-    await assert.rejects(client.releases(TOKEN), /informações de atualização inválidas/);
+    await assert.rejects(client.releases(), /invalid update metadata/);
     assert.equal(calls.length, 2, target);
   }
   const { release } = fixture();
@@ -189,11 +192,11 @@ test('asset redirects reject HTTP, credentials, arbitrary origins, ports, API re
           headers: { location: 'https://objects.githubusercontent.com/loop' },
         }),
   );
-  await assert.rejects(client.releases(TOKEN), /inválidas/);
+  await assert.rejects(client.releases(), /invalid/);
   assert.equal(calls.length, 5);
 });
 
-test('ETag revalidation avoids downloading immutable manifests again and changing credentials discards all cached responses', async () => {
+test('ETag revalidation avoids downloading immutable manifests again', async () => {
   const { release, manifest } = fixture();
   let lists = 0,
     assets = 0;
@@ -211,12 +214,11 @@ test('ETag revalidation avoids downloading immutable manifests again and changin
     assets++;
     return json(manifest);
   });
-  const first = await client.releases(TOKEN);
-  assert.deepEqual(await client.releases(TOKEN), first);
+  const first = await client.releases();
+  assert.deepEqual(await client.releases(), first);
   assert.equal(assets, 1);
-  assert.deepEqual(await client.releases(null), first);
-  assert.equal(lists, 3);
-  assert.equal(assets, 2);
+  assert.equal(lists, 2);
+  assert.equal(assets, 1);
 });
 
 test('a public history of one hundred versions fetches only the newest manifest and resolves a previous version on demand', async () => {
@@ -230,18 +232,18 @@ test('a public history of one hundred versions fetches only the newest manifest 
       return json(
         history.map((item) => ({
           ...item.release,
-          body: `Notas públicas ${item.manifest.version}`,
+          body: `Public release notes ${item.manifest.version}`,
         })),
       );
     if (url === `${API}/releases?per_page=100&page=2`) return json([]);
     return json(manifests.get(url));
   });
-  const result = await client.releases(null);
+  const result = await client.releases();
   assert.equal(result.length, 100);
   assert.equal(result[0]!.version, '1.2.99');
   assert.equal(result[0]!.metadataOnly, undefined);
   assert.equal(result.filter((item) => item.metadataOnly).length, 99);
-  assert.equal(result[1]!.notes, 'Notas públicas 1.2.98');
+  assert.equal(result[1]!.notes, 'Public release notes 1.2.98');
   assert.equal(result[1]!.commit, COMMIT);
   assert.equal(result[1]!.sha256, '');
   assert.equal(result[1]!.sha512, '');
@@ -249,17 +251,17 @@ test('a public history of one hundred versions fetches only the newest manifest 
     calls.map((call) => call.url),
     [LIST, `${API}/releases?per_page=100&page=2`, assetUrl(1000)],
   );
-  const older = await client.resolve('github:99', null);
+  const older = await client.resolve('github:99');
   assert.equal(older.version, '1.2.98');
   assert.equal(older.sha256, 'b'.repeat(64));
   assert.equal(older.metadataOnly, undefined);
   assert.equal(calls.at(-1)!.url, assetUrl(990));
   const count = calls.length;
-  assert.deepEqual(await client.resolve('github:99', null), older);
+  assert.deepEqual(await client.resolve('github:99'), older);
   assert.equal(calls.length, count, 'A resolved immutable manifest is reused');
 });
 
-test('older manifests are checked before installation while unknown IDs and credential changes cannot select arbitrary assets', async () => {
+test('older manifests are checked before installation while unknown IDs cannot select arbitrary assets', async () => {
   const latest = fixture('1.2.8', 20),
     previous = fixture('1.2.7', 10);
   const { client, calls } = clientFor((url) =>
@@ -277,41 +279,17 @@ test('older manifests are checked before installation while unknown IDs and cred
               },
         ),
   );
-  await assert.rejects(client.resolve('github:10', null), /histórico consultado/);
+  await assert.rejects(client.resolve('github:10'), /checked history/);
   assert.equal(calls.length, 0);
-  const history = await client.releases(null);
+  const history = await client.releases();
   assert.equal(history[1]!.metadataOnly, true);
   assert.equal(history[1]!.notes.length, 8000);
   assert.equal(history[1]!.commit, '');
-  await assert.rejects(client.resolve('github:10', null), /inválidas/);
+  await assert.rejects(client.resolve('github:10'), /invalid/);
   const count = calls.length;
   for (const id of ['github:999', assetUrl(100), '../installer.exe'])
-    await assert.rejects(client.resolve(id, null), /histórico consultado/);
+    await assert.rejects(client.resolve(id), /checked history/);
   assert.equal(calls.length, count);
-  await assert.rejects(client.resolve('github:20', TOKEN), /histórico consultado/);
-  assert.equal(calls.length, count, 'A credential change requires a fresh authenticated catalog');
-});
-
-test('an in-flight response from an older credential cannot repopulate the new credential cache', async () => {
-  const { release, manifest } = fixture();
-  let finish!: (response: Response) => void;
-  const { client, calls } = clientFor((url) =>
-    url === LIST && calls.length === 1
-      ? new Promise<Response>((resolve) => {
-          finish = resolve;
-        })
-      : url === LIST
-        ? json([release])
-        : json(manifest),
-  );
-  const older = client.releases(TOKEN);
-  await client.releases(null);
-  const rejected = assert.rejects(older, /mudou durante a consulta/);
-  finish(json([release]));
-  await rejected;
-  const resolved = await client.resolve('github:10', null);
-  assert.equal(resolved.version, release.tag_name.slice(1));
-  assert.equal(calls.filter((call) => call.url === assetUrl(100)).length, 1);
 });
 
 test('replacement asset IDs cause the manifest to be fetched and checked again', async () => {
@@ -332,8 +310,8 @@ test('replacement asset IDs cause the manifest to be fetched and checked again',
     }
     return json(manifest);
   });
-  await client.releases(TOKEN);
-  await client.releases(TOKEN);
+  await client.releases();
+  await client.releases();
   assert.ok(calls.some((call) => call.url === assetUrl(200)));
 });
 
@@ -366,7 +344,7 @@ test('manifest identity, protocol, installer size, path and both checksum encodi
     const { client } = clientFor((url) =>
       url === LIST ? json([release]) : json(mutate(manifest)),
     );
-    await assert.rejects(client.releases(TOKEN), /informações de atualização inválidas/);
+    await assert.rejects(client.releases(), /invalid update metadata/);
   }
 });
 
@@ -387,7 +365,7 @@ test('duplicate or ambiguous release identities and assets fail closed instead o
   ];
   for (const list of rows) {
     const { client } = clientFor((url) => (url === LIST ? json(list) : json(manifest)));
-    await assert.rejects(client.releases(TOKEN), /inválidas/);
+    await assert.rejects(client.releases(), /invalid/);
   }
 });
 
@@ -414,29 +392,31 @@ test('duplicate JSON keys, invalid UTF8 and oversized streamed or declared manif
   ];
   for (const response of invalid) {
     const { client } = clientFor((url) => (url === LIST ? json([release]) : response()));
-    await assert.rejects(client.releases(TOKEN), /inválidas/);
+    await assert.rejects(client.releases(), /invalid/);
   }
 });
 
-test('HTTP failures and thrown transport errors never reveal tokens, URLs or response bodies', async () => {
+test('HTTP failures and thrown transport errors never reveal private response content or URLs', async () => {
   for (const status of [401, 403, 404, 429, 500]) {
     const { client } = clientFor(
-      () => new Response(`token=${TOKEN} private server information`, { status }),
+      () => new Response(`private=${PRIVATE_SERVER_VALUE} private server information`, { status }),
     );
-    await assert.rejects(client.releases(TOKEN), (error) => {
+    await assert.rejects(client.releases(), (error) => {
       assert.ok(error instanceof Error);
-      assert.doesNotMatch(error.message, new RegExp(TOKEN));
+      assert.doesNotMatch(error.message, new RegExp(PRIVATE_SERVER_VALUE));
       assert.doesNotMatch(error.message, /private server information|https:\/\//);
       return true;
     });
   }
   const { client } = clientFor(() => {
-    throw new Error(`https://private/${TOKEN}`);
+    throw new Error(`https://private/${PRIVATE_SERVER_VALUE}`);
   });
   await assert.rejects(
-    client.releases(TOKEN),
+    client.releases(),
     (error) =>
-      error instanceof Error && !error.message.includes(TOKEN) && /conexão/.test(error.message),
+      error instanceof Error &&
+      !error.message.includes(PRIVATE_SERVER_VALUE) &&
+      /connection/.test(error.message),
   );
 });
 
@@ -446,7 +426,7 @@ test('history pagination is fixed to three bounded pages and rejects oversized m
       ? new Response(null, { status: 404 })
       : json(Array.from({ length: 100 }, () => ({ draft: true }))),
   );
-  assert.deepEqual(await client.releases(null), []);
+  assert.deepEqual(await client.releases(), []);
   assert.deepEqual(
     calls.map((call) => call.url),
     [
@@ -459,7 +439,7 @@ test('history pagination is fixed to three bounded pages and rejects oversized m
     () => new Response('[]', { headers: { 'content-length': String(2 * 1024 * 1024 + 1) } }),
   ]) {
     const { client: invalid } = clientFor(response);
-    await assert.rejects(invalid.releases(null), /inválidas/);
+    await assert.rejects(invalid.releases(), /invalid/);
   }
 });
 
@@ -485,19 +465,19 @@ test('test channel includes canonical test prereleases and stable history while 
       : json(manifests.get(url)),
   );
   assert.deepEqual(
-    (await client.releases(null)).map((item) => item.version),
+    (await client.releases()).map((item) => item.version),
     ['1.2.16'],
   );
   assert.deepEqual(
-    (await client.releases(null, 'test')).map((item) => item.version),
+    (await client.releases('test')).map((item) => item.version),
     ['1.3.0-test.19.1.2', '1.3.0-test.18.1.2', '1.2.16'],
   );
-  assert.equal((await client.resolve('github:18', null)).version, '1.3.0-test.18.1.2');
+  assert.equal((await client.resolve('github:18')).version, '1.3.0-test.18.1.2');
   assert.deepEqual(
-    (await client.releases(null, 'stable')).map((item) => item.version),
+    (await client.releases('stable')).map((item) => item.version),
     ['1.2.16'],
   );
-  await assert.rejects(client.resolve('github:18', null), /histórico consultado/);
+  await assert.rejects(client.resolve('github:18'), /checked history/);
 });
 
 test('test manifest must pin the exact commit and cannot name main or mismatch its test tag', async () => {
@@ -508,7 +488,7 @@ test('test manifest must pin the exact commit and cannot name main or mismatch i
     if (mutation === 'version') manifest.version = '1.3.0-test.19.1.2';
     if (mutation === 'commit') manifest.commit = 'c'.repeat(40);
     const { client } = clientFor((url) => (url === LIST ? json([release]) : json(manifest)));
-    await assert.rejects(client.releases(null, 'test'), /inválidas/);
+    await assert.rejects(client.releases('test'), /invalid/);
   }
 });
 
@@ -522,13 +502,13 @@ test('historical preview metadata requires an exact commit before it can become 
     const { client, calls } = clientFor((url) =>
       url === LIST ? json([latest.release, previous.release]) : json(latest.manifest),
     );
-    await assert.rejects(client.releases(null, 'test'), /inválidas/);
+    await assert.rejects(client.releases('test'), /invalid/);
     assert.equal(
       calls.length,
       1,
       'Unpinned historical metadata must fail before manifest loading.',
     );
-    await assert.rejects(client.resolve('github:18', null), /histórico consultado/);
+    await assert.rejects(client.resolve('github:18'), /checked history/);
   }
 });
 
@@ -546,13 +526,13 @@ test('a response from the former channel cannot repopulate the catalog after a s
         ? json([stable.release, preview.release])
         : json(stable.manifest),
   );
-  const older = client.releases(null, 'test');
-  const rejected = assert.rejects(older, /mudou durante a consulta/);
-  await client.releases(null, 'stable');
+  const older = client.releases('test');
+  const rejected = assert.rejects(older, /changed during the request/);
+  await client.releases('stable');
   finish(json([preview.release]));
   await rejected;
-  await assert.rejects(client.resolve('github:18', null), /histórico consultado/);
-  assert.equal((await client.resolve('github:16', null)).version, '1.2.16');
+  await assert.rejects(client.resolve('github:18'), /checked history/);
+  assert.equal((await client.resolve('github:16')).version, '1.2.16');
 });
 
 test('the latest stable stays available when three hundred previews crowd the bounded history', async () => {
@@ -567,7 +547,7 @@ test('the latest stable stays available when three hundred previews crowd the bo
     if (page) return json(previews.slice((Number(page) - 1) * 100, Number(page) * 100));
     return json(stable.manifest);
   });
-  const result = await client.releases(null, 'stable');
+  const result = await client.releases('stable');
   assert.deepEqual(
     result.map((item) => item.version),
     ['1.2.16'],
@@ -594,7 +574,7 @@ test('a truncated history preserves the highest latest stable even when lower st
     return json(highest.manifest);
   });
   assert.deepEqual(
-    (await client.releases(null, 'stable')).map((item) => item.version),
+    (await client.releases('stable')).map((item) => item.version),
     ['1.3.0', '1.2.17'],
   );
 });

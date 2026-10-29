@@ -312,7 +312,7 @@ test('shutdown acknowledgement without observed child exit remains unknown and n
     killed = true;
   };
   await client.start();
-  await assert.rejects(client.shutdown(30), /Encerramento desconhecido/);
+  await assert.rejects(client.shutdown(30), /Unknown shutdown state/);
   assert.equal(client.exited, false);
   assert.equal(killed, false);
   assert.equal(calls.filter((r) => r.action === 'shutdown').length, 1);

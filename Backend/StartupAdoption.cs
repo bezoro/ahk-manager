@@ -116,7 +116,7 @@ internal sealed class StartupAdoption(
                 var refused = new OperationResult(
                     Outcome.Failed,
                     ReasonCode.IdentityChanged,
-                    "A continuação não foi aceita: o estado mudou ou essa solicitação já foi recebida. Nenhum pedido foi repetido."
+                    "The startup continuation was not accepted: the state changed or this request was already received. No request was replayed."
                 );
                 await StartupAdoptionWire
                     .Send(
@@ -169,7 +169,7 @@ internal sealed class StartupAdoption(
                 result = new(
                     Outcome.Unknown,
                     ReasonCode.PendingOperation,
-                    "A continuação pode ter iniciado scripts. Consulte as pendências; o pedido não será repetido."
+                    "The startup continuation may have started scripts. Review pending operations; the request will not be replayed."
                 );
             finished = result.Outcome != Outcome.Unknown;
             try
@@ -202,8 +202,8 @@ internal sealed class StartupAdoption(
                 accepted ? Outcome.Unknown : Outcome.Failed,
                 accepted ? ReasonCode.PendingOperation : ReasonCode.IdentityChanged,
                 accepted
-                    ? "A continuação não pôde ser confirmada. Não repita o pedido; verifique as pendências."
-                    : "Não foi possível autenticar a continuação. Nenhum script foi iniciado por este pedido."
+                    ? "The startup continuation could not be confirmed. Do not repeat the request; review pending operations."
+                    : "The startup continuation could not be authenticated. This request did not start any scripts."
             );
         }
     }

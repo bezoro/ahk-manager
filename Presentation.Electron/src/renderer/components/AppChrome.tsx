@@ -17,7 +17,7 @@ import {
 } from '@fluentui/react-icons';
 import type { HostState, ManagerSnapshot } from '../../shared/contracts.js';
 import type { Page } from '../appTypes.js';
-import { connectionStatus, problemCount, scriptCount, text } from '../resources/pt-BR.js';
+import { connectionStatus, problemCount, scriptCount, text } from '../resources/en-US.js';
 import { time } from '../format.js';
 
 interface NativeTitleProps {

@@ -36,7 +36,7 @@ public sealed class HotkeyAnalyzer
                         issues.Add(
                             new(
                                 ReasonCode.PartialAnalysis,
-                                "Anotação @gesture inválida, sem declaração adjacente ou não suportada: "
+                                "Invalid or unsupported @gesture annotation, or no adjacent declaration: "
                                     + path
                                     + ":"
                                     + line
@@ -51,7 +51,7 @@ public sealed class HotkeyAnalyzer
                         issues.Add(
                             new(
                                 ReasonCode.PartialAnalysis,
-                                $"Anotações @gesture adicionais omitidas: {suppressedGestureIssues}."
+                                $"Additional @gesture annotations omitted: {suppressedGestureIssues}."
                             )
                         );
                     return issues.ToImmutable();
@@ -112,7 +112,7 @@ public sealed class HotkeyAnalyzer
                             issues.Add(
                                 new(
                                     ReasonCode.PartialAnalysis,
-                                    "Cabeçalho inválido ou limite de descrição excedido."
+                                    "Invalid header or description limit exceeded."
                                 )
                             );
                     }

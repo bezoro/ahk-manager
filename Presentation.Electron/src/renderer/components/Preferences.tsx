@@ -12,7 +12,7 @@ import {
   Textarea,
 } from '@fluentui/react-components';
 import type { ManagerSettings } from '../../shared/contracts.js';
-import { text } from '../resources/pt-BR.js';
+import { text } from '../resources/en-US.js';
 import { OperationNotice, type Notice } from './OperationNotice.js';
 
 interface Props {

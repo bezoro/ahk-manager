@@ -1,4 +1,4 @@
-import { hostText } from '../../shared/host-pt-BR.js';
+import { hostText } from '../../shared/host-en-US.js';
 
 export interface RequestPolicy {
   quitting: boolean;
@@ -16,7 +16,7 @@ const duringAdministration = new Set([...duringAdoption, 'requestAdministration'
 export function assertRequestAllowed(name: string, state: RequestPolicy): void {
   if (state.quitting && !duringShutdown.has(name)) throw new Error(hostText.closing);
   if (state.updateApplying && !duringUpdate.has(name)) {
-    throw new Error('A instalação da atualização está sendo preparada.');
+    throw new Error('The update installation is being prepared.');
   }
   if (state.adoptionPending && !duringAdoption.has(name)) {
     throw new Error(hostText.administrationPending);

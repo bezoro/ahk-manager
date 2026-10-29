@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Bezoro.AhkManager.Backend;
 using Bezoro.AhkManager.Core.Infrastructure;
 using Bezoro.AhkManager.Core.Models;
@@ -109,6 +110,91 @@ internal static class StartupSettingsChecks
             refused = true;
         }
         check(refused, "a scoped continuation cannot also request the general login loop");
+        var scoped = ManagerElevation.CommittedHostStartInfo(
+            Path.Combine(root, "Manager.exe"),
+            "descriptor",
+            backgroundStartup: true
+        );
+        check(
+            scoped.ArgumentList.SequenceEqual(["--background", "--startup-adoption=descriptor"]),
+            "quiet scoped replacement preserves presentation without general login or foreground activation"
+        );
+        var manual = ManagerElevation.CommittedHostStartInfo(
+            Path.Combine(root, "Manager.exe"),
+            "descriptor"
+        );
+        check(
+            manual.ArgumentList.SequenceEqual(["--foreground", "--startup-adoption=descriptor"]),
+            "manual scoped replacement retains explicit foreground intent"
+        );
+        refused = false;
+        try
+        {
+            _ = ManagerElevation.CommittedHostStartInfo(
+                Path.Combine(root, "Manager.exe"),
+                backgroundStartup: true
+            );
+        }
+        catch (ProtocolException)
+        {
+            refused = true;
+        }
+        check(refused, "background presentation alone never grants a startup continuation");
+        var legacy = JsonSerializer.Deserialize(
+            """
+            {"operationId":"11111111-1111-1111-1111-111111111111","continuationId":"22222222-2222-2222-2222-222222222222"}
+            """,
+            Protocol.Json.StartupElevationPayload
+        );
+        check(
+            legacy is { BackgroundStartup: false },
+            "existing continuation payloads default to manual foreground presentation"
+        );
+        var background = legacy! with { BackgroundStartup = true };
+        check(
+            JsonSerializer.Deserialize(
+                JsonSerializer.Serialize(background, Protocol.Json.StartupElevationPayload),
+                Protocol.Json.StartupElevationPayload
+            ) == background,
+            "quiet continuation presentation survives only the authenticated request wire"
+        );
+        var legacyFrame = JsonSerializer.Deserialize(
+            """
+            {"kind":"Commit","operationId":"11111111-1111-1111-1111-111111111111","nonce":"fixture"}
+            """,
+            Protocol.Json.ElevationFrame
+        );
+        check(
+            legacyFrame is { BackgroundStartup: false },
+            "existing private commit frames retain foreground presentation"
+        );
+        var backgroundFrame = legacyFrame! with { BackgroundStartup = true };
+        check(
+            JsonSerializer.Deserialize(
+                JsonSerializer.Serialize(backgroundFrame, Protocol.Json.ElevationFrame),
+                Protocol.Json.ElevationFrame
+            ) == backgroundFrame,
+            "quiet presentation is bound to the authenticated bootstrap commit frame"
+        );
+        foreach (bool quietStartup in new[] { false, true })
+        foreach (int result in new[] { 0, 75 })
+        foreach (bool normalExited in new[] { false, true })
+        foreach (bool hostExited in new[] { false, true })
+        {
+            int notifications = 0;
+            ElevationActivation.ReportActivationFailure(
+                result,
+                normalExited,
+                hostExited,
+                quietStartup,
+                () => notifications++
+            );
+            check(
+                notifications
+                    == (result != 0 && normalExited && hostExited && !quietStartup ? 1 : 0),
+                "bootstrap recovery remains observable without Manager dialogs during quiet login"
+            );
+        }
         check(processes.Effects == 0, "startup preference setup never starts or stops scripts");
     }
 

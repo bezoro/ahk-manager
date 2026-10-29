@@ -11,6 +11,14 @@ export interface PreflightRequest {
   phase: AdministrationPhase;
   nonce: string;
 }
+export function administrationDocumentReady(input: {
+  currentDocument: boolean;
+  windowAlive: boolean;
+  focused: boolean;
+  quietStartup: boolean;
+}): boolean {
+  return input.currentDocument && input.windowAlive && (input.focused || input.quietStartup);
+}
 /** The transport must authenticate the document before delivering replies here. */
 export class AdministrationPreflight {
   private registered = false;
@@ -112,7 +120,10 @@ export class ElevationCoordinator {
     explicitCli = false,
     continuationId?: string,
     resumeLogin = false,
+    backgroundStartup = false,
   ): Promise<OperationResult> {
+    if (backgroundStartup && !continuationId)
+      return result('CancelledBeforeDispatch', 'InvalidRequest');
     if (this.running) return result('CancelledBeforeDispatch', 'PendingOperation');
     this.running = true;
     try {
@@ -150,7 +161,11 @@ export class ElevationCoordinator {
           status = await this.boundary.request(
             continuationId ? 'beginStartupContinuation' : 'beginAdministration',
             continuationId
-              ? { operationId: id, continuationId }
+              ? {
+                  operationId: id,
+                  continuationId,
+                  ...(backgroundStartup ? { backgroundStartup: true } : {}),
+                }
               : resumeLogin
                 ? { operationId: id, resumeLogin: true }
                 : { operationId: id },

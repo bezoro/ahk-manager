@@ -215,7 +215,7 @@ internal static class StartupRegistrationChecks
         check(
             denied.Outcome == Outcome.Failed
                 && denied.Code == ReasonCode.ManualElevationRequired
-                && denied.Detail?.Contains("administrador") == true
+                && denied.Detail?.Contains("administrator") == true
                 && adapter.Entry == startup.Command
                 && adapter.Task is null
                 && !adapter.DuplicateObserved,

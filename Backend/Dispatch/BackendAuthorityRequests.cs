@@ -69,6 +69,14 @@ internal sealed class BackendAuthorityRequests(
             var ticket = await continuationManager
                 .GetPreparedStartupContinuationAsync(request.ContinuationId)
                 .ConfigureAwait(false);
+            if (
+                request.BackgroundStartup
+                && (
+                    !continuationManager.Snapshot.Settings.LaunchManagerAtLogin
+                    || !continuationManager.Snapshot.Settings.LaunchManagerAsAdministrator
+                )
+            )
+                ticket = null;
             return Pack(
                 ticket is null
                     ? new ElevationStatus(
@@ -79,7 +87,11 @@ internal sealed class BackendAuthorityRequests(
                         null,
                         true
                     )
-                    : administration.BeginStartup(request.OperationId, ticket),
+                    : administration.BeginStartup(
+                        request.OperationId,
+                        ticket,
+                        request.BackgroundStartup
+                    ),
                 Protocol.Json.ElevationStatus
             );
         }

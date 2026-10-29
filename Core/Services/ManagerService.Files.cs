@@ -201,7 +201,7 @@ public sealed partial class ManagerService
                         new(
                             stopped && outcome != Outcome.Unknown ? Outcome.Partial : outcome,
                             code,
-                            stopped ? "Execução encerrada. " + detail : detail,
+                            stopped ? "The running instance was stopped. " + detail : detail,
                             operationId
                         ),
                         null,
@@ -354,7 +354,8 @@ public sealed partial class ManagerService
                         receipt == Outcome.Unknown
                             ? ReasonCode.PendingOperation
                             : ReasonCode.DispatchFailed,
-                        (record.RecycleStopped ? "Execução encerrada. " : "") + detail,
+                        (record.RecycleStopped ? "The running instance was stopped. " : "")
+                            + detail,
                         operationId
                     );
                     var save = await journal
@@ -391,7 +392,7 @@ public sealed partial class ManagerService
                     return new(
                         Outcome.Unknown,
                         ReasonCode.StorageFailure,
-                        "Reciclagem confirmada; recibo não persistido.",
+                        "The file was moved to the Recycle Bin, but its receipt could not be saved.",
                         operationId
                     );
                 var script = document.Scripts.SingleOrDefault(s => s.Id == record.ScriptId);
@@ -405,7 +406,7 @@ public sealed partial class ManagerService
                     committed = new(
                         Outcome.Partial,
                         ReasonCode.ConcurrentSettingsChange,
-                        "Reciclagem confirmada; revise e remova o registro da lista.",
+                        "The file was moved to the Recycle Bin. Review and remove its entry from the list.",
                         operationId
                     );
                 else
@@ -425,7 +426,7 @@ public sealed partial class ManagerService
                     : new(
                         Outcome.Partial,
                         committed.Code,
-                        "Reciclagem confirmada; registro preservado. Remova da lista após corrigir o armazenamento.",
+                        "The file was moved to the Recycle Bin, but its entry was preserved. Remove it from the list after fixing storage.",
                         operationId
                     );
                 var persisted = await journal

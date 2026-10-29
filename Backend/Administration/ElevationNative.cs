@@ -102,7 +102,7 @@ internal static class ElevationNative
     internal static void RecoveryError() =>
         MessageBox(
             0,
-            "Não foi possível concluir a abertura como administrador. Abra o AHK Manager normalmente para recuperar. Nenhum script foi encerrado.",
+            "AHK Manager could not be reopened as administrator. Open it normally to recover. No scripts were stopped.",
             "AHK Manager",
             0x10
         );

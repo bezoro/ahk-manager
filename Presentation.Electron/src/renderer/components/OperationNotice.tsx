@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Button } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
-import { text } from '../resources/pt-BR.js';
+import { text } from '../resources/en-US.js';
 
 export interface Notice {
   title: string;

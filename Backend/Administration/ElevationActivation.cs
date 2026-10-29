@@ -5,10 +5,23 @@ namespace Bezoro.AhkManager.Backend;
 
 internal static class ElevationActivation
 {
+    internal static void ReportActivationFailure(
+        int result,
+        bool normalExited,
+        bool hostExited,
+        bool quietStartup,
+        Action report
+    )
+    {
+        if (result != 0 && normalExited && hostExited && !quietStartup)
+            report();
+    }
+
     internal static ProcessStartInfo CommittedHostStartInfo(
         string hostPath,
         string? startupAdoption = null,
-        bool resumeLogin = false
+        bool resumeLogin = false,
+        bool backgroundStartup = false
     )
     {
         var start = new ProcessStartInfo(hostPath)
@@ -19,11 +32,15 @@ internal static class ElevationActivation
         // This requests only window activation. Authority still comes from native token proof.
         if (resumeLogin && startupAdoption is not null)
             throw new ProtocolException("InvalidRequest");
+        if (backgroundStartup && startupAdoption is null)
+            throw new ProtocolException("InvalidRequest");
         if (resumeLogin)
         {
             start.ArgumentList.Add("--login");
             start.ArgumentList.Add("--background");
         }
+        else if (backgroundStartup)
+            start.ArgumentList.Add("--background");
         else
             start.ArgumentList.Add("--foreground");
         if (startupAdoption is not null)

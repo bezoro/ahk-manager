@@ -3,7 +3,7 @@ import { Button } from '@fluentui/react-components';
 import type { HostState, ScriptOperation, ScriptSnapshot } from '../../shared/contracts.js';
 import type { ScriptContext } from '../appTypes.js';
 import { actionReason } from '../model.js';
-import { operation, reason, text } from '../resources/pt-BR.js';
+import { operation, reason, text } from '../resources/en-US.js';
 
 interface Props {
   host: HostState;

@@ -4,7 +4,7 @@ import type {
   OperationResult,
   ScriptSnapshot,
 } from '../../shared/contracts.js';
-import { hostText as t } from '../../shared/host-pt-BR.js';
+import { hostText as t } from '../../shared/host-en-US.js';
 
 const nonblockingGlobal = new Set([
   'StartupInactive',

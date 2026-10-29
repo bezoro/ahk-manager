@@ -248,7 +248,7 @@ public static class UnelevatedProcessLauncher
         );
         if (command.Length > MaximumTokenCommandLength)
             throw new ArgumentException(
-                "O comando do editor excede o limite de 1023 caracteres para execução com privilégios padrão."
+                "The editor command exceeds the 1023-character limit for launching with standard privileges."
             );
         return command;
     }

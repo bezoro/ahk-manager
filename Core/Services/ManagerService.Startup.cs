@@ -17,7 +17,7 @@ public sealed partial class ManagerService
                 )
                 {
                     string detail =
-                        $"Início com Windows interrompido ao {stage}. {LoginReason(result.Code)}";
+                        $"Windows startup stopped while {stage}. {LoginReason(result.Code)}";
                     if (!issues.IsDefaultOrEmpty)
                         detail +=
                             "\n"
@@ -45,13 +45,13 @@ public sealed partial class ManagerService
                     : ReasonCode.StartupInactive;
                 if (registration != ReasonCode.None)
                     return await Abort(
-                            "conferir a configuração de início",
+                            "checking the startup configuration",
                             new(Outcome.Failed, registration)
                         )
                         .ConfigureAwait(false);
                 if (!owner.Held || !owner.Trusted || owner.LoginKey.Length == 0)
                     return await Abort(
-                            "obter permissão para gerenciar os scripts",
+                            "obtaining permission to manage scripts",
                             new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable)
                         )
                         .ConfigureAwait(false);
@@ -67,14 +67,14 @@ public sealed partial class ManagerService
                 catch (OperationCanceledException)
                 {
                     return await Abort(
-                            "conferir outras configurações de início",
+                            "checking other startup configurations",
                             new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)
                         )
                         .ConfigureAwait(false);
                 }
                 if (!inspection.Complete)
                     return await Abort(
-                            "conferir outras configurações de início",
+                            "checking other startup configurations",
                             new(Outcome.Failed, ReasonCode.ExternalStartupConflict),
                             inspection.Issues
                         )
@@ -95,13 +95,13 @@ public sealed partial class ManagerService
                 catch (OperationCanceledException)
                 {
                     return await Abort(
-                            "salvar o controle desta sessão",
+                            "saving this session's startup record",
                             new(Outcome.CancelledBeforeDispatch, ReasonCode.Cancelled)
                         )
                         .ConfigureAwait(false);
                 }
                 if (!reserve.Succeeded)
-                    return await Abort("salvar o controle desta sessão", reserve)
+                    return await Abort("saving this session's startup record", reserve)
                         .ConfigureAwait(false);
                 int started = 0,
                     running = 0,
@@ -182,11 +182,11 @@ public sealed partial class ManagerService
                         Failure(script, execution.Result.Code);
                 }
                 string detail =
-                    $"Iniciados: {started}. Já em execução: {running}. Não iniciados ou não confirmados: {failed}.";
+                    $"Started: {started}. Already running: {running}. Not started or unconfirmed: {failed}.";
                 if (details.Count > 0)
                     detail += "\n\n" + string.Join("\n", details);
                 if (failed > details.Count)
-                    detail += "\nConsulte a atividade para os demais resultados.";
+                    detail += "\nSee Activity for the remaining results.";
                 if (
                     continuationCandidates.Count > 0
                     && !processes.IsAdministrator
@@ -198,11 +198,11 @@ public sealed partial class ManagerService
                         await PrepareStartupContinuationCore(continuationCandidates)
                             .ConfigureAwait(false);
                         detail +=
-                            "\n\nÉ possível solicitar permissão ao Windows para verificar os processos e continuar somente os scripts normais que ainda não foram iniciados.";
+                            "\n\nYou can request Windows permission to inspect processes and continue only the standard-privilege scripts that have not been started.";
                     }
                     catch (Exception ex) when (SafeJsonFiles.Known(ex))
                     {
-                        detail += "\nNão foi possível continuar a inicialização com segurança.";
+                        detail += "\nStartup could not be continued safely.";
                     }
                 }
                 var summary = new OperationResult(
@@ -221,33 +221,33 @@ public sealed partial class ManagerService
         reason switch
         {
             ReasonCode.ManualElevationRequired =>
-                "Início automático administrativo ignorado: o Manager está sem acesso de administrador. A execução manual ainda pode solicitar permissão ao Windows.",
+                "Administrator autostart was skipped because Manager does not have administrator access. A manual launch can still request Windows permission.",
             ReasonCode.ObservationIncomplete =>
-                "O inventário de processos está incompleto; não é seguro iniciar outra instância.",
+                "The process inventory is incomplete; starting another instance is unsafe.",
             ReasonCode.PendingOperation =>
-                "Não iniciado: uma solicitação anterior ainda não teve o resultado confirmado. O Manager não repetirá a execução automaticamente.",
+                "Not started: the result of a previous request is still unconfirmed. Manager will not replay the launch automatically.",
             ReasonCode.LaunchUncertain =>
-                "O resultado da execução é incerto. Um novo início está bloqueado para evitar duplicação.",
-            ReasonCode.AccessDenied => "O Windows negou acesso ao arquivo ou ao processo.",
-            ReasonCode.MissingFile => "O arquivo não foi encontrado.",
+                "The launch outcome is unknown. A new launch is blocked to prevent duplicate instances.",
+            ReasonCode.AccessDenied => "Windows denied access to the file or process.",
+            ReasonCode.MissingFile => "The file was not found.",
             ReasonCode.UnsupportedInterpreter =>
-                "O interpretador selecionado ou a versão exigida pelo script não é compatível.",
+                "The selected interpreter or the version required by the script is incompatible.",
             ReasonCode.ExternalStartupConflict =>
-                "Outra configuração de início automático pode duplicar este script.",
+                "Another automatic startup configuration may launch a duplicate of this script.",
             ReasonCode.LegacyGuard =>
-                "Uma proteção do catálogo ou o bloqueio de novas execuções impede o início.",
-            ReasonCode.Cancelled => "O início foi cancelado.",
-            ReasonCode.DispatchFailed => "O envio da execução falhou.",
+                "A catalog safeguard or launch block prevents this script from starting.",
+            ReasonCode.Cancelled => "The launch was cancelled.",
+            ReasonCode.DispatchFailed => "The launch request could not be dispatched.",
             ReasonCode.EffectOwnerUnavailable =>
-                "A autoridade para iniciar scripts não está disponível.",
+                "The authority required to start scripts is unavailable.",
             ReasonCode.StartupInactive =>
-                "O início com Windows está desativado ou sem registro. Revise essa opção nas preferências.",
+                "Windows startup is disabled or unregistered. Review this option in Preferences.",
             ReasonCode.StartupEntryConflict =>
-                "A entrada de início com Windows pertence a outra configuração. Revise-a nas preferências.",
+                "The Windows startup entry belongs to another configuration. Review it in Preferences.",
             ReasonCode.ConcurrentSettingsChange =>
-                "As configurações foram alteradas por outra instância. Atualize o estado antes de tentar novamente.",
+                "Another instance changed the settings. Refresh the state before trying again.",
             ReasonCode.ReadOnlySettings or ReasonCode.StorageFailure =>
-                "Os dados precisam de recuperação antes de iniciar scripts.",
-            _ => $"Início indisponível ({reason}). Consulte a atividade.",
+                "The data must be recovered before scripts can start.",
+            _ => $"Startup is unavailable ({reason}). See Activity.",
         };
 }

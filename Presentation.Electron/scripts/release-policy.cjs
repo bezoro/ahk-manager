@@ -1,15 +1,15 @@
 const commitTypes = [
-  ['feat', 'Funcionalidades'],
-  ['fix', 'Correções'],
-  ['perf', 'Desempenho'],
-  ['refactor', 'Refatoração'],
-  ['docs', 'Documentação'],
-  ['ci', 'Integração contínua'],
+  ['feat', 'Features'],
+  ['fix', 'Fixes'],
+  ['perf', 'Performance'],
+  ['refactor', 'Refactoring'],
+  ['docs', 'Documentation'],
+  ['ci', 'Continuous integration'],
   ['build', 'Build'],
-  ['style', 'Formatação'],
-  ['test', 'Testes'],
-  ['chore', 'Manutenção'],
-  ['revert', 'Reversões'],
+  ['style', 'Formatting'],
+  ['test', 'Tests'],
+  ['chore', 'Maintenance'],
+  ['revert', 'Reverts'],
 ].map(([type, section]) => ({ type, section, effect: 'bump' }));
 
 module.exports = { commitTypes };

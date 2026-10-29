@@ -611,7 +611,7 @@ public static partial class CoreSuite
                     [
                         new(
                             ReasonCode.ExternalStartupConflict,
-                            "Tarefas agendadas: consulta indisponível. " + new string('x', 5000)
+                            "Scheduled tasks: query unavailable. " + new string('x', 5000)
                         ),
                     ]
                 );
@@ -640,13 +640,12 @@ public static partial class CoreSuite
                     && records.Length == 1
                     && records[0].Code == result.Code
                     && records[0].Detail == result.Detail
-                    && result.Detail?.Contains("Início com Windows", StringComparison.Ordinal)
-                        == true,
+                    && result.Detail?.Contains("Windows startup", StringComparison.Ordinal) == true,
                 "login diagnostic " + scenario + " persists one explanatory abort without dispatch"
             );
             if (scenario == "inspection")
                 Verify(
-                    result.Detail?.Contains("Tarefas agendadas", StringComparison.Ordinal) == true
+                    result.Detail?.Contains("Scheduled tasks", StringComparison.Ordinal) == true
                         && result.Detail.Length <= 2400,
                     "login diagnostic inspection carries bounded origin and reason"
                 );
@@ -1160,7 +1159,7 @@ public static partial class CoreSuite
                 Verify(
                     result.Detail?.Contains("Primeiro", StringComparison.Ordinal) == true
                         && result.Detail.Contains(
-                            scenario == "standard" ? "administrador" : "acesso",
+                            scenario == "standard" ? "administrator" : "access",
                             StringComparison.OrdinalIgnoreCase
                         ),
                     "login " + scenario + " names first failure and readable reason"
@@ -1183,7 +1182,7 @@ public static partial class CoreSuite
                     result.Succeeded
                         && boundary.Starts == 1
                         && boundary.Launches.Single().Path == second
-                        && result.Detail?.Contains("Já em execução: 1", StringComparison.Ordinal)
+                        && result.Detail?.Contains("Already running: 1", StringComparison.Ordinal)
                             == true,
                     "login never duplicates already-running first script while starting second"
                 );
@@ -1236,7 +1235,7 @@ public static partial class CoreSuite
                     boundary.Starts == (scenario == "uncertain" ? 1 : 0)
                         && result.Outcome == Outcome.Partial
                         && result.Detail?.Contains(
-                            scenario == "uncertain" ? "não repetirá" : "inventário",
+                            scenario == "uncertain" ? "will not replay" : "inventory",
                             StringComparison.OrdinalIgnoreCase
                         ) == true,
                     "login " + scenario + " preserves shared safety barrier with visible reason"
@@ -1703,7 +1702,7 @@ public static partial class CoreSuite
                 bool truthful =
                     authorized.Stopped
                     && authorized.Result.Outcome is Outcome.Partial or Outcome.Unknown
-                    && authorized.Result.Detail?.Contains("encerrada", StringComparison.Ordinal)
+                    && authorized.Result.Detail?.Contains("stopped", StringComparison.Ordinal)
                         == true;
                 Console.WriteLine(
                     (truthful ? "PASS " : "FAIL ")
@@ -1752,7 +1751,7 @@ public static partial class CoreSuite
                 );
                 Check(
                     failure.Outcome == Outcome.Partial
-                        && failure.Detail!.Contains("encerrada")
+                        && failure.Detail!.Contains("stopped")
                         && File.Exists(fixture.Path)
                         && manager.Snapshot.Scripts.Length == 1
                         && fixture.Processes.Starts == 0,

@@ -94,7 +94,7 @@ export function useUpdates(): { state: UpdateState; accept(value: UpdateState): 
           setState((value) => ({
             ...value,
             phase: 'error',
-            error: 'Não foi possível carregar as atualizações. Tente verificar novamente.',
+            error: 'Updates could not be loaded. Please check again.',
           }));
       });
     return () => {

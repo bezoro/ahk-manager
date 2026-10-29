@@ -26,7 +26,8 @@ internal sealed partial class ManagerElevation : IDisposable
     readonly Func<Process?>? dispatchBoundary;
     readonly Func<StartupContinuationTicket, Task<bool>>? commitStartup;
     StartupContinuationTicket? startupContinuation;
-    bool resumeLogin;
+    bool resumeLogin,
+        backgroundStartup;
     Guid operationId,
         receiptId;
     long revision;
@@ -262,7 +263,10 @@ internal sealed partial class ManagerElevation : IDisposable
             }
 
             if (startingStartupId != id)
+            {
                 startupContinuation = null;
+                backgroundStartup = false;
+            }
             this.resumeLogin = startupContinuation is null && resumeLogin;
             operationId = id;
             if (parent.AuthorityMode != AuthorityMode.Normal || !quiescent())
@@ -283,7 +287,11 @@ internal sealed partial class ManagerElevation : IDisposable
 
     Guid startingStartupId;
 
-    internal ElevationStatus BeginStartup(Guid id, StartupContinuationTicket ticket)
+    internal ElevationStatus BeginStartup(
+        Guid id,
+        StartupContinuationTicket ticket,
+        bool backgroundStartup = false
+    )
     {
         lock (sync)
         {
@@ -294,6 +302,7 @@ internal sealed partial class ManagerElevation : IDisposable
             if (operationId != Guid.Empty && !canResume)
                 throw new ProtocolException("PendingOperation");
             startupContinuation = ticket;
+            this.backgroundStartup = backgroundStartup;
             startingStartupId = id;
             try
             {
@@ -427,7 +436,7 @@ internal sealed partial class ManagerElevation : IDisposable
             deadline.CancelAfter(TimeSpan.FromSeconds(15));
             await Send(
                     pipe!,
-                    new("Commit", id, nonce, receiptHash, receiptIdentity),
+                    new("Commit", id, nonce, receiptHash, receiptIdentity, backgroundStartup),
                     deadline.Token
                 )
                 .ConfigureAwait(false);
@@ -518,8 +527,15 @@ internal sealed partial class ManagerElevation : IDisposable
     internal static ProcessStartInfo CommittedHostStartInfo(
         string hostPath,
         string? startupAdoption = null,
-        bool resumeLogin = false
-    ) => ElevationActivation.CommittedHostStartInfo(hostPath, startupAdoption, resumeLogin);
+        bool resumeLogin = false,
+        bool backgroundStartup = false
+    ) =>
+        ElevationActivation.CommittedHostStartInfo(
+            hostPath,
+            startupAdoption,
+            resumeLogin,
+            backgroundStartup
+        );
 
     internal static Task<int> ActivateCommitted(
         Func<TimeSpan, Task<bool>> waitExit,

@@ -168,7 +168,7 @@ internal static partial class SelfTests
             );
             if (scenario is "cancel" or "cancel-abnormal-exit")
                 check(
-                    result.Detail.Contains("cancelada", StringComparison.Ordinal),
+                    result.Detail.Contains("cancelled", StringComparison.Ordinal),
                     "cancellation takes precedence over shutdown commit and native exit evidence: "
                         + scenario
                 );

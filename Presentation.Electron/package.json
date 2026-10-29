@@ -2,7 +2,7 @@
   "name": "bezoro-ahk-manager",
   "productName": "AHK Manager",
   "version": "1.2.1",
-  "description": "Gerenciador de scripts AutoHotkey v2 para Windows 11",
+  "description": "AutoHotkey v2 script manager for Windows 11",
   "author": "Bezoro",
   "license": "UNLICENSED",
   "private": true,

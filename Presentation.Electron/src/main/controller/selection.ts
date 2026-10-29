@@ -25,14 +25,14 @@ export function selectionVisible(snapshot: ManagerSnapshot, selection: Selection
     !['Unknown', 'Multiple', 'Missing', 'Blocked'].includes(script.status)
   )
     return false;
-  const search = query.search.trim().toLocaleLowerCase('pt-BR');
+  const search = query.search.trim().toLocaleLowerCase('en-US');
   const description = script.headerDescription?.trim()
     ? script.headerDescription
     : script.description;
   return (
     !search ||
     `${script.friendlyName}\n${script.path}\n${description}`
-      .toLocaleLowerCase('pt-BR')
+      .toLocaleLowerCase('en-US')
       .includes(search)
   );
 }

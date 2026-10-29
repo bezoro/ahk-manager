@@ -8,7 +8,7 @@ import {
   type Draft,
   type RowPreference,
 } from '../model.js';
-import { reason, text } from '../resources/pt-BR.js';
+import { reason, text } from '../resources/en-US.js';
 import type { Operations } from './useOperations.js';
 
 interface PreferenceAttempt {

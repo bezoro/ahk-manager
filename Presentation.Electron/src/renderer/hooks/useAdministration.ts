@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { HostState, ManagerSettings } from '../../shared/contracts.js';
-import { outcome, reason, text } from '../resources/pt-BR.js';
+import { outcome, reason, text } from '../resources/en-US.js';
 import type { Dialogs } from './useDialogs.js';
 import type { MetadataDrafts } from './useMetadataDrafts.js';
 import type { Operations } from './useOperations.js';

@@ -116,7 +116,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                         return new(
                             Outcome.Failed,
                             ReasonCode.CapabilityUnverified,
-                            "O adaptador de início não oferece tarefas administrativas."
+                            "The startup adapter does not support administrator tasks."
                         );
                     bool correct = enabled
                         ? elevated
@@ -174,7 +174,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                         : new(
                             Outcome.Unknown,
                             final,
-                            "O registro de início mudou durante a operação. Confira as preferências."
+                            "The startup registration changed during the operation. Review your preferences."
                         );
                 }
                 catch (OperationCanceledException)
@@ -198,11 +198,11 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                     string detail = code
                         is ReasonCode.AccessDenied
                             or ReasonCode.ManualElevationRequired
-                        ? "O Windows negou a alteração do início automático. Reabra o Manager como administrador para configurar a tarefa com privilégios mais altos."
-                        : "Não foi possível concluir a alteração do início automático.";
+                        ? "Windows denied the automatic startup change. Reopen Manager as administrator to configure the task with elevated privileges."
+                        : "The automatic startup change could not be completed.";
                     detail += restored
-                        ? " O registro anterior foi preservado."
-                        : " O registro precisa ser conferido; a alteração ficou parcial.";
+                        ? " The previous registration was preserved."
+                        : " The registration needs review; the change was only partially completed.";
                     return new(restored ? Outcome.Failed : Outcome.Partial, code, detail);
                 }
 

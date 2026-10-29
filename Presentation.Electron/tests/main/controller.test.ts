@@ -83,7 +83,9 @@ test('delete exact consent precedes backend stop authorization and native trash,
   };
   native.confirm = async (_title, detail) => {
     assert.ok(
-      detail.includes(file.path) && detail.includes('Lixeira') && detail.includes('administrador'),
+      detail.includes(file.path) &&
+        detail.includes('Recycle Bin') &&
+        detail.includes('administrator'),
     );
     events.push('confirm');
     return true;
@@ -296,9 +298,7 @@ function reviewRecycle(filter: 'All' | 'Running' | 'Stopped' = 'All') {
     }
     return {
       ...confirmed,
-      ...(payload.receipt === 'Failed'
-        ? { outcome: 'Partial', detail: 'Execução encerrada.' }
-        : {}),
+      ...(payload.receipt === 'Failed' ? { outcome: 'Partial', detail: 'Instance stopped.' } : {}),
     } as T;
   };
   return {
@@ -363,7 +363,7 @@ for (const invalidate of [
     const completed = await result;
     assert.equal(fixture.trash, 0, 'Trash escaped invalidated ' + invalidate);
     assert.equal(completed.outcome, 'Partial');
-    assert.equal(completed.detail, 'Execução encerrada.');
+    assert.equal(completed.detail, 'Instance stopped.');
     if (invalidate !== 'process')
       assert.equal(fixture.controller.state.snapshot!.scripts[0]!.process, null);
   });
@@ -506,7 +506,7 @@ test('revision-only observed updates retain selection and still defer plan autho
 test('renderer paths cannot configure an executable without a native picker authorization', async () => {
   const { controller, requests, native } = setup();
   const settings = { ...snapshot().settings, editorPath: 'C:\\evil.exe' };
-  await assert.rejects(controller.saveSettings(settings), /seletor/);
+  await assert.rejects(controller.saveSettings(settings), /file picker/);
   assert.equal(requests.length, 0);
   native.files = async () => ['C:\\editor.exe'];
   assert.equal(await controller.pick('editor'), 'C:\\editor.exe');
@@ -591,7 +591,7 @@ test('mutations are serialized and an unavailable host never replays effects', a
   controller.setConnection('failed', 'EOF');
   release();
   await first;
-  await assert.rejects(second, /indisponível/);
+  await assert.rejects(second, /unavailable/);
   assert.equal(requests.length, 1);
 });
 test('filter visibility excludes hidden collections and truthful unknown status', () => {
@@ -853,8 +853,8 @@ test('batch owns mutating lane before drain and duplicate batch cannot queue ano
   const first = run();
   await settle();
   assert.equal((await run()).problems[0], 'BatchBusy');
-  await assert.rejects(controller.saveCollection(null, 'blocked'), /parada/);
-  await assert.rejects(controller.runLogin(), /parada/);
+  await assert.rejects(controller.saveCollection(null, 'blocked'), /Stop and exit/);
+  await assert.rejects(controller.runLogin(), /Stop and exit/);
   assert.equal(
     env.requests.some((row) => row.action === 'runLogin'),
     false,
@@ -1067,7 +1067,7 @@ test('drain finishes prior mutation before observation and spends none of dispat
   await settle();
   assert.equal(env.requests[0]?.action, 'runLogin');
   assert.equal(env.refreshes, 0);
-  await assert.rejects(controller.saveCollection(null, 'competitor'), /parada/);
+  await assert.rejects(controller.saveCollection(null, 'competitor'), /Stop and exit/);
   env.clock += 90000;
   release({ ...confirmed });
   await prior;

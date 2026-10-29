@@ -27,7 +27,7 @@ export function parseUpdateVersion(value: unknown): ParsedUpdateVersion | null {
 export function compareUpdateVersions(first: string, second: string): number {
   const left = parseUpdateVersion(first),
     right = parseUpdateVersion(second);
-  if (!left || !right) throw new Error('A versão informada é inválida.');
+  if (!left || !right) throw new Error('The specified version is invalid.');
   const compare = (a: number[], b: number[]): number => {
     for (let index = 0; index < a.length; index++) {
       if (a[index] !== b[index]) return a[index]! < b[index]! ? -1 : 1;

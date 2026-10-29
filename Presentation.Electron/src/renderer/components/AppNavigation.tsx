@@ -21,7 +21,7 @@ import {
 } from '@fluentui/react-icons';
 import type { CollectionSnapshot, ScriptQuery } from '../../shared/contracts.js';
 import type { CollectionDialogState, Page } from '../appTypes.js';
-import { text } from '../resources/pt-BR.js';
+import { text } from '../resources/en-US.js';
 
 interface Props {
   page: Page;

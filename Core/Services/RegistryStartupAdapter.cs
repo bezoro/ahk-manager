@@ -23,7 +23,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
             using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
             return identity.User?.Value
                 ?? throw new UnauthorizedAccessException(
-                    "Não foi possível identificar o usuário atual."
+                    "The current Windows user could not be identified."
                 );
         }
     }
@@ -77,7 +77,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
                 var paths = ImmutableArray.CreateBuilder<string>();
                 var issues = ImmutableArray.CreateBuilder<Issue>();
                 bool complete = true;
-                string origin = "Entradas de início do Windows";
+                string origin = "Windows startup entries";
                 try
                 {
                     using var search = new ManagementObjectSearcher(
@@ -92,7 +92,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
                             if (row["Command"] is string command)
                                 Inspect(command);
                         }
-                    origin = "Pastas de inicialização do Windows";
+                    origin = "Windows startup folders";
                     foreach (
                         var directory in new[]
                         {
@@ -109,7 +109,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
                             paths.Add(ScriptPaths.Canonical(file));
                         }
                     }
-                    origin = "Tarefas agendadas do Windows";
+                    origin = "Windows scheduled tasks";
                     using var scheduled = new ManagementObjectSearcher(
                         new ManagementScope(@"\\.\root\Microsoft\Windows\TaskScheduler"),
                         new ObjectQuery(
@@ -133,7 +133,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
                                 {
                                     complete = false;
                                     AddIssue(
-                                        "Uma ação agendada não pôde ser interpretada. Revise as ações de início automático."
+                                        "A scheduled action could not be read. Review the automatic startup actions."
                                     );
                                     continue;
                                 }
@@ -159,15 +159,15 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
                     complete = false;
                     string reason = ex switch
                     {
-                        UnauthorizedAccessException => "acesso negado",
-                        ManagementException management => $"consulta WMI: {management.ErrorCode}",
+                        UnauthorizedAccessException => "access denied",
+                        ManagementException management => $"WMI query: {management.ErrorCode}",
                         System.Runtime.InteropServices.COMException native =>
-                            $"erro do Windows: 0x{native.ErrorCode:X8}",
-                        IOException => "falha de leitura",
-                        _ => "dados indisponíveis ou inválidos",
+                            $"Windows error: 0x{native.ErrorCode:X8}",
+                        IOException => "read failure",
+                        _ => "unavailable or invalid data",
                     };
                     AddIssue(
-                        $"Não foi possível concluir a consulta ({reason}). Confira o acesso a essa origem e tente novamente."
+                        $"The query could not be completed ({reason}). Check access to this source and try again."
                     );
                 }
                 return new StartupInspection(
@@ -181,9 +181,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
                     complete &= inspected.Complete;
                     paths.AddRange(inspected.ScriptPaths);
                     foreach (var issue in inspected.Issues)
-                        AddIssue(
-                            issue.Detail ?? "Uma configuração de início não pôde ser interpretada."
-                        );
+                        AddIssue(issue.Detail ?? "A startup configuration could not be read.");
                 }
                 void AddIssue(string detail)
                 {
@@ -322,7 +320,7 @@ public sealed class RegistryStartupAdapter : IUserStartupAdapter, IUserStartupTa
                 [
                     new(
                         ReasonCode.ExternalStartupConflict,
-                        "Uma entrada relacionada ao AutoHotkey não tem um caminho de script verificável. Revise a entrada e use caminhos explícitos para evitar duplicação."
+                        "An AutoHotkey startup entry does not have a verifiable script path. Review the entry and use explicit paths to prevent duplicate instances."
                     ),
                 ]
             );

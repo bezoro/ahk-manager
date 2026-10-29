@@ -27,10 +27,15 @@ import {
   SHUTDOWN_DEADLINE_MS,
   orderlyShutdown,
   reportStartupWithContinuation,
+  configuredLoginElevation,
 } from './lifecycle.js';
-import { AdministrationPreflight, ElevationCoordinator } from './elevation.js';
+import {
+  AdministrationPreflight,
+  ElevationCoordinator,
+  administrationDocumentReady,
+} from './elevation.js';
 import type { PageDiagnostics } from './diagnostics.js';
-import { hostText as t } from '../shared/host-pt-BR.js';
+import { hostText as t } from '../shared/host-en-US.js';
 import { APP_URL, DocumentGuard, packagedBackend, type DocumentLease } from './security.js';
 import { restorePlacement } from './placement.js';
 import type {
@@ -59,6 +64,7 @@ import { createApplicationUpdates } from './updates/application-updates.js';
 
 /** Composes desktop, backend and lifecycle services for one Manager process. */
 export function startManager(): void {
+  app.commandLine.appendSwitch('lang', 'en-US');
   protocol.registerSchemesAsPrivileged([
     {
       scheme: 'ahk-manager',
@@ -85,16 +91,22 @@ export function startManager(): void {
   let documentLease: DocumentLease | null = null;
   const initialAdministration = administrationCli(process.argv);
   const initialAdoption = startupAdoptionCli(process.argv);
+  const quietAdoption =
+    initialAdoption.descriptor !== null && process.argv.includes('--background');
   let adoptionPending = initialAdoption.descriptor !== null || initialAdoption.invalid;
   let continuationOffer: StartupContinuationOffer | null = null;
   let administrativeCliPending = initialAdministration === 'request';
   const lifecycle = new LifecycleIntent(
     !adoptionPending && initialAdministration === 'none' && process.argv.includes('--login'),
-    adoptionPending || initialAdministration !== 'none' || process.argv.includes('--foreground'),
+    (adoptionPending && !quietAdoption) ||
+      initialAdministration !== 'none' ||
+      process.argv.includes('--foreground'),
+    quietAdoption,
   );
   const preflight = new AdministrationPreflight();
   let administration: ElevationCoordinator | null = null;
   let administrationLease: DocumentLease | null = null;
+  let quietStartupTransfer = false;
   const stopExit = new StopExitIntent();
   let stopExitProgress = { done: 0, total: 0 };
   let quitting = false;
@@ -124,11 +136,13 @@ export function startManager(): void {
           (value) => value === '--startup-adoption' || value.startsWith('--startup-adoption='),
         )
       ) {
-        show();
+        if (!argv.includes('--login') && !argv.includes('--background')) {
+          lifecycle.requestExplicitActivation();
+          show();
+        }
         return;
       }
       if (initialAdoption.descriptor !== null && argv.includes('--login')) {
-        show();
         return;
       }
       const administrative = administrationCli(argv);
@@ -165,7 +179,7 @@ export function startManager(): void {
       .whenReady()
       .then(start)
       .catch((error) => {
-        dialog.showErrorBox(t.title, safeError(error));
+        if (!lifecycle.quietStartup) dialog.showErrorBox(t.title, safeError(error));
         quitComplete = true;
         app.quit();
       });
@@ -232,9 +246,9 @@ export function startManager(): void {
         confirm: (release) =>
           confirm(
             compareVersions(release.version, app.getVersion()) < 0
-              ? 'Voltar para a versão ' + release.version + '?'
-              : 'Atualizar para a versão ' + release.version + '?',
-            'O Manager será fechado e reaberto. Os scripts que já estão em execução continuam funcionando, e suas configurações serão preservadas.',
+              ? 'Return to version ' + release.version + '?'
+              : 'Update to version ' + release.version + '?',
+            'The manager will close and reopen. Running scripts will keep running, and your settings will be preserved.',
           ),
         apply: applyUpdate,
         changed: (state) => guard?.send('manager:updates', state),
@@ -255,7 +269,7 @@ export function startManager(): void {
       administration?.active ||
       stopExit.active
     )
-      throw new Error('Aguarde as operações do Manager antes de atualizar.');
+      throw new Error('Wait for manager operations to finish before updating.');
     updateApplying = true;
     controller?.setAdministrationPending(true);
     let prepared: PreparedUpdate | null = null;
@@ -266,7 +280,7 @@ export function startManager(): void {
         .getAppMetrics()
         .find((metric) => metric.pid === process.pid)?.creationTime;
       if (!created || !Number.isFinite(created))
-        throw new Error('Não foi possível confirmar a sessão do Manager para atualizar.');
+        throw new Error('The manager session could not be verified for this update.');
       prepared = await prepareUpdate(
         updateStore,
         operationId,
@@ -316,14 +330,13 @@ export function startManager(): void {
         if (shutdownStarted && backend)
           controller?.setConnection(
             'failed',
-            'A atualização foi cancelada sem confirmação do encerramento. Aguarde e reconecte o backend antes de continuar.',
+            'The update was cancelled without confirmed shutdown. Wait and reconnect the backend before continuing.',
           );
       }
       if (cancellationError)
-        throw new Error(
-          safeError(error) + ' Não foi possível registrar o cancelamento da atualização.',
-          { cause: cancellationError },
-        );
+        throw new Error(safeError(error) + ' The update cancellation could not be recorded.', {
+          cause: cancellationError,
+        });
       throw error;
     }
   }
@@ -399,6 +412,11 @@ export function startManager(): void {
         controller?.state.connection === 'ready' &&
         controller.state.authorityMode === 'Normal' &&
         !controller.state.busy &&
+        (!quietStartupTransfer ||
+          (lifecycle.quietStartup &&
+            configuredLoginElevation(controller.state.snapshot?.settings) &&
+            controller.state.snapshot?.readOnly === false &&
+            controller.state.snapshot.effectsAvailable)) &&
         !!backend?.ready,
       confirm: () => confirm(t.administrationTitle, t.administrationDetail),
       preflight: (operationId, phase) => {
@@ -408,7 +426,15 @@ export function startManager(): void {
           phase,
           (request) => guard?.send('manager:administrationPreflight', request),
           () =>
-            !!lease && !!guard?.current(lease) && !!window?.isFocused() && !window.isDestroyed(),
+            administrationDocumentReady({
+              currentDocument: !!lease && !!guard?.current(lease),
+              windowAlive: !!window && !window.isDestroyed(),
+              focused: window?.isFocused() === true,
+              quietStartup:
+                quietStartupTransfer &&
+                lifecycle.quietStartup &&
+                configuredLoginElevation(controller?.state.snapshot?.settings),
+            }),
         );
       },
       quiesce: (value) => controller?.setAdministrationPending(value),
@@ -456,16 +482,21 @@ export function startManager(): void {
     let setupDeferred = false;
     if (
       administrativeCliPending ||
-      (canInitialize && wantsAdministrator && controller.state.authorityMode === 'Normal')
+      (canInitialize &&
+        wantsAdministrator &&
+        controller.state.authorityMode === 'Normal' &&
+        (!lifecycle.quietStartup ||
+          lifecycle.takeAutomaticElevation(controller.state.snapshot?.settings)))
     ) {
       administrativeCliPending = false;
-      show();
-      const result = await requestAdministration(true, lifecycle.loginRequested);
+      const quiet = lifecycle.quietStartup;
+      if (!quiet) show();
+      const result = await requestAdministration(true, lifecycle.loginRequested, quiet);
       if (result.outcome === 'Confirmed') {
         if (quitting || quitComplete) return;
       } else {
         setupDeferred = true;
-        if (window)
+        if (window && !quiet)
           await dialog.showMessageBox(window, {
             type: 'warning',
             title: t.administrationTitle,
@@ -480,7 +511,7 @@ export function startManager(): void {
     }
     if (canInitialize && !setupDeferred && backend?.ready) {
       const result = await backend.request<OperationResult>('initializeStartup', {});
-      if (result.outcome !== 'Confirmed' && window) {
+      if (result.outcome !== 'Confirmed' && window && !lifecycle.quietStartup) {
         show();
         await dialog.showMessageBox(window, {
           type: 'warning',
@@ -527,7 +558,7 @@ export function startManager(): void {
     try {
       await backend.start();
       controller.setHostAuthority(backend.authorityMode);
-      if (backend.profileRoot && !lifecycle.loginRequested) {
+      if (backend.profileRoot && !lifecycle.loginRequested && !lifecycle.quietStartup) {
         const exists = await fs.access(path.join(backend.profileRoot, 'settings.json')).then(
           () => true,
           () => false,
@@ -556,8 +587,8 @@ export function startManager(): void {
         );
         adoptionPending = startupAdoptionBlocksInteraction(result);
         controller.setAdministrationPending(adoptionPending);
-        show();
-        if (window)
+        if (!lifecycle.quietStartup) show();
+        if (window && !lifecycle.quietStartup)
           await dialog.showMessageBox(window, {
             type: result.outcome === 'Confirmed' ? 'info' : 'warning',
             title: t.loginResultTitle,
@@ -571,7 +602,7 @@ export function startManager(): void {
       }
     } catch (error) {
       controller.setConnection('failed', safeError(error));
-      show();
+      if (!lifecycle.quietStartup) show();
     }
   }
   async function reportLoginResult(result: OperationResult): Promise<void> {
@@ -585,8 +616,9 @@ export function startManager(): void {
     updateTray();
     await reportStartupWithContinuation(
       result,
-      continuationOffer?.canResume === true,
-      requestStartupContinuation,
+      continuationOffer?.canResume === true &&
+        (!lifecycle.quietStartup || configuredLoginElevation(controller?.state.snapshot?.settings)),
+      () => requestStartupContinuation(lifecycle.quietStartup),
       {
         show,
         warn: async (value) => {
@@ -603,6 +635,7 @@ export function startManager(): void {
             });
         },
       },
+      lifecycle.quietStartup,
     );
   }
   async function checkStartupAdoption(): Promise<void> {
@@ -630,8 +663,10 @@ export function startManager(): void {
       dialog.showErrorBox(t.loginResultTitle, t.administrationPending);
     }
   }
-  async function requestStartupContinuation(): Promise<boolean> {
+  async function requestStartupContinuation(quiet = false): Promise<boolean> {
     if (adoptionPending || administration?.active || !backend?.ready || !controller || quitting)
+      return false;
+    if (quiet && !lifecycle.takeAutomaticElevation(controller.state.snapshot?.settings))
       return false;
     continuationOffer = await backend.request<StartupContinuationOffer | null>(
       'startupContinuation',
@@ -639,24 +674,32 @@ export function startManager(): void {
     );
     updateTray();
     if (!continuationOffer?.canResume || !window) return false;
-    show();
-    const choice = await dialog.showMessageBox(window, {
-      type: 'warning',
-      title: t.continuationTitle,
-      message: t.continuationTitle,
-      detail: t.continuationDetail(continuationOffer.scriptNames),
-      buttons: [t.continuationContinue, t.continuationLater],
-      defaultId: 1,
-      cancelId: 1,
-      noLink: true,
-    });
-    if (choice.response !== 0) return false;
+    if (!quiet) {
+      show();
+      const choice = await dialog.showMessageBox(window, {
+        type: 'warning',
+        title: t.continuationTitle,
+        message: t.continuationTitle,
+        detail: t.continuationDetail(continuationOffer.scriptNames),
+        buttons: [t.continuationContinue, t.continuationLater],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (choice.response !== 0) return false;
+    }
     const deadline = Date.now() + 3000;
     while (!documentLease && !quitting && Date.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 25));
     administrationLease = documentLease;
-    const result = await administration?.request(true, continuationOffer.operationId);
-    if (result && result.outcome !== 'Confirmed' && window)
+    let result: OperationResult | undefined;
+    quietStartupTransfer = quiet;
+    try {
+      result = await administration?.request(true, continuationOffer.operationId, false, quiet);
+    } finally {
+      quietStartupTransfer = false;
+    }
+    if (result && result.outcome !== 'Confirmed' && window && !quiet)
       await dialog.showMessageBox(window, {
         type: 'warning',
         title: t.loginResultTitle,
@@ -685,11 +728,13 @@ export function startManager(): void {
       await reportLoginResult(await controller.runLogin());
     } catch (error) {
       controller.setConnection('failed', safeError(error));
-      show();
-      dialog.showErrorBox(t.loginResultTitle, safeError(error));
+      if (!lifecycle.quietStartup) {
+        show();
+        dialog.showErrorBox(t.loginResultTitle, safeError(error));
+      }
     }
   }
-  async function requestAdministration(explicitCli = false, resumeLogin = false) {
+  async function requestAdministration(explicitCli = false, resumeLogin = false, quiet = false) {
     if (adoptionPending)
       return {
         outcome: 'CancelledBeforeDispatch' as const,
@@ -705,7 +750,7 @@ export function startManager(): void {
         correlationId: null,
       };
     if (controller?.state.authorityMode === 'Administrator') {
-      show();
+      if (!quiet) show();
       return { outcome: 'Confirmed' as const, code: 'None', detail: null, correlationId: null };
     }
     if (explicitCli) {
@@ -714,14 +759,19 @@ export function startManager(): void {
         await new Promise((resolve) => setTimeout(resolve, 25));
     }
     administrationLease = documentLease;
-    return (
-      administration?.request(explicitCli, undefined, resumeLogin) ?? {
-        outcome: 'CancelledBeforeDispatch' as const,
-        code: 'CapabilityUnverified',
-        detail: null,
-        correlationId: null,
-      }
-    );
+    quietStartupTransfer = quiet;
+    try {
+      return (
+        (await administration?.request(explicitCli, undefined, resumeLogin)) ?? {
+          outcome: 'CancelledBeforeDispatch' as const,
+          code: 'CapabilityUnverified',
+          detail: null,
+          correlationId: null,
+        }
+      );
+    } finally {
+      quietStartupTransfer = false;
+    }
   }
   function createTray(): void {
     try {
@@ -905,8 +955,10 @@ export function startManager(): void {
     } catch (error) {
       quitting = false;
       controller?.setConnection('failed', safeError(error));
-      show();
-      dialog.showErrorBox(t.shutdownUnconfirmed, safeError(error));
+      if (!quietStartupTransfer) {
+        show();
+        dialog.showErrorBox(t.shutdownUnconfirmed, safeError(error));
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -930,8 +982,7 @@ export function startManager(): void {
       }),
       requestAdministration,
       retryBackend: async () => {
-        if (updateShutdownInFlight)
-          throw new Error('Aguarde a confirmação de encerramento do backend.');
+        if (updateShutdownInFlight) throw new Error('Wait for confirmed backend shutdown.');
         await startBackend();
         if (backend?.ready) await runLogin();
       },

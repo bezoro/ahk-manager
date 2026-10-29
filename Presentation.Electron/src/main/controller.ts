@@ -17,7 +17,7 @@ import type {
 } from '../shared/contracts.js';
 import type { PreparedOperation, ProfileMigrationPreview } from './backend.js';
 import { MAX_PENDING } from './backend.js';
-import { hostText as t } from '../shared/host-pt-BR.js';
+import { hostText as t } from '../shared/host-en-US.js';
 
 import type { Authority, NativeBoundary } from './controller/boundaries.js';
 import { sameProcessIdentity } from './controller/identity.js';

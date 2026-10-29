@@ -258,7 +258,7 @@ public sealed partial class ManagerService
                             ? new OperationResult(
                                 Outcome.Failed,
                                 ReasonCode.ManualElevationRequired,
-                                "A preferência foi salva. Reabra o Manager como administrador para concluir o início com Windows."
+                                "The preference was saved. Reopen Manager as administrator to finish configuring Windows startup."
                             )
                             : await startup
                                 .SetEnabledAsync(

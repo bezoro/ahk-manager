@@ -141,7 +141,7 @@ public sealed partial class ManagerService
             global = global.Add(
                 new(
                     ReasonCode.PendingOperation,
-                    "O histórico de execuções não pôde ser lido. As ações de execução estão indisponíveis."
+                    "The launch history could not be read. Launch actions are unavailable."
                 )
             );
         else
@@ -153,7 +153,7 @@ public sealed partial class ManagerService
             global = global.Add(
                 new(
                     ReasonCode.PendingOperation,
-                    "Não foi possível confirmar a continuação do início dos scripts. Novos inícios estão bloqueados para evitar duplicação."
+                    "The startup continuation could not be verified. New launches are blocked to prevent duplicate instances."
                 )
             );
         var registration = startup.RegistrationStatus(
@@ -199,14 +199,14 @@ public sealed partial class ManagerService
             ?? Path.GetFileNameWithoutExtension(record.ScriptPath);
         string action = record.Operation switch
         {
-            ScriptOperation.Start => "iniciar",
-            ScriptOperation.Stop => "encerrar",
-            ScriptOperation.Restart => "reiniciar",
-            ScriptOperation.TogglePause => "alterar a pausa de",
-            ScriptOperation.ToggleSuspend => "alterar a suspensão de",
-            ScriptOperation.RecycleFile => "enviar à Lixeira",
-            _ => "alterar",
+            ScriptOperation.Start => "starting",
+            ScriptOperation.Stop => "stopping",
+            ScriptOperation.Restart => "restarting",
+            ScriptOperation.TogglePause => "changing the pause state of",
+            ScriptOperation.ToggleSuspend => "changing the hotkey suspension state of",
+            ScriptOperation.RecycleFile => "recycling",
+            _ => "changing",
         };
-        return $"Não foi possível confirmar o resultado de {action} {name}. O Manager não repetirá essa solicitação automaticamente.";
+        return $"The outcome of {action} {name} could not be confirmed. Manager will not replay this request automatically.";
     }
 }

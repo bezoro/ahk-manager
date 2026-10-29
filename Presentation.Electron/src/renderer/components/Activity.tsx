@@ -4,7 +4,7 @@ import { CopyRegular, SearchRegular } from '@fluentui/react-icons';
 import type { ActivitySnapshot, ManagerSnapshot, Outcome } from '../../shared/contracts.js';
 import { activityAssociation } from '../model.js';
 import { date } from '../format.js';
-import { operation, outcome, outcomes, reason, text } from '../resources/pt-BR.js';
+import { operation, outcome, outcomes, reason, text } from '../resources/en-US.js';
 
 export function Activity({
   snapshot,
@@ -38,7 +38,7 @@ export function Activity({
       current = false;
     };
   }, [snapshot.revision, scriptId, result, onError]);
-  const needle = search.toLocaleLowerCase('pt-BR').trim();
+  const needle = search.toLocaleLowerCase('en-US').trim();
   const rows = events.filter((event) => {
     const association = activityAssociation(event, snapshot.scripts);
     return (
@@ -54,7 +54,7 @@ export function Activity({
           event.operation ? operation(event.operation) : text.managerActivity,
         ]
           .join(' ')
-          .toLocaleLowerCase('pt-BR')
+          .toLocaleLowerCase('en-US')
           .includes(needle))
     );
   });

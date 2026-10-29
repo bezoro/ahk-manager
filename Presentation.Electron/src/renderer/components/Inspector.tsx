@@ -33,7 +33,7 @@ import {
   type Draft,
 } from '../model.js';
 import { date, duration, origin } from '../format.js';
-import { operation, outcome, reason, status, text } from '../resources/pt-BR.js';
+import { operation, outcome, reason, status, text } from '../resources/en-US.js';
 import { ReadableHotkey } from './Hotkeys.js';
 
 interface Props {

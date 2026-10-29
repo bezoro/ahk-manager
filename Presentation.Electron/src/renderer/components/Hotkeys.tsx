@@ -3,7 +3,7 @@ import { Badge, Button, Input, Tooltip } from '@fluentui/react-components';
 import { SearchRegular } from '@fluentui/react-icons';
 import type { ManagerSnapshot, HotkeySnapshot } from '../../shared/contracts.js';
 import { formatHotkey } from '../hotkeys.js';
-import { text } from '../resources/pt-BR.js';
+import { text } from '../resources/en-US.js';
 
 export function ReadableHotkey({
   hotkey,
@@ -46,7 +46,7 @@ export function Hotkeys({
   onScript(id: string): void;
 }): React.ReactElement {
   const [search, setSearch] = React.useState('');
-  const needle = search.trim().toLocaleLowerCase('pt-BR');
+  const needle = search.trim().toLocaleLowerCase('en-US');
   const rows = snapshot.scripts
     .flatMap((script) =>
       script.hotkeys.map((key, index) => ({ script, key, id: script.id + ':' + index })),
@@ -64,7 +64,7 @@ export function Hotkeys({
           formatHotkey(key).instruction,
         ]
           .join(' ')
-          .toLocaleLowerCase('pt-BR')
+          .toLocaleLowerCase('en-US')
           .includes(needle),
     );
   return (

@@ -66,7 +66,11 @@ public sealed record ElevationOperationPayload(Guid OperationId);
 
 public sealed record AdministrationBeginPayload(Guid OperationId, bool ResumeLogin = false);
 
-public sealed record StartupElevationPayload(Guid OperationId, Guid ContinuationId);
+public sealed record StartupElevationPayload(
+    Guid OperationId,
+    Guid ContinuationId,
+    bool BackgroundStartup = false
+);
 
 public sealed record ElevationStatusPayload(Guid OperationId, long AfterRevision);
 

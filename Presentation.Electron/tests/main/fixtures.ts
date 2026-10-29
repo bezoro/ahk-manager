@@ -9,7 +9,7 @@ export function snapshot(): ManagerSnapshot {
         id: scriptId,
         path: 'C:\\fixtures\\teste.ahk',
         friendlyName: 'Teste',
-        description: 'Descrição',
+        description: 'Description',
         collectionId: null,
         runAtLogin: false,
         runAsAdministrator: false,

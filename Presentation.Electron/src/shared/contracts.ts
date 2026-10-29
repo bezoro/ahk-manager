@@ -258,7 +258,6 @@ export interface AhkManagerApi {
   getUpdateState(): Promise<UpdateState>;
   checkUpdates(): Promise<UpdateState>;
   installUpdate(id: string): Promise<UpdateState>;
-  setUpdateToken(token: string | null): Promise<UpdateState>;
   setUpdateChannel(channel: UpdateChannel): Promise<UpdateState>;
   onUpdates(listener: (state: UpdateState) => void): () => void;
   getState(): Promise<HostState>;

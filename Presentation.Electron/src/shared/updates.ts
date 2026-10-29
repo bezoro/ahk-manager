@@ -23,7 +23,6 @@ export interface UpdateState {
   availableVersion: string | null;
   lastCheckedAt: string | null;
   error: string | null;
-  accessConfigured: boolean;
   progress: number | null;
   releases: UpdateRelease[];
 }
@@ -35,7 +34,6 @@ export const emptyUpdateState = (): UpdateState => ({
   availableVersion: null,
   lastCheckedAt: null,
   error: null,
-  accessConfigured: false,
   progress: null,
   releases: [],
 });

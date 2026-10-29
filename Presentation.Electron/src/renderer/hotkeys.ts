@@ -1,4 +1,4 @@
-import { hotkeyText as text } from './resources/hotkeys-pt-BR.js';
+import { hotkeyText as text } from './resources/hotkeys-en-US.js';
 
 export interface ReadableHotkey {
   label: string;
@@ -25,7 +25,7 @@ function readKey(token: string): Key | null {
   if (/^f(?:[1-9]|1\d|2[0-4])$/i.test(token))
     return { label: token.toUpperCase(), token: normalized, coded: false };
   if (/^numpad\d$/i.test(token))
-    return { label: `${token.slice(-1)} (teclado numérico)`, token: normalized, coded: false };
+    return { label: `${token.slice(-1)} (numpad)`, token: normalized, coded: false };
   if (/^(?:vk[\da-f]{2}(?:sc[\da-f]{3})?|sc[\da-f]{3})$/i.test(token)) {
     return { label: token, token: normalized, coded: true };
   }
@@ -36,17 +36,17 @@ function readKey(token: string): Key | null {
 }
 
 function keyAction(key: Key, release: boolean): string {
-  if (release) return `solte ${key.label}`;
+  if (release) return `release ${key.label}`;
   return Object.hasOwn(text.wheelActions, key.token)
     ? text.wheelActions[key.token]!
-    : `pressione ${key.label}`;
+    : `press ${key.label}`;
 }
 
 function modifierLabel(modifiers: readonly Modifier[]): string[] {
   return modifierOrder.flatMap((kind) =>
     modifiers
       .filter((item) => item.kind === kind)
-      .map((item) => `${text.modifiers[kind]}${item.side ? ` ${text[item.side]}` : ''}`),
+      .map((item) => `${item.side ? `${text[item.side]} ` : ''}${text.modifiers[kind]}`),
   );
 }
 
@@ -80,7 +80,7 @@ export function formatHotkey(input: {
     if (input.declaredGesture) details.push(text.invalidGesture);
     return {
       label: input.chord || text.missing,
-      instruction: input.chord ? `Atalho AHK: ${input.chord}. ${text.unknown}` : text.missing,
+      instruction: input.chord ? `AHK hotkey: ${input.chord}. ${text.unknown}` : text.missing,
       details,
     };
   };
@@ -167,8 +167,8 @@ export function formatHotkey(input: {
     }
     if (input.declaredGesture) details.push(text.invalidGesture);
     return {
-      label: `${held.label} → ${pressed.label}${release ? ' (ao soltar)' : ''}`,
-      instruction: `Mantenha ${held.label} pressionado e ${keyAction(pressed, release)}.`,
+      label: `${held.label} → ${pressed.label}${release ? ' (on release)' : ''}`,
+      instruction: `Hold ${held.label} and ${keyAction(pressed, release)}.`,
       details,
     };
   }
@@ -182,7 +182,7 @@ export function formatHotkey(input: {
     details.push(text.gesture);
     return {
       label: [...modifierLabels, `${text.doubleClick} (${key.label.toLowerCase()})`].join(' + '),
-      instruction: `Clique duas vezes com ${key.label.toLowerCase()}${modifierLabels.length ? ` mantendo ${modifierLabels.join(' + ')} pressionado` : ''}.`,
+      instruction: `Double-click the ${key.label.toLowerCase()}${modifierLabels.length ? ` while holding ${modifierLabels.join(' + ')}` : ''}.`,
       details,
     };
   }
@@ -195,21 +195,21 @@ export function formatHotkey(input: {
     ['ctrl', 'control', 'alt', 'shift'].includes(key.token)
   ) {
     details.push(text.neutralModifier);
-    return { label, instruction: `Pressione e solte ${key.label}.`, details };
+    return { label, instruction: `Press and release ${key.label}.`, details };
   }
   if (Object.hasOwn(text.wheelActions, key.token) && !release) {
     const action = keyAction(key, false);
     return {
       label,
       instruction: modifierLabels.length
-        ? `Mantenha ${modifierLabels.join(' + ')} pressionado e ${action}.`
+        ? `Hold ${modifierLabels.join(' + ')} and ${action}.`
         : `${action[0]!.toUpperCase()}${action.slice(1)}.`,
       details,
     };
   }
   const instruction =
     release && modifierLabels.length
-      ? `Mantenha ${modifierLabels.join(' + ')} pressionado e solte ${key.label}.`
-      : `${release ? 'Solte' : 'Pressione'} ${label}.`;
-  return { label: label + (release ? ' (ao soltar)' : ''), instruction, details };
+      ? `Hold ${modifierLabels.join(' + ')} and release ${key.label}.`
+      : `${release ? 'Release' : 'Press'} ${label}.`;
+  return { label: label + (release ? ' (on release)' : ''), instruction, details };
 }

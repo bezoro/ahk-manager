@@ -4,7 +4,7 @@ import { AddRegular, DocumentRegular, SearchRegular } from '@fluentui/react-icon
 import type { ScriptQuery, ScriptSnapshot } from '../../shared/contracts.js';
 import type { ScriptContext } from '../appTypes.js';
 import type { RowPreference } from '../model.js';
-import { text } from '../resources/pt-BR.js';
+import { text } from '../resources/en-US.js';
 import { ScriptList } from './ScriptList.js';
 
 interface Props {

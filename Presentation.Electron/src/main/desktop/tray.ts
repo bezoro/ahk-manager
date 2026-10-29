@@ -1,6 +1,6 @@
 import { nativeImage, Tray, type MenuItemConstructorOptions } from 'electron';
 import path from 'node:path';
-import { hostText as t } from '../../shared/host-pt-BR.js';
+import { hostText as t } from '../../shared/host-en-US.js';
 import type { StartupContinuationOffer } from '../../shared/contracts.js';
 
 export interface TrayState {

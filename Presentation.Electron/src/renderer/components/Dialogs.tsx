@@ -10,7 +10,7 @@ import {
   Input,
 } from '@fluentui/react-components';
 import type { ImportPreview } from '../../shared/contracts.js';
-import { importedCount, reason, text } from '../resources/pt-BR.js';
+import { importedCount, reason, text } from '../resources/en-US.js';
 import { OperationNotice, type Notice } from './OperationNotice.js';
 type Feedback = { notice: Notice | null; onDismissNotice(): void };
 

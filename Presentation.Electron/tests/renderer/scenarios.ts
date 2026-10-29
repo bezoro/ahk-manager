@@ -5,7 +5,13 @@ import type {
   ScriptSnapshot,
   ThemeState,
 } from '../../src/shared/contracts.js';
-import { operation, outcome, reason, text } from '../../src/renderer/resources/pt-BR.js';
+import {
+  operation,
+  outcome,
+  problemCount,
+  reason,
+  text,
+} from '../../src/renderer/resources/en-US.js';
 import type { UpdateState } from '../../src/shared/updates.js';
 
 declare global {
@@ -77,7 +83,7 @@ function script(id: string, patch: Partial<ScriptSnapshot> = {}): ScriptSnapshot
   return {
     id,
     friendlyName: 'Script ' + id,
-    path: `C:\\FIXTURE ISOLADA\\${id}.ahk`,
+    path: `C:\\ISOLATED FIXTURE\\${id}.ahk`,
     description: '',
     collectionId: '33333333-3333-3333-3333-333333333333',
     runAtLogin: false,
@@ -96,7 +102,7 @@ function state(): HostState {
     revision: '9007199254741001',
     scripts: [
       script('11111111-1111-1111-1111-111111111111', {
-        friendlyName: 'Editor de teste',
+        friendlyName: 'Test editor',
         hotkeys: [
           {
             chord: '^j',
@@ -111,11 +117,11 @@ function state(): HostState {
         ],
       }),
       script('22222222-2222-2222-2222-222222222222', {
-        friendlyName: 'Navegador de teste',
+        friendlyName: 'Test browser',
         collectionId: null,
       }),
     ],
-    collections: [{ id: '33333333-3333-3333-3333-333333333333', name: 'Trabalho de teste' }],
+    collections: [{ id: '33333333-3333-3333-3333-333333333333', name: 'Test work' }],
     settings: {
       interpreterPath: null,
       editorPath: null,
@@ -132,7 +138,7 @@ function state(): HostState {
     issues: [
       {
         code: 'PartialAnalysis',
-        detail: 'FIXTURE ISOLADA — sem scripts, perfis ou efeitos reais.',
+        detail: 'ISOLATED FIXTURE: no real scripts, profiles, or effects.',
         scriptId: null,
       },
     ],
@@ -175,12 +181,10 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     }
   }
   const previousDialog = document.querySelector('[role="dialog"]');
-  if (previousDialog) button('Cancelar', previousDialog).click();
+  if (previousDialog) button('Cancel', previousDialog).click();
   await window.fixtureHarness.resetResponses();
   button('Scripts').click();
-  const oldSearch = document.querySelector<HTMLInputElement>(
-    'input[aria-label="Pesquisar scripts"]',
-  );
+  const oldSearch = document.querySelector<HTMLInputElement>('input[aria-label="Search scripts"]');
   if (oldSearch) edit(oldSearch, '');
   const host = state();
   await window.fixtureHarness.setState(host);
@@ -192,7 +196,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   await check('actual snapshot labels, startup heading and accessible list options', async () => {
     assert(document.querySelector('h1')?.textContent === 'Scripts', 'Page heading');
     assert(
-      document.querySelector('.table-head')?.textContent?.includes('Iniciar com Windows'),
+      document.querySelector('.table-head')?.textContent?.includes('Start with Windows'),
       'Explicit startup heading',
     );
     assert(document.querySelectorAll('tbody tr.script-row').length === 2, 'Real fixture rows');
@@ -214,7 +218,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
             issues: [
               {
                 code: 'PendingOperation',
-                detail: 'Fixture de continuação interrompida.',
+                detail: 'Interrupted continuation fixture.',
                 scriptId: null,
               },
             ],
@@ -223,7 +227,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         await window.fixtureHarness.setState(current);
         await tick();
         if (!empty) {
-          edit(input(text.search), 'nenhum resultado de fixture');
+          edit(input(text.search), 'no fixture results');
           await tick();
         }
         assert(
@@ -318,7 +322,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         value: {
           outcome: 'Failed',
           code: 'StorageFailure',
-          detail: 'Fixture de falha ao salvar.',
+          detail: 'Save failure fixture.',
           correlationId: null,
         },
       });
@@ -380,7 +384,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         value: {
           outcome: 'Partial',
           code: 'ManualElevationRequired',
-          detail: 'Intenção salva; configurar início elevado.',
+          detail: 'Preference saved; configure elevated startup.',
           correlationId: null,
         },
       });
@@ -426,7 +430,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         normalizedChord: chord,
         origin: 'Parsed' as const,
         context: 'fixture context',
-        sourcePath: 'C:\\FIXTURE ISOLADA\\generic.ahk',
+        sourcePath: 'C:\\ISOLATED FIXTURE\\generic.ahk',
         line: index + 1,
         isRemap: false,
         possibleConflict: index === 0,
@@ -561,7 +565,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       details.open = true;
       const name = document.getElementById('draft-name') as HTMLInputElement;
       const hotkeys = document.getElementById('draft-hotkeys') as HTMLTextAreaElement;
-      edit(name, 'Nome em rascunho');
+      edit(name, 'Draft name');
       edit(hotkeys, '^k\n\n');
       name.focus();
       name.setSelectionRange(2, 6);
@@ -573,7 +577,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       });
       await tick();
       assert(document.getElementById('draft-name') === name, 'Input remounted');
-      assert(name.value === 'Nome em rascunho', 'Draft lost');
+      assert(name.value === 'Draft name', 'Draft lost');
       assert(hotkeys.value === '^k\n\n', 'Raw textarea changed');
       assert(
         document.activeElement === name && name.selectionStart === 2 && name.selectionEnd === 6,
@@ -585,7 +589,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       );
       await window.fixtureHarness.setTheme(light);
       await tick();
-      assert(name.value === 'Nome em rascunho', 'Returning light lost draft');
+      assert(name.value === 'Draft name', 'Returning light lost draft');
     },
   );
   await check(
@@ -596,7 +600,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         snapshot: {
           ...host.snapshot!,
           revision: '9007199254741003',
-          collections: [{ id: '44444444-4444-4444-4444-444444444444', name: 'Nova coleção' }],
+          collections: [{ id: '44444444-4444-4444-4444-444444444444', name: 'New collection' }],
         },
       };
       await window.fixtureHarness.setState(changed);
@@ -604,11 +608,11 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       const select = document.getElementById('draft-collection') as HTMLSelectElement;
       assert(select.value === '', 'Removed membership remained selected');
       assert(
-        [...select.options].some((option) => option.textContent === 'Nova coleção'),
+        [...select.options].some((option) => option.textContent === 'New collection'),
         'New collection not reachable',
       );
       assert(
-        (document.getElementById('draft-name') as HTMLInputElement).value === 'Nome em rascunho',
+        (document.getElementById('draft-name') as HTMLInputElement).value === 'Draft name',
         'Unrelated draft reset',
       );
     },
@@ -617,7 +621,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     'search hides action target immediately and recoverable draft remains after restoring filter',
     async () => {
       await window.fixtureHarness.clearCalls();
-      edit(input('Pesquisar scripts'), 'nada encontrado');
+      edit(input('Search scripts'), 'no results');
       await until(
         () => !document.getElementById('script-11111111-1111-1111-1111-111111111111'),
         'Search did not filter',
@@ -629,7 +633,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         'Hidden selection not invalidated',
       );
       assert(!document.getElementById('draft-name'), 'Hidden row still inspected');
-      edit(input('Pesquisar scripts'), '');
+      edit(input('Search scripts'), '');
       await until(
         () => !!document.getElementById('script-11111111-1111-1111-1111-111111111111'),
         'Search did not restore',
@@ -637,7 +641,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       selectScript('11111111-1111-1111-1111-111111111111');
       await tick();
       assert(
-        (document.getElementById('draft-name') as HTMLInputElement).value === 'Nome em rascunho',
+        (document.getElementById('draft-name') as HTMLInputElement).value === 'Draft name',
         'Filtered draft lost',
       );
     },
@@ -659,13 +663,13 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       await tick();
       const panel = document.querySelector('.inspector')!;
       assert(
-        button('Iniciar', panel).disabled &&
-          button('Parar', panel).disabled &&
-          button('Reiniciar', panel).disabled,
+        button('Start', panel).disabled &&
+          button('Stop', panel).disabled &&
+          button('Restart', panel).disabled,
         'Unknown process controls enabled',
       );
       assert(
-        !button('Editar script', panel).disabled && !button('Abrir pasta', panel).disabled,
+        !button('Edit script', panel).disabled && !button('Open folder', panel).disabled,
         'Safe unknown file actions unavailable',
       );
       assert(!!document.getElementById('draft-name'), 'Unknown details inaccessible');
@@ -686,12 +690,12 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       );
       await until(() => !!document.querySelector('.script-context'), 'Context menu absent');
       const menu = document.querySelector('.script-context')!;
-      assert(button('Iniciar', menu).disabled, 'Context Start enabled');
+      assert(button('Start', menu).disabled, 'Context Start enabled');
       assert(
-        button('Iniciar', document.querySelector('.inspector')!).disabled,
+        button('Start', document.querySelector('.inspector')!).disabled,
         'Inspector Start enabled',
       );
-      assert(!button('Editar script', menu).disabled, 'Safe context Edit disabled');
+      assert(!button('Edit script', menu).disabled, 'Safe context Edit disabled');
       assert(
         !(await window.fixtureHarness.calls()).some((call) => call.method === 'operate'),
         'Merely opening menu dispatched',
@@ -708,12 +712,12 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     await tick();
     assert(
       document
-        .getElementById('script-22222222-2222-2222-2222-222222222222')
+        .getElementById('script-11111111-1111-1111-1111-111111111111')
         ?.getAttribute('aria-selected') === 'true',
       'End did not select last row',
     );
     assert(
-      list.getAttribute('aria-activedescendant') === 'script-22222222-2222-2222-2222-222222222222',
+      list.getAttribute('aria-activedescendant') === 'script-11111111-1111-1111-1111-111111111111',
       'Active descendant stale',
     );
   });
@@ -721,12 +725,12 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     'preferences use true system option and preserve draft until explicit save',
     async () => {
       await window.fixtureHarness.clearCalls();
-      button('Preferências').click();
+      button('Preferences').click();
       await until(() => !!document.getElementById('settings-theme'), 'Preferences missing');
       const theme = document.getElementById('settings-theme') as HTMLSelectElement;
       assert(
         [...theme.options].some(
-          (option) => option.value === 'System' && option.text === 'Seguir o sistema',
+          (option) => option.value === 'System' && option.text === 'Use system setting',
         ),
         'Automatic system option absent',
       );
@@ -737,7 +741,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         !(await window.fixtureHarness.calls()).some((call) => call.method === 'saveSettings'),
         'Draft applied without save',
       );
-      button('Cancelar', document.querySelector('[role="dialog"]')!).click();
+      button('Cancel', document.querySelector('[role="dialog"]')!).click();
       await tick();
     },
   );
@@ -757,25 +761,23 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
             operation: 'Start',
             outcome: 'Confirmed',
             code: 'None',
-            detail: 'FIXTURE ISOLADA',
+            detail: 'ISOLATED FIXTURE',
           })),
         },
       });
-      button('Atividade').click();
+      button('Activity').click();
       await until(
         () => document.querySelectorAll('.activity-list article').length === 2,
         'Activity fixture records missing',
       );
-      edit(input('Pesquisar'), 'Navegador de teste');
+      edit(input('Search'), 'Test browser');
       await tick();
       assert(
         document.querySelectorAll('.activity-list article').length === 1,
         'Friendly-name activity filter failed',
       );
       assert(
-        document
-          .querySelector('.activity-list article')
-          ?.textContent?.includes('Navegador de teste'),
+        document.querySelector('.activity-list article')?.textContent?.includes('Test browser'),
         'Script association missing',
       );
       button('Scripts').click();
@@ -786,22 +788,22 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     'loaded-library help explains first-use migration without dispatching an unavailable operation',
     async () => {
       await window.fixtureHarness.clearCalls();
-      button('Ajuda').click();
+      button('Help').click();
       await until(() => !!document.querySelector('[role="dialog"]'), 'Help missing');
       const dialog = document.querySelector('[role="dialog"]')!;
       assert(
-        button('Migrar perfil WinUI…', dialog).disabled,
+        button('Migrate WinUI profile…', dialog).disabled,
         'Loaded catalog advertised available migration',
       );
       assert(
-        dialog.textContent?.includes('somente na primeira abertura, antes de carregar o catálogo'),
+        dialog.textContent?.includes('only on first launch, before loading the catalog'),
         'First-use restriction not explained',
       );
       assert(
         !(await window.fixtureHarness.calls()).some((call) => call.method === 'migrateProfile'),
         'Help dispatched migration',
       );
-      button('Fechar', dialog).click();
+      button('Close', dialog).click();
       await tick();
     },
   );
@@ -816,8 +818,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       await tick();
       const footer = document.querySelector<HTMLElement>('.status-footer')!;
       assert(
-        footer.textContent?.includes('3 problemas informados') &&
-          footer.textContent.includes('Solicitação em andamento'),
+        footer.textContent?.includes(problemCount(3)) && footer.textContent.includes(text.pending),
         'Real problem/busy summary missing',
       );
       assert(footer.getAttribute('aria-live') === 'polite', 'Footer status inaccessible');
@@ -827,7 +828,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         snapshot: { ...host.snapshot!, problemCount: 3 },
       });
       await tick();
-      assert(footer.textContent?.includes('Biblioteca indisponível'), 'Connection failure hidden');
+      assert(footer.textContent?.includes('Library unavailable'), 'Connection failure hidden');
       assert(footer.scrollWidth <= footer.clientWidth, 'Footer horizontal overflow');
       await window.fixtureHarness.setState(host);
       await tick();
@@ -1248,7 +1249,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       grid.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
       await tick();
       assert(
-        grid.getAttribute('aria-activedescendant') === 'script-' + host.snapshot!.scripts[1]!.id,
+        grid.getAttribute('aria-activedescendant') === 'script-' + host.snapshot!.scripts[0]!.id,
         'Keyboard selection lost',
       );
       assert(
@@ -1277,9 +1278,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     'semantic preference table preserves null, selection and native checkbox keyboard focus',
     async () => {
       button(text.scripts).click();
-      const search = document.querySelector<HTMLInputElement>(
-        'input[aria-label="Pesquisar scripts"]',
-      );
+      const search = document.querySelector<HTMLInputElement>('input[aria-label="Search scripts"]');
       if (search) edit(search, '');
       await window.fixtureHarness.resetResponses();
       await window.fixtureHarness.setState({
@@ -1346,7 +1345,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       await tick();
       const metadata = document.querySelector<HTMLDetailsElement>('.metadata-expander')!;
       metadata.open = true;
-      edit(document.getElementById('draft-name') as HTMLInputElement, 'Rascunho de outra linha');
+      edit(document.getElementById('draft-name') as HTMLInputElement, 'Draft for another row');
       await tick();
       await window.fixtureHarness.setResponse('saveMetadata', { pending: true });
       await window.fixtureHarness.clearCalls();
@@ -1394,7 +1393,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       );
       assert(
         String((document.getElementById('draft-name') as HTMLInputElement).value) ===
-          'Rascunho de outra linha',
+          'Draft for another row',
         'Other row dirty draft lost',
       );
       assert(
@@ -1523,7 +1522,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         selectScript(host.snapshot!.scripts[0]!.id);
         await tick();
         (document.querySelector('.metadata-expander') as HTMLDetailsElement).open = true;
-        edit(document.getElementById('draft-name') as HTMLInputElement, 'Rascunho ' + result);
+        edit(document.getElementById('draft-name') as HTMLInputElement, 'Draft ' + result);
         await tick();
         await window.fixtureHarness.clearCalls();
         await window.fixtureHarness.setResponse('saveMetadata', { pending: true });
@@ -1567,7 +1566,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         assert(
           checkbox.checked === (result === 'Partial' || result === 'Unknown') &&
             String((document.getElementById('draft-name') as HTMLInputElement).value) ===
-              'Rascunho ' + result,
+              'Draft ' + result,
           'Outcome lost authoritative value or manual intent',
         );
         if (result === 'Partial' || result === 'Unknown')
@@ -1717,7 +1716,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         (panel.querySelector('.metadata-expander') as HTMLDetailsElement).open = true;
         edit(
           document.getElementById('draft-name') as HTMLInputElement,
-          'Preservar nome após exceção',
+          'Keep name after exception',
         );
         await tick();
         await window.fixtureHarness.clearCalls();
@@ -1749,7 +1748,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
           checkbox.checked &&
             draft.checked &&
             String((document.getElementById('draft-name') as HTMLInputElement).value) ===
-              'Preservar nome após exceção' &&
+              'Keep name after exception' &&
             !button(text.save, panel).disabled,
           'Persisted exception lost row choice or unrelated draft',
         );
@@ -1845,7 +1844,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       );
       edit(
         document.getElementById('draft-name') as HTMLInputElement,
-        'Rascunho preservado para elevação',
+        'Draft preserved before elevation',
       );
       await tick();
       assert(
@@ -1941,12 +1940,10 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     'root header is escaped multiline primary text; refresh/removal preserve editable manual fallback draft',
     async () => {
       button(text.scripts).click();
-      const search = document.querySelector<HTMLInputElement>(
-        'input[aria-label="Pesquisar scripts"]',
-      );
+      const search = document.querySelector<HTMLInputElement>('input[aria-label="Search scripts"]');
       if (search) edit(search, '');
       const header =
-        '<script>literal sem executar</script>\nSegunda linha — ' + 'palavra'.repeat(110);
+        '<script>literal without execution</script>\nSecond line: ' + 'word'.repeat(110);
       const withHeader: HostState = {
         ...host,
         snapshot: {
@@ -1954,7 +1951,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
           scripts: [
             {
               ...host.snapshot!.scripts[0]!,
-              description: 'Manual persistida',
+              description: 'Saved manual description',
               headerDescription: header,
             },
             host.snapshot!.scripts[1]!,
@@ -1978,14 +1975,17 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       const metadata = panel.querySelector<HTMLDetailsElement>('.metadata-expander')!;
       metadata.open = true;
       const manual = document.getElementById('draft-description') as HTMLTextAreaElement;
-      assert(String(manual.value) === 'Manual persistida', 'Header overwrote manual metadata');
+      assert(
+        String(manual.value) === 'Saved manual description',
+        'Header overwrote manual metadata',
+      );
       assert(
         panel.querySelector('.script-description')?.children.length === 1 &&
           !panel.querySelector('.description-guidance') &&
           !panel.querySelector('.script-description h3'),
         'Present header must show only its description',
       );
-      edit(manual, 'Manual em edição');
+      edit(manual, 'Manual description being edited');
       await tick();
       await window.fixtureHarness.clearCalls();
       for (const dark of [false, true]) {
@@ -2013,15 +2013,15 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
           ...withHeader.snapshot!,
           revision: '9007199254741800',
           scripts: [
-            { ...withHeader.snapshot!.scripts[0]!, headerDescription: 'Cabeçalho atualizado' },
+            { ...withHeader.snapshot!.scripts[0]!, headerDescription: 'Updated header' },
             withHeader.snapshot!.scripts[1]!,
           ],
         },
       });
       await tick();
       assert(
-        manual.value === 'Manual em edição' &&
-          panel.querySelector('.description')?.textContent === 'Cabeçalho atualizado',
+        manual.value === 'Manual description being edited' &&
+          panel.querySelector('.description')?.textContent === 'Updated header',
         'External header refresh replaced dirty manual draft',
       );
       await window.fixtureHarness.setState({
@@ -2036,8 +2036,8 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       });
       await tick();
       assert(
-        panel.querySelector('.description')?.textContent === 'Manual persistida' &&
-          manual.value === 'Manual em edição',
+        panel.querySelector('.description')?.textContent === 'Saved manual description' &&
+          manual.value === 'Manual description being edited',
         'Header removal did not restore snapshot manual fallback independently',
       );
       assert(
@@ -2069,7 +2069,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
           panel
             .querySelector('.description-guidance')
             ?.textContent?.includes(text.descriptionRefreshHint) &&
-          manual.value === 'Manual em edição',
+          manual.value === 'Manual description being edited',
         'Completely empty description must show guidance alone without replacing draft',
       );
       assert(
@@ -2091,7 +2091,7 @@ export async function previewDescription(): Promise<AssertionRecord[]> {
   const host = state();
   host.snapshot!.scripts[0] = {
     ...host.snapshot!.scripts[0]!,
-    description: 'Descrição manual preservada.',
+    description: 'Manual description preserved.',
     headerDescription: null,
   };
   await window.fixtureHarness.setState(host);
@@ -2100,7 +2100,7 @@ export async function previewDescription(): Promise<AssertionRecord[]> {
   await tick();
   const panel = document.querySelector('.inspector')!;
   assert(
-    panel.querySelector('.description')?.textContent === 'Descrição manual preservada.' &&
+    panel.querySelector('.description')?.textContent === 'Manual description preserved.' &&
       panel.querySelector('.description-guidance pre')?.textContent ===
         text.descriptionHeaderExample,
     'Absent-header preview did not preserve manual/guidance',
@@ -2118,9 +2118,9 @@ export async function previewHotkeys(missing = false): Promise<AssertionRecord[]
   const host = state();
   host.snapshot!.scripts[0] = {
     ...host.snapshot!.scripts[0]!,
-    friendlyName: 'Atalhos de exemplo',
-    path: 'C:\\FIXTURE ISOLADA\\Caminho longo para testar a quebra de texto\\Projeto de exemplo\\arquivo de teste.ahk',
-    description: 'Fixture sintética. Nenhum script real é executado.',
+    friendlyName: 'Example hotkeys',
+    path: 'C:\\ISOLATED FIXTURE\\Long path for testing text wrapping\\Example project\\test file.ahk',
+    description: 'Synthetic fixture. No real script is executed.',
     status: missing ? 'Missing' : 'Stopped',
     issues: missing ? [{ code: 'MissingFile', detail: null, scriptId: null }] : [],
     hotkeys: [
@@ -2128,7 +2128,7 @@ export async function previewHotkeys(missing = false): Promise<AssertionRecord[]
         chord: '!^#+u',
         normalizedChord: '!^#+u',
         origin: 'Parsed',
-        context: 'Contexto de exemplo',
+        context: 'Example context',
         sourcePath: null,
         line: 1,
         isRemap: false,
@@ -2273,7 +2273,7 @@ export async function runDeleteSelectionScopes(): Promise<AssertionRecord[]> {
       await window.fixtureHarness.resetResponses();
       await window.fixtureHarness.setState(host);
       await tick();
-      edit(input('Pesquisar scripts'), '');
+      edit(input('Search scripts'), '');
       filter(scope);
       await tick();
       selectScript(host.snapshot!.scripts[0]!.id);
@@ -2324,7 +2324,7 @@ export async function runDeleteSelectionScopes(): Promise<AssertionRecord[]> {
       );
       await window.fixtureHarness.clearCalls();
       if (scope === 'Running') {
-        edit(input('Pesquisar scripts'), 'no matching scope');
+        edit(input('Search scripts'), 'no matching scope');
         await tick();
         assert(
           (await window.fixtureHarness.calls()).some(
@@ -2349,7 +2349,7 @@ export async function runDeleteSelectionScopes(): Promise<AssertionRecord[]> {
         value: {
           outcome: 'Partial',
           code: 'Cancelled',
-          detail: 'Execução encerrada.',
+          detail: 'Execution ended.',
           correlationId: null,
         },
       });
@@ -2388,7 +2388,7 @@ export async function runDeleteSelectionScopes(): Promise<AssertionRecord[]> {
       await window.fixtureHarness.setState(host);
       await tick();
       filter('All');
-      edit(input('Pesquisar scripts'), '');
+      edit(input('Search scripts'), '');
       await tick();
     }
   }
@@ -2422,7 +2422,7 @@ export async function runStartInTrayScenario(): Promise<AssertionRecord[]> {
     assert(!tray().checked, 'Tray startup default changed');
     assert(
       document.querySelector('label[for="settings-start-in-tray"]')?.textContent ===
-        'Iniciar na bandeja',
+        'Start in tray',
       'Checkbox label differs',
     );
     tray().click();
@@ -2541,15 +2541,13 @@ function updateFixture(): UpdateState {
     availableVersion: '1.2.2',
     lastCheckedAt: '2026-10-28T11:30:00Z',
     error: null,
-    accessConfigured: false,
     progress: null,
     releases: [
       {
         id: 'fixture-new-122',
         version: '1.2.2',
         publishedAt: '2026-10-28T10:00:00Z',
-        notes:
-          'Melhora o início dos scripts e a organização das preferências.\nNotas de exemplo da fixture.',
+        notes: 'Improves script startup and preference organization.\nExample fixture notes.',
         commit: 'a'.repeat(40),
         installed: false,
         canInstall: true,
@@ -2559,7 +2557,7 @@ function updateFixture(): UpdateState {
         id: 'fixture-installed-121',
         version: '1.2.1',
         publishedAt: '2026-10-25T10:00:00Z',
-        notes: 'Versão instalada nesta fixture.',
+        notes: 'Installed version in this fixture.',
         commit: 'b'.repeat(40),
         installed: true,
         canInstall: false,
@@ -2569,7 +2567,7 @@ function updateFixture(): UpdateState {
         id: 'fixture-cached-120',
         version: '1.2.0',
         publishedAt: '2026-10-19T10:00:00Z',
-        notes: 'Versão anterior disponível neste computador. <img src=x onerror=alert(1)>',
+        notes: 'Earlier version available on this computer. <img src=x onerror=alert(1)>',
         commit: 'c'.repeat(40),
         installed: false,
         canInstall: true,
@@ -2592,7 +2590,7 @@ function testUpdateFixture(): UpdateState {
         id: 'fixture-test-130',
         version,
         notes:
-          'Prévia da organização do aplicativo e dos canais de atualização. Disponível para avaliação antes do lançamento estável.',
+          'Preview of application organization and update channels. Available to evaluate before the stable release.',
       },
       ...updates.releases,
     ],
@@ -2795,7 +2793,7 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
         value: {
           ...updates,
           phase: 'error',
-          error: 'Sem conexão. As versões locais foram preservadas.',
+          error: 'Offline. Local versions were preserved.',
         },
       });
       button(text.updateCheck).click();
@@ -2803,7 +2801,7 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
       await tick();
       assert(
         document.querySelectorAll('.update-release').length === 3 &&
-          document.querySelector('.update-feedback')?.textContent?.includes('preservadas'),
+          document.querySelector('.update-feedback')?.textContent?.includes('preserved'),
         'Check error discarded history',
       );
     },
@@ -2814,7 +2812,7 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
       await window.fixtureHarness.setState({
         snapshot: null,
         connection: 'failed',
-        error: 'Fixture de falha da biblioteca.',
+        error: 'Library failure fixture.',
         busy: false,
         authorityMode: null,
         administrationPending: false,
@@ -2823,7 +2821,7 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
         ...updates,
         availableVersion: null,
         phase: 'error',
-        error: 'Sem conexão com o GitHub.',
+        error: 'No connection to GitHub.',
         releases: updates.releases.filter((release) => release.cached),
       });
       await tick();
@@ -2860,7 +2858,7 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
         document.querySelector('.updates-availability')?.textContent === text.updateLatestUnknown,
         'Failed check falsely reports the installed version as latest',
       );
-      const checked = new Date(updates.lastCheckedAt!).toLocaleString('pt-BR', {
+      const checked = new Date(updates.lastCheckedAt!).toLocaleString('en-US', {
         dateStyle: 'short',
         timeStyle: 'short',
       });
@@ -2888,7 +2886,7 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
       selectScript(host.snapshot!.scripts[0]!.id);
       await tick();
       const field = document.getElementById('draft-name') as HTMLInputElement;
-      edit(field, 'Rascunho preservado antes de atualizar');
+      edit(field, 'Draft preserved before updating');
       await tick();
       button(text.updates).click();
       await tick();
@@ -2908,7 +2906,7 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
       await tick();
       assert(
         (document.getElementById('draft-name') as HTMLInputElement).value ===
-          'Rascunho preservado antes de atualizar',
+          'Draft preserved before updating',
         'Update navigation discarded draft',
       );
       button(text.discard, document.querySelector('.inspector')!).click();
@@ -2923,69 +2921,22 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
       await tick();
     },
   );
-  await check(
-    'GitHub token is masked, cleared before save resolves, never echoed and removable',
-    async () => {
-      await window.fixtureHarness.setState(host);
-      await window.fixtureHarness.setUpdates(updates);
-      await tick();
-      button(text.updates).click();
-      await tick();
-      const access = document.querySelector<HTMLDetailsElement>('.update-access')!;
-      access.open = true;
-      const field = document.getElementById('update-token') as HTMLInputElement;
-      const fixtureCredential = 'fixture-only-token-never-a-real-secret';
-      assert(
-        field.type === 'password' && !field.value,
-        'Credential field is unmasked or prepopulated',
-      );
-      assert(
-        access.textContent?.includes('repositório público funcionam sem token') &&
-          access.textContent?.includes('é opcional') &&
-          document.querySelector('.update-access-state')?.textContent === text.updateAccessMissing,
-        'Public updates incorrectly require authentication',
-      );
-      edit(field, fixtureCredential);
-      await tick();
-      await window.fixtureHarness.clearCalls();
-      await window.fixtureHarness.setResponse('setUpdateToken', { pending: true });
-      outstanding.add('setUpdateToken');
-      button(text.updateSaveAccess).click();
-      await untilCall('setUpdateToken');
-      await tick();
-      assert(
-        !field.value && !document.body.textContent?.includes(fixtureCredential),
-        'Saved credential stayed in the rendered page',
-      );
-      assert(
-        (await window.fixtureHarness.calls()).find((call) => call.method === 'setUpdateToken')
-          ?.args[0] === '[redacted]',
-        'Fixture log retained credential',
-      );
-      await window.fixtureHarness.resolveResponse('setUpdateToken', {
-        value: { ...updates, accessConfigured: true },
-      });
-      outstanding.delete('setUpdateToken');
-      await tick();
-      assert(
-        !button(text.updateRemoveAccess).disabled &&
-          document.querySelector('.update-access-state')?.textContent ===
-            text.updateAccessConfigured,
-        'Configured access not reflected',
-      );
-      await window.fixtureHarness.setResponse('setUpdateToken', { value: updates });
-      button(text.updateRemoveAccess).click();
-      await tick();
-      const last = (await window.fixtureHarness.calls())
-        .filter((call) => call.method === 'setUpdateToken')
-        .at(-1);
-      assert(
-        last?.args[0] === null &&
-          document.querySelector('.update-access-state')?.textContent === text.updateAccessMissing,
-        'Remove access did not send null',
-      );
-    },
-  );
+  await check('public updates expose no credential entry or token configuration', async () => {
+    await window.fixtureHarness.setState(host);
+    await window.fixtureHarness.setUpdates(updates);
+    await tick();
+    button(text.updates).click();
+    await tick();
+    assert(
+      !document.querySelector('.update-access, #update-token'),
+      'Credential controls remain visible',
+    );
+    assert(document.documentElement.lang === 'en-US', 'Application language is not English');
+    assert(
+      button('Check now') && document.querySelector('h1')?.textContent === 'Updates',
+      'English update controls are missing',
+    );
+  });
   await window.fixtureHarness.setUpdates({ ...updates, availableVersion: null, releases: [] });
   await tick();
   return results;
@@ -3002,14 +2953,12 @@ export async function previewUpdates(
   const cachedIndex = updates.releases.findIndex((release) => release.id === 'fixture-cached-120');
   updates.releases[cachedIndex] = {
     ...updates.releases[cachedIndex]!,
-    notes:
-      'Correções de estabilidade e recuperação de arquivos. Esta versão foi preservada neste computador.',
+    notes: 'Stability and file recovery fixes. This version is preserved on this computer.',
   };
   if (recovery) {
     updates.availableVersion = null;
     updates.phase = 'error';
-    updates.error =
-      'Não foi possível verificar versões online. As versões locais continuam disponíveis.';
+    updates.error = 'Online versions could not be checked. Local versions remain available.';
     updates.releases = [
       updates.releases[2]!,
       updates.releases[1]!,
@@ -3022,7 +2971,7 @@ export async function previewUpdates(
       ? {
           snapshot: null,
           connection: 'failed',
-          error: 'Fixture de recuperação.',
+          error: 'Recovery fixture.',
           busy: false,
           authorityMode: null,
           administrationPending: false,

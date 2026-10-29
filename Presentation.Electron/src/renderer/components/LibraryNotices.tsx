@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Button } from '@fluentui/react-components';
 import type { HostState } from '../../shared/contracts.js';
-import { reason, text } from '../resources/pt-BR.js';
+import { reason, text } from '../resources/en-US.js';
 
 interface Props {
   host: HostState;

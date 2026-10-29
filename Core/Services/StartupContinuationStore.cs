@@ -120,7 +120,7 @@ internal sealed class StartupContinuationStore(string root)
 
     static InvalidDataException InvalidRecord(string path, Exception? inner = null) =>
         new(
-            $"Não foi possível validar o registro de continuação em {path}. O arquivo foi preservado. Use Recuperar pendências para conferir os processos e preservar o registro inválido em quarentena, sem repetir execuções.",
+            $"The startup continuation record at {path} could not be validated. The file was preserved. Use Check pending results to check processes and quarantine the invalid record without replaying launches.",
             inner
         );
 

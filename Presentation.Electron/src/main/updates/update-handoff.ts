@@ -10,7 +10,7 @@ export interface PreparedUpdate {
   cancel(): Promise<void>;
 }
 const incomplete =
-  'Uma atualização anterior ainda não foi confirmada. Os registros e as cópias foram preservados. Aguarde a conclusão antes de tentar novamente.';
+  'A previous update is still unconfirmed. Its records and backups have been preserved. Wait for it to finish before trying again.';
 
 /** A completed backend shutdown publishes one immutable authorization, before the parent exits. */
 export function preparedUpdateControl(
@@ -22,14 +22,14 @@ export function preparedUpdateControl(
     !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(operationId) ||
     !Number.isFinite(Date.parse(parentStartedAtUtc))
   )
-    throw new Error('Identidade da atualização inválida.');
+    throw new Error('The update identity is invalid.');
   const directory = path.join(store.root, 'operations', operationId);
   return {
     async commit(): Promise<void> {
       await store.safeDirectory(directory);
       try {
         await fs.lstat(path.join(directory, 'cancel.json'));
-        throw new Error('A preparação da atualização foi cancelada.');
+        throw new Error('Update preparation was cancelled.');
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
@@ -98,7 +98,7 @@ export async function updateRecoveryStatus(store: UpdateStore): Promise<string |
         latest = completed;
         notice =
           data.outcome === 'RolledBack'
-            ? 'Uma atualização anterior falhou e a instalação anterior foi restaurada. Seu histórico continua disponível.'
+            ? 'A previous update failed and the previous installation was restored. Your version history is still available.'
             : null;
       }
     } catch (error) {
@@ -133,7 +133,7 @@ export async function prepareUpdate(
     !path.isAbsolute(installDirectory) ||
     !Number.isFinite(Date.parse(parentStartedAtUtc))
   )
-    throw new Error('Não foi possível identificar a sessão para atualizar.');
+    throw new Error('The session could not be identified for this update.');
   const recovery = await updateRecoveryStatus(store);
   if (recovery === incomplete) throw new Error(recovery);
   await store.verify(target);
@@ -144,14 +144,13 @@ export async function prepareUpdate(
   await store.safeDirectory(hostDirectory, true);
   const host = path.join(hostDirectory, 'AhkManager.UpdateHost.exe');
   try {
-    if ((await store.hash(host)) !== hash)
-      throw new Error('O aplicador de atualizações foi alterado.');
+    if ((await store.hash(host)) !== hash) throw new Error('The update helper has changed.');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     await fs.copyFile(source, host, 1);
   }
   if ((await store.hash(host)) !== hash)
-    throw new Error('Não foi possível verificar o aplicador de atualizações.');
+    throw new Error('The update helper could not be verified.');
   const directory = path.join(store.root, 'operations', operationId);
   await store.safeDirectory(path.dirname(directory), true);
   await fs.mkdir(directory, { mode: 0o700 });
@@ -183,7 +182,9 @@ export async function prepareUpdate(
     const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
       if (child.exitCode !== null || child.signalCode !== null)
-        throw new Error('O aplicador recusou a atualização. A instalação foi preservada.');
+        throw new Error(
+          'The update helper rejected the update. The installation has been preserved.',
+        );
       try {
         const readyPath = path.join(directory, 'ready.json');
         await store.regular(readyPath, 4096);
@@ -194,7 +195,7 @@ export async function prepareUpdate(
           ready.parentPid !== process.pid ||
           Date.parse(String(ready.parentStartedAtUtc)) !== Date.parse(parentStartedAtUtc)
         )
-          throw new Error('A confirmação do aplicador não corresponde a esta sessão.');
+          throw new Error('The update helper confirmation does not match this session.');
         child.unref();
         return control;
       } catch (error) {
@@ -203,7 +204,7 @@ export async function prepareUpdate(
       await delay(100);
     }
     throw new Error(
-      'O aplicador não confirmou a preparação no prazo. A instalação foi preservada.',
+      'The update helper did not confirm preparation in time. The installation has been preserved.',
     );
   } catch (error) {
     try {

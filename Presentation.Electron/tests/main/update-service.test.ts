@@ -54,9 +54,7 @@ const metadata = (version = '1.2.0'): RemoteUpdateRelease => ({
 class Store implements UpdateStorePort {
   items: CachedInstaller[] = [];
   corrupt = new Set<string>();
-  saved: Array<string | null> = [];
   cachedSources: string[] = [];
-  token: string | null = null;
   channel: UpdateChannel = 'stable';
   channelSaveGate: Promise<void> | null = null;
   savedChannels: UpdateChannel[] = [];
@@ -68,15 +66,12 @@ class Store implements UpdateStorePort {
     if (this.channelSaveGate) await this.channelSaveGate;
     this.channel = channel;
   }
-  saveGate: Promise<void> | null = null;
   cacheError: Error | null = null;
-  async readToken(): Promise<string | null> {
-    return this.token;
-  }
-  async saveToken(value: string | null): Promise<void> {
-    this.saved.push(value);
-    if (this.saveGate) await this.saveGate;
-    this.token = value;
+  cleanupCalls = 0;
+  cleanupError: Error | null = null;
+  async removeLegacyAccess(): Promise<void> {
+    this.cleanupCalls++;
+    if (this.cleanupError) throw this.cleanupError;
   }
   async cached(): Promise<CachedInstaller[]> {
     return structuredClone(this.items);
@@ -102,23 +97,17 @@ class Store implements UpdateStorePort {
 function fixture(version = '1.2.2') {
   const store = new Store();
   const notifications: UpdateState[] = [];
-  const queriedTokens: Array<string | null> = [];
   const queriedChannels: UpdateChannel[] = [];
-  const resolved: Array<{ id: string; token: string | null }> = [];
+  const resolved: Array<{ id: string }> = [];
   const downloaded: RemoteUpdateRelease[] = [];
   const applied: Array<{ operationId: string; target: CachedInstaller }> = [];
   const preflights: Array<{ operationId: string; phase: 'begin' | 'commit' }> = [];
   const confirmed: string[] = [];
   const hooks = {
-    releases: async (
-      _token: string | null,
-      _channel: UpdateChannel,
-    ): Promise<RemoteUpdateRelease[]> => [release()],
-    resolve: async (_id: string, _token: string | null): Promise<RemoteUpdateRelease> =>
-      release('1.2.0'),
+    releases: async (_channel: UpdateChannel): Promise<RemoteUpdateRelease[]> => [release()],
+    resolve: async (_id: string): Promise<RemoteUpdateRelease> => release('1.2.0'),
     download: async (
       _item: RemoteUpdateRelease,
-      _token: string | null,
       progress: (value: number) => void,
     ): Promise<string> => {
       progress(60);
@@ -131,18 +120,17 @@ function fixture(version = '1.2.2') {
   const boundary: UpdateBoundary = {
     version,
     store,
-    releases: async (token, channel) => {
-      queriedTokens.push(token);
+    releases: async (channel) => {
       queriedChannels.push(channel);
-      return hooks.releases(token, channel);
+      return hooks.releases(channel);
     },
-    resolve: async (id, token) => {
-      resolved.push({ id, token });
-      return hooks.resolve(id, token);
+    resolve: async (id) => {
+      resolved.push({ id });
+      return hooks.resolve(id);
     },
-    download: async (item, token, progress) => {
+    download: async (item, progress) => {
       downloaded.push(item);
-      return hooks.download(item, token, progress);
+      return hooks.download(item, progress);
     },
     preflight: async (operationId, phase) => {
       preflights.push({ operationId, phase });
@@ -166,7 +154,6 @@ function fixture(version = '1.2.2') {
     store,
     hooks,
     notifications,
-    queriedTokens,
     queriedChannels,
     resolved,
     downloaded,
@@ -204,7 +191,7 @@ test('begin preflight refuses a dirty or busy host before confirmation, download
   f.hooks.preflight = async () => false;
   const state = await f.service.install(release().id);
   assert.equal(state.phase, 'error');
-  assert.match(state.error!, /Salve ou descarte/);
+  assert.match(state.error!, /Save or discard/);
   assert.deepEqual(
     f.preflights.map((item) => item.phase),
     ['begin'],
@@ -237,7 +224,7 @@ test('duplicate install and background check cannot enter while begin preflight 
   await f.service.install(release().id);
   await f.service.check();
   assert.equal(f.preflights.length, 1);
-  assert.equal(f.queriedTokens.length, 1);
+  assert.equal(f.queriedChannels.length, 1);
   assert.deepEqual(f.downloaded, []);
   gate.resolve(false);
   await first;
@@ -245,7 +232,7 @@ test('duplicate install and background check cannot enter while begin preflight 
   assert.equal(f.applied.length, 0);
 });
 
-test('an active update check suppresses duplicate checks, token mutations and installation effects', async () => {
+test('an active update check suppresses duplicate checks, channel changes and installation effects', async () => {
   const f = fixture();
   f.store.items = [cached('1.2.0')];
   await f.service.initialize();
@@ -256,47 +243,13 @@ test('an active update check suppresses duplicate checks, token mutations and in
   await Promise.resolve();
   assert.equal(f.service.snapshot.phase, 'checking');
   await f.service.check();
-  await f.service.setToken('ghp_fixture_token_not_a_real_credential');
+  await f.service.setChannel('test');
   await f.service.install('local:1.2.0');
-  assert.equal(f.queriedTokens.length, 1);
-  assert.deepEqual(f.store.saved, []);
+  assert.equal(f.queriedChannels.length, 1);
   assert.equal(f.applied.length, 0);
   gate.resolve([release()]);
   await first;
   assert.equal(f.service.snapshot.phase, 'idle');
-});
-
-test('credential storage is serialized before its first await and queries only the stored fake token', async () => {
-  const f = fixture();
-  const gate = deferred<void>();
-  f.store.saveGate = gate.promise;
-  const first = f.service.setToken('ghp_fixture_first_not_a_real_credential');
-  assert.equal(f.service.busy, true);
-  await f.service.setToken('ghp_fixture_second_not_a_real_credential');
-  await f.service.check();
-  assert.deepEqual(f.store.saved, ['ghp_fixture_first_not_a_real_credential']);
-  assert.deepEqual(f.queriedTokens, []);
-  gate.resolve(undefined);
-  await first;
-  assert.deepEqual(f.queriedTokens, ['ghp_fixture_first_not_a_real_credential']);
-  assert.equal(JSON.stringify(f.service.snapshot).includes('ghp_fixture_'), false);
-});
-
-test('credential persistence failure releases the operation and does not query with an unsaved token', async () => {
-  const f = fixture();
-  const gate = deferred<void>();
-  f.store.saveGate = gate.promise;
-  const attempt = f.service.setToken('ghp_fixture_unsaved_not_a_real_credential');
-  gate.reject(new Error('Fixture encrypted persistence failed.'));
-  const failed = await attempt;
-  assert.equal(failed.phase, 'error');
-  assert.equal(failed.accessConfigured, false);
-  assert.equal(f.service.busy, false);
-  assert.deepEqual(f.queriedTokens, []);
-  assert.doesNotMatch(JSON.stringify(failed), /ghp_fixture_unsaved/);
-  f.store.saveGate = null;
-  await f.service.setToken('ghp_fixture_retry_not_a_real_credential');
-  assert.deepEqual(f.queriedTokens, ['ghp_fixture_retry_not_a_real_credential']);
 });
 
 test('commit preflight refusal preserves the verified download and a later explicit retry reuses it', async () => {
@@ -306,7 +259,7 @@ test('commit preflight refusal preserves the verified download and a later expli
   const refused = await f.service.install(release().id);
   assert.equal(refused.phase, 'error');
   assert.equal(refused.progress, null);
-  assert.match(refused.error!, /preservado/);
+  assert.match(refused.error!, /preserved/);
   assert.equal(f.store.items.length, 1);
   assert.equal(f.downloaded.length, 1);
   assert.equal(f.applied.length, 0);
@@ -419,7 +372,7 @@ test('apply uses one operation after final verification and rejects concurrent i
   await f.service.install(release().id);
   await f.service.check();
   assert.equal(f.applied.length, 1);
-  assert.equal(f.queriedTokens.length, 1);
+  assert.equal(f.queriedChannels.length, 1);
   assert.equal(
     f.applied[0]!.operationId,
     f.preflights.find((item) => item.phase === 'commit')!.operationId,
@@ -449,7 +402,7 @@ test('unavailable history identity cannot download or install a different releas
   await f.service.check();
   const state = await f.service.install('github:removed-or-forged');
   assert.equal(state.phase, 'error');
-  assert.match(state.error!, /não está mais disponível/);
+  assert.match(state.error!, /no longer available/);
   assert.deepEqual(f.preflights, []);
   assert.deepEqual(f.downloaded, []);
   assert.equal(f.applied.length, 0);
@@ -464,8 +417,7 @@ test('public history checking leaves older manifests lazy and never resolves or 
     ['1.2.10', '1.2.2', '1.2.1', '1.2.0'],
   );
   assert.equal(state.availableVersion, '1.2.10');
-  assert.equal(state.accessConfigured, false);
-  assert.deepEqual(f.queriedTokens, [null]);
+  assert.deepEqual(f.queriedChannels, ['stable']);
   assert.deepEqual(f.resolved, []);
   assert.deepEqual(f.downloaded, []);
   assert.equal(f.applied.length, 0);
@@ -476,7 +428,7 @@ test('explicitly selecting an older metadata-only release resolves that exact ve
   f.hooks.releases = async () => [release(), metadata()];
   await f.service.check();
   const state = await f.service.install(metadata().id);
-  assert.deepEqual(f.resolved, [{ id: metadata().id, token: null }]);
+  assert.deepEqual(f.resolved, [{ id: metadata().id }]);
   assert.equal(f.downloaded.length, 1);
   assert.deepEqual(f.downloaded[0], release('1.2.0'));
   assert.equal(f.applied.length, 1);
@@ -530,7 +482,7 @@ test('resolved manifest must retain release id, version, asset id, byte count an
     await f.service.check();
     const state = await f.service.install(metadata().id);
     assert.equal(state.phase, 'error');
-    assert.match(state.error!, /identidade/);
+    assert.match(state.error!, /identity/);
     assert.deepEqual(f.downloaded, []);
     assert.deepEqual(f.store.cachedSources, []);
     assert.equal(f.applied.length, 0);
@@ -590,7 +542,7 @@ test('a corrupt installer behind metadata-only history resolves its manifest and
   await f.service.check();
   const state = await f.service.install(metadata().id);
   assert.equal(state.phase, 'installing');
-  assert.deepEqual(f.resolved, [{ id: metadata().id, token: null }]);
+  assert.deepEqual(f.resolved, [{ id: metadata().id }]);
   assert.equal(f.downloaded.length, 1);
   assert.deepEqual(f.downloaded[0], release('1.2.0'));
   assert.equal(f.store.cachedSources.length, 1);
@@ -634,10 +586,8 @@ test('a pending lazy manifest resolution owns the installation operation and can
   assert.equal(f.service.snapshot.phase, 'downloading');
   await f.service.install(metadata().id);
   await f.service.check();
-  await f.service.setToken('ghp_fixture_during_resolution_not_a_real_credential');
   assert.equal(f.resolved.length, 1);
-  assert.equal(f.queriedTokens.length, 1);
-  assert.deepEqual(f.store.saved, []);
+  assert.equal(f.queriedChannels.length, 1);
   assert.deepEqual(f.downloaded, []);
   assert.equal(f.applied.length, 0);
   gate.resolve([release('1.2.0')]);
@@ -670,7 +620,7 @@ test('stable defaults exclude test releases from both remote and preserved insta
 test('persisted test channel survives initialization and explicitly queries previews', async () => {
   const f = fixture();
   f.store.channel = 'test';
-  f.hooks.releases = async (_token, channel) =>
+  f.hooks.releases = async (channel) =>
     channel === 'test' ? [release('1.3.0-test.2.10.1')] : [release()];
   assert.equal((await f.service.initialize()).channel, 'test');
   assert.equal((await f.service.check()).availableVersion, '1.3.0-test.2.10.1');
@@ -716,10 +666,8 @@ test('channel persistence owns the operation before awaiting and clears former r
   );
   await f.service.setChannel('stable');
   await f.service.check();
-  await f.service.setToken('ghp_fixture_during_channel_switch_not_a_real_credential');
   await f.service.install(release().id);
   assert.deepEqual(f.store.savedChannels, ['test']);
-  assert.deepEqual(f.store.saved, []);
   assert.deepEqual(f.applied, []);
   assert.deepEqual(f.queriedChannels, ['stable']);
   gate.resolve(undefined);
@@ -738,7 +686,7 @@ test('failed channel persistence retains the previous channel and cannot query a
   const failed = await switching;
   assert.equal(failed.channel, 'stable');
   assert.equal(failed.phase, 'error');
-  assert.match(failed.error!, /canal anterior foi mantido/);
+  assert.match(failed.error!, /previous channel was kept/);
   assert.equal(f.service.busy, false);
   assert.deepEqual(f.queriedChannels, ['stable']);
   f.store.channelSaveGate = null;
@@ -852,4 +800,17 @@ test('a persisted test channel never cycles back into the old preview after acce
     preview,
     'An explicit new opt-in can still choose the older bootstrap preview.',
   );
+});
+
+test('retired credential cleanup cannot block public initialization or update checks', async () => {
+  const f = fixture();
+  f.store.cleanupError = new Error('Fixture legacy credential cleanup was denied.');
+  const initial = await f.service.initialize();
+  assert.equal(initial.phase, 'idle');
+  assert.equal(initial.error, null);
+  assert.equal(f.store.cleanupCalls, 1);
+  const checked = await f.service.check();
+  assert.equal(checked.error, null);
+  assert.equal(checked.availableVersion, '1.2.10');
+  assert.deepEqual(f.queriedChannels, ['stable']);
 });

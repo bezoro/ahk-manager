@@ -98,6 +98,8 @@ internal static class ElevationBootstrap
             own,
             files
         );
+        if (commit.BackgroundStartup && receipt.StartupContinuation is null)
+            throw new ProtocolException("InvalidRequest");
         using var adoption = receipt.StartupContinuation is { } continuationTicket
             ? new StartupAdoptionServer(
                 continuationTicket,
@@ -170,7 +172,12 @@ internal static class ElevationBootstrap
         bool Launch()
         {
             using var launched = Process.Start(
-                CommittedHostStartInfo(hostPath, adoption?.Descriptor.Encode(), receipt.ResumeLogin)
+                CommittedHostStartInfo(
+                    hostPath,
+                    adoption?.Descriptor.Encode(),
+                    receipt.ResumeLogin,
+                    commit.BackgroundStartup
+                )
             );
             if (
                 launched is null
@@ -218,8 +225,13 @@ internal static class ElevationBootstrap
             }
         }
 
-        if (result != 0 && normal.Exited && host.Exited)
-            ElevationNative.RecoveryError();
+        ReportActivationFailure(
+            result,
+            normal.Exited,
+            host.Exited,
+            receipt.ResumeLogin || commit.BackgroundStartup,
+            ElevationNative.RecoveryError
+        );
         return result;
     }
 }

@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { hostText as t } from '../shared/host-pt-BR.js';
+import { hostText as t } from '../shared/host-en-US.js';
 import { recyclePlan, recycleAuthorization } from '../shared/validation.js';
 import { TextDecoder } from 'node:util';
 import type {

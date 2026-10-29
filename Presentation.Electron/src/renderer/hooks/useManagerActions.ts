@@ -1,7 +1,7 @@
 import type { CatalogResult, HostState, ScriptOperation } from '../../shared/contracts.js';
 import type { DeleteScope } from '../appTypes.js';
 import { actionReason } from '../model.js';
-import { catalogSummary, outcome, reason, text } from '../resources/pt-BR.js';
+import { catalogSummary, outcome, reason, text } from '../resources/en-US.js';
 import type { Dialogs } from './useDialogs.js';
 import type { LibrarySelection } from './useLibrarySelection.js';
 import type { MetadataDrafts } from './useMetadataDrafts.js';

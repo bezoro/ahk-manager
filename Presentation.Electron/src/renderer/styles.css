@@ -1530,41 +1530,6 @@ time {
   padding: 22px 0;
   color: var(--colorNeutralForeground3);
 }
-.update-access {
-  border-top: 1px solid var(--colorNeutralStroke2);
-  padding-top: 17px;
-  margin-top: 8px;
-}
-.update-access summary {
-  font-weight: 600;
-  line-height: 24px;
-  cursor: default;
-}
-.update-access > p {
-  margin-top: 9px;
-  max-width: 76ch;
-}
-.update-access-state {
-  font-size: 12px;
-}
-.update-access form {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-width: 540px;
-  margin-top: 12px;
-}
-.update-access-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.update-access input {
-  min-width: 0;
-}
-.update-access-actions button {
-  white-space: normal;
-}
 @media (max-width: 900px) {
   .updates-summary {
     gap: 12px;
@@ -1594,9 +1559,6 @@ time {
   .update-available-banner {
     align-items: flex-start;
     flex-wrap: wrap;
-  }
-  .update-access-actions button {
-    max-width: 100%;
   }
 }
 @media (forced-colors: active) {

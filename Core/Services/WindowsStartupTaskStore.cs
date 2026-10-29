@@ -37,7 +37,7 @@ internal static class WindowsStartupTaskStore
         {
             service = Activator.CreateInstance(
                 Type.GetTypeFromProgID("Schedule.Service")
-                    ?? throw new InvalidOperationException("Agendador de Tarefas indisponível.")
+                    ?? throw new InvalidOperationException("Task Scheduler is unavailable.")
             );
             ((dynamic)service!).Connect();
             folder = ((dynamic)service).GetFolder("\\");
@@ -72,7 +72,7 @@ internal static class WindowsStartupTaskStore
         {
             service = Activator.CreateInstance(
                 Type.GetTypeFromProgID("Schedule.Service")
-                    ?? throw new InvalidOperationException("Agendador de Tarefas indisponível.")
+                    ?? throw new InvalidOperationException("Task Scheduler is unavailable.")
             );
             ((dynamic)service!).Connect();
             folder = ((dynamic)service).GetFolder("\\");
@@ -94,7 +94,7 @@ internal static class WindowsStartupTaskStore
                     || !replacement.InteractiveToken
                     || !replacement.UserLogonOnly
                 )
-                    throw new InvalidDataException("Especificação de tarefa inválida.");
+                    throw new InvalidDataException("Invalid task specification.");
                 // TASK_CREATE (2), never CREATE_OR_UPDATE: another entry wins a race.
                 object registered = ((dynamic)folder).RegisterTask(
                     TaskName(sid),
@@ -121,7 +121,7 @@ internal static class WindowsStartupTaskStore
     {
         var args = ScriptPaths.SplitCommand(registration.Command);
         if (args.Length != 3 || args[1] != "--login" || args[2] != "--background")
-            throw new InvalidDataException("Comando de início inválido.");
+            throw new InvalidDataException("Invalid startup command.");
         string executable = ScriptPaths.LocalPath(args[0]);
         XElement E(string name, object? content) => new(Ns + name, content);
         var xml = new XDocument(

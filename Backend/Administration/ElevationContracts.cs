@@ -8,7 +8,8 @@ public sealed record ElevationFrame(
     Guid OperationId,
     string Nonce,
     string? ReceiptHash = null,
-    string? FileIdentity = null
+    string? FileIdentity = null,
+    bool BackgroundStartup = false
 );
 
 public sealed record ElevationReceipt(

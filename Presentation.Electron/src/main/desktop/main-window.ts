@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron';
 import path from 'node:path';
-import { hostText as t } from '../../shared/host-pt-BR.js';
+import { hostText as t } from '../../shared/host-en-US.js';
 
 export function createMainWindow(): BrowserWindow {
   return new BrowserWindow({

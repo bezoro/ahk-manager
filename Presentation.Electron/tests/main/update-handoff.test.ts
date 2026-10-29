@@ -18,15 +18,7 @@ async function fixture(t: TestContext) {
   t.after(async () => {
     await fs.rm(root, { recursive: true, force: true });
   });
-  const store = new UpdateStore(root, {
-    available: () => false,
-    encrypt: () => {
-      throw new Error('Unused');
-    },
-    decrypt: () => {
-      throw new Error('Unused');
-    },
-  });
+  const store = new UpdateStore(root);
   const operationId = randomUUID(),
     parentStartedAtUtc = new Date().toISOString();
   const directory = path.join(root, 'operations', operationId);
@@ -80,7 +72,7 @@ test('cancellation is idempotent, prevents later commit and remains authoritativ
   const original = await fs.readFile(first.cancel);
   await first.control.cancel();
   assert.deepEqual(await fs.readFile(first.cancel), original);
-  await assert.rejects(first.control.commit(), /cancelada/);
+  await assert.rejects(first.control.commit(), /cancelled/);
   await assert.rejects(fs.access(first.commit), { code: 'ENOENT' });
   const second = await fixture(t);
   await second.control.commit();
@@ -169,7 +161,7 @@ test('a timed out drain cannot publish a late commit after cancellation', async 
     },
   );
   expire();
-  await assert.rejects(shutdown, /prazo/);
+  await assert.rejects(shutdown, /in time/);
   await f.control.cancel();
   release();
   await new Promise((resolve) => setImmediate(resolve));

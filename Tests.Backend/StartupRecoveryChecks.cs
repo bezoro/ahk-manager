@@ -170,7 +170,7 @@ internal static class StartupRecoveryChecks
         {
             known =
                 ex.Message.Contains(file, StringComparison.Ordinal)
-                && ex.Message.Contains("preservado", StringComparison.Ordinal);
+                && ex.Message.Contains("preserved", StringComparison.Ordinal);
         }
         check(known, "malformed continuation remains a named known recovery failure: " + name);
         check(
@@ -419,7 +419,7 @@ internal static class StartupRecoveryChecks
                     check(
                         manager.Snapshot.Activity.Any(activity =>
                             activity.Operation == ScriptOperation.Recover
-                            && activity.Detail?.Contains("preservado", StringComparison.Ordinal)
+                            && activity.Detail?.Contains("preserved", StringComparison.Ordinal)
                                 == true
                         ),
                         "manager recovery records preserved evidence in activity"

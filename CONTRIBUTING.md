@@ -1,21 +1,24 @@
-# Contribuir
+# Contributing
 
-Comece por [ARCHITECTURE.md](ARCHITECTURE.md) para localizar a implementação ativa. Alterações no produto atual ficam em `Core/`, `Backend/`, `UpdateHost/` e `Presentation.Electron/`. Os projetos WinUI e WPF são históricos e não validam a interface Electron.
+Use English for code, comments, application text, documentation, commit messages, issues, and pull requests. Preserve user-authored script contents, names, paths, historical records, and compatibility identifiers in their original form.
 
-## Ambiente
+Start with [ARCHITECTURE.md](ARCHITECTURE.md). Current product changes belong in `Core/`, `Backend/`, `UpdateHost/`, and `Presentation.Electron/`. Archived WinUI/WPF projects do not validate the Electron interface.
 
-Clone o repositório com seu histórico e tags. Os builds calculam a versão a partir do Git. Se as tags não estiverem disponíveis, execute `git fetch --tags`; para um build local sem histórico, informe `-ReleaseVersion` explicitamente a `tools/Build-Electron.ps1`.
+## Environment
 
-Use Windows x64 e PowerShell 7 para compilar, empacotar e executar os testes nativos. A CI usa Node 24.22.0 e o SDK .NET fixado em `global.json`. Instale as dependências pelos locks existentes. AutoHotkey v2 é necessário para os testes que descobrem e verificam o interpretador; a CI prepara uma cópia portátil oficial apenas para leitura.
+Clone the full Git history and tags. Run `git fetch --tags` if tags are missing. Local builds calculate their version from Git; when building without history, pass `-ReleaseVersion` explicitly to `tools/Build-Electron.ps1`.
 
-Na raiz do repositório, execute `dotnet tool restore --configfile NuGet.Config` para instalar a versão fixada do CSharpier, usada na formatação C#.
+Use Windows x64 and PowerShell 7 for packaging and native checks. CI pins Node.js 24.22.0 and the .NET SDK in `global.json`. Install dependencies from the existing lock files. AutoHotkey v2 is needed for interpreter discovery checks; CI prepares an official portable copy for read-only inspection.
 
-Os exemplos abaixo partem da raiz do repositório. Cada saída precisa ser uma pasta absoluta ainda inexistente. Assim, uma nova execução preserva as evidências da anterior.
+Restore the pinned CSharpier formatter from the repository root:
 
 ```powershell
+dotnet tool restore --configfile NuGet.Config
 $work = Join-Path $env:TEMP ('ahk-manager-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $work | Out-Null
 ```
+
+Commands below start at the repository root. Each test/build output must be an absolute directory that does not already exist, preserving evidence from earlier runs.
 
 ## Frontend
 
@@ -30,9 +33,9 @@ npm.cmd run build -- --out "$work/frontend"
 Pop-Location
 ```
 
-`npm.cmd run format` aplica o Prettier conforme `.prettierrc.json` e `.prettierignore`. `.editorconfig` define a indentação dos demais arquivos. `architecture:check` verifica as dependências entre camadas e o isolamento das fontes legadas.
+`npm.cmd run format` applies Prettier according to `.prettierrc.json` and `.prettierignore`. `.editorconfig` covers other source files. `architecture:check` validates layer dependencies and isolation from historical sources.
 
-Os testes Node usam adaptadores e perfis temporários. Em Linux e macOS, o ensaio de identidade de arquivos do Windows fica explicitamente ignorado. A CI Windows executa esse ensaio. Três verificações de integração aceitam snapshots produzidos pelos testes .NET; sem essas entradas elas ficam ignoradas. Para executá-las, rode primeiro `--backend` conforme abaixo e defina as entradas antes de `npm.cmd test`:
+Node checks use adapters and temporary profiles. The Windows file-identity check is explicitly skipped on other operating systems. Three integration checks require snapshots from the .NET backend suite; CI supplies these inputs:
 
 ```powershell
 $env:AHK_HEADER_SNAPSHOT_INPUT = "$work/backend/header-description-snapshot.json"
@@ -40,9 +43,11 @@ $env:AHK_FOREGROUND_ARGUMENTS_INPUT = "$work/backend/foreground-host-arguments.t
 $env:AHK_STARTUP_RECOVERY_INPUT = "$work/backend/startup-recovery-snapshot.json"
 ```
 
-## Commits e versões
+For updater transport changes, also run the real Electron network checks used by Windows CI. A successful Node fetch test does not prove Chromium/Electron redirect behavior.
 
-Use Conventional Commits. O tipo identifica o efeito da mudança; o escopo é opcional.
+## Commits and versions
+
+Use Conventional Commits with an optional scope:
 
 ```text
 fix(startup): preserve the configured login preference
@@ -51,11 +56,9 @@ refactor(core): separate process observation from catalog operations
 build: update the Windows packaging tools
 ```
 
-Os tipos aceitos são `feat`, `fix`, `perf`, `refactor`, `docs`, `ci`, `build`, `style`, `test`, `chore` e `revert`. Descreva o motivo no corpo quando o título não explicar a decisão. Uma mudança incompatível usa `!`, como `feat!: change the profile schema`, ou um rodapé `BREAKING CHANGE:` que explique a incompatibilidade e a migração necessária.
+Accepted types are `feat`, `fix`, `perf`, `refactor`, `docs`, `ci`, `build`, `style`, `test`, `chore`, and `revert`. Explain decisions in the body when the subject is insufficient. Breaking changes use `!` or a `BREAKING CHANGE:` footer describing compatibility and migration.
 
-A CI valida somente os novos commits do PR ou push. As mensagens antigas permanecem no histórico. Versões estáveis seguem Semantic Versioning: `feat` incrementa a minor, mudanças incompatíveis incrementam a major e os demais tipos incrementam o patch. O nível mais alto entre os commits prevalece.
-
-Em `Presentation.Electron`:
+CI checks only new PR/push commits. Stable versions follow Semantic Versioning: `feat` increments minor, breaking changes increment major, and other types increment patch. The highest required increment wins. In `Presentation.Electron`:
 
 ```powershell
 npm.cmd run commits:check
@@ -63,13 +66,11 @@ npm.cmd run test:release
 npm.cmd run release:identity
 ```
 
-`release:identity` faz somente leitura do Git e mostra a versão prevista. `node scripts/compute-release.cjs --json` produz os mesmos dados em JSON para ferramentas. O script de build local também usa esse cálculo; `package.json.version` não determina a versão oficial.
+`release:identity` reads Git without changing tags. `node scripts/compute-release.cjs --json` exposes the same identity for tools. `package.json.version` is a development template and does not determine official versions.
 
-A publicação estável roda apenas na `main`, após a aprovação de toda a CI Windows. Pull requests abertos do próprio repositório também geram prévias no formato `X.Y.Z-test.<execução>.<tentativa>.<PR>`, vinculadas ao commit exato testado. O publicador executa o código de confiança da `main`, recusa resultados de forks e commits substituídos e preserva tags e assets anteriores. O build do PR não recebe credenciais de publicação ou assinatura. A base da prévia considera a maior tag estável disponível, mesmo quando ela ainda não é ancestral da branch.
+Stable publication runs on `main` after Windows CI passes. Approved open PRs from this repository produce previews named `X.Y.Z-test.<run>.<attempt>.<PR>`. The publisher runs trusted code from `main`, rejects fork or stale-head builds, and never replaces existing release assets. PR builds do not receive signing or publication credentials. See [UPDATES.md](UPDATES.md) for channel selection, retries, signing, and older-client recovery.
 
-Para testar pelo aplicativo, selecione **Atualizações > Testes** e instale a prévia desejada. Quem ainda usa uma versão sem esse seletor precisa receber primeiro a atualização estável que o adiciona, pelo botão de atualização existente. Consulte [UPDATES.md](UPDATES.md) para retorno ao estável, reexecuções, imutabilidade e assinatura.
-
-## Backend e Core
+## Backend and Core
 
 ```powershell
 dotnet restore Tests.Backend/Tests.Backend.csproj --locked-mode --configfile NuGet.Config -r win-x64
@@ -80,13 +81,13 @@ dotnet publish Tests.Backend/Tests.Backend.csproj -c Release -r win-x64 --self-c
 & "$work/test-bin/Tests.Backend.exe" --startup-inspection --root "$work/startup-inspection"
 ```
 
-Esses seletores usam perfis temporários e adaptadores de efeitos. `--startup-inspection` consulta o Windows por WMI, somente para leitura. `--core` e `--corrections` também precisam do AutoHotkey v2 disponível para descoberta. Os testes de Core ficam em `Tests.Backend/Core`; novos adaptadores compartilhados ficam em `Tests.Backend/Fixtures`.
+These selectors use temporary profiles and effect adapters. Startup inspection reads Windows WMI without changing registration. Core and correction checks also require a discoverable AutoHotkey v2 installation. Shared test adapters belong in `Tests.Backend/Fixtures`; Core cases belong in `Tests.Backend/Core`.
 
-Após restaurar a ferramenta, em `Presentation.Electron`, execute `npm.cmd run format:dotnet:check -- Core Backend Tests.Backend` para conferir a formatação com CSharpier. `npm.cmd run format:dotnet -- Core Backend Tests.Backend` aplica os ajustes. Sem a lista de projetos, esses comandos incluem também o UpdateHost. A formatação não exige restore dos projetos.
+In `Presentation.Electron`, `npm.cmd run format:dotnet:check -- Core Backend Tests.Backend` checks CSharpier formatting; `format:dotnet` applies it. With no project list, both commands include UpdateHost. Formatting does not require project restore.
 
-O seletor `--ahk-owned` inicia scripts temporários reais e tem preparação adicional. Ele não faz parte da CI comum. Consulte [SAFE-TESTS.md](SAFE-TESTS.md) antes de usá-lo. Não use o perfil pessoal como raiz dos ensaios.
+The separate `--ahk-owned` suite executes temporary scripts and requires additional setup. It is outside ordinary CI; read [SAFE-TESTS.md](SAFE-TESTS.md) before using it. Do not use a personal profile as a test root.
 
-Para alterações no aplicador de atualizações:
+For update-host changes:
 
 ```powershell
 dotnet restore UpdateHost/AhkManager.UpdateHost.csproj --locked-mode --configfile NuGet.Config -r win-x64
@@ -94,9 +95,9 @@ dotnet publish UpdateHost/AhkManager.UpdateHost.csproj -c Release -r win-x64 --s
 & "$work/update-host/AhkManager.UpdateHost.exe" --self-test --root "$work/update-host-tests"
 ```
 
-## Interface e pacote Windows
+## Windows interface and package
 
-Para abrir a interface de produção com os dados sintéticos do harness, use o bundle gerado acima:
+Use the production renderer bundle with the synthetic presentation host:
 
 ```powershell
 Push-Location Presentation.Electron
@@ -105,23 +106,23 @@ Pop-Location
 ./tools/Test-ElectronPresentation.ps1 -FrontendRoot "$work/frontend" -HarnessRoot "$work/ui-harness" -OutputRoot "$work/ui-evidence"
 ```
 
-O ensaio abre uma janela própria, exercita o renderer e salva capturas e resultados. Não conecta ao backend nem executa scripts. Ele cobre temas, largura reduzida e zoom; não comprova UAC, login real ou composição Mica.
+The harness owns its window, exercises the renderer, and saves screenshots and assertions. It does not connect to the backend or run user scripts. It covers themes, narrow layouts, and zoom; it does not establish interactive UAC, real sign-in behavior, or Mica composition.
 
-Para gerar a distribuição completa:
+Build the complete distribution with fresh paths:
 
 ```powershell
 ./tools/Build-Electron.ps1 -OutputRoot "$work/build"
 ./tools/Package-Electron.ps1 -BuildRoot "$work/build" -OutputRoot "$work/package"
 ```
 
-O build baixa o runtime Electron pelo script oficial, verifica tipos, executa os testes Node e publica Backend e UpdateHost. O empacotamento cria o instalador NSIS e o inventário de arquivos próprios. A opção `-DirectoryOnly` de `Package-Electron.ps1` gera apenas a pasta empacotada.
+The build uses Electron's official runtime installer, checks types, runs Node tests, and publishes Backend and UpdateHost. Packaging creates NSIS and an exact owned-file inventory. `-DirectoryOnly` produces an unpacked app directory.
 
-`tools/Test-UpdateInstallation.ps1` instala, atualiza e retorna entre dois pacotes reais. Execute esse ensaio somente em Windows descartável, sem instalação ou perfil anterior, conforme [SAFE-TESTS.md](SAFE-TESTS.md). A CI faz essa preparação. Criar o instalador localmente não publica uma Release; a política de publicação está em [UPDATES.md](UPDATES.md).
+`tools/Test-UpdateInstallation.ps1` installs, updates, and rolls back between real packages. Use a disposable Windows environment without a prior installation/profile, as described in [SAFE-TESTS.md](SAFE-TESTS.md). CI prepares that environment. A local package build never publishes a GitHub release.
 
-## Preparar uma alteração
+## Preparing a change
 
-Mantenha regras de processo e persistência no Core, validação do protocolo no Backend, integração nativa no processo principal e apresentação no renderer. O preload expõe métodos específicos; não acrescente execução arbitrária, caminhos de módulo ou acesso direto ao Node.
+Keep process/persistence rules in Core, protocol validation in Backend, native integration in Electron main, and presentation in the renderer. Preload methods must remain specific; do not expose arbitrary commands, module paths, or Node access.
 
-Ao mudar contratos, confira os tipos em `Core/Models`, `Backend/Protocol.cs` e `Presentation.Electron/src/shared`, além dos respectivos contextos JSON e validadores. Preserve os nomes de perfil, Registro e mutex existentes. Mudanças de formato precisam exercitar perfis anteriores e dados inválidos.
+When contracts change, review `Core/Models`, `Backend/Protocol.cs`, `Presentation.Electron/src/shared`, JSON contexts, and runtime validators together. Preserve existing profile, registry, and mutex identifiers. Format changes need prior-profile and invalid-data coverage.
 
-Inclua a reprodução do problema e os resultados das verificações relevantes no pull request. Para alterações visuais, confira as capturas do harness. A CI do Windows executa as suítes completas e preserva logs e artefatos mesmo quando falha. [VALIDATION.md](VALIDATION.md) registra os limites dos ensaios nativos existentes.
+Describe the reproduction, resulting behavior, and relevant validation in the PR. Inspect harness screenshots for visual changes. CI preserves logs and artifacts on failure. Historical native-test limits remain documented in [VALIDATION.md](VALIDATION.md).

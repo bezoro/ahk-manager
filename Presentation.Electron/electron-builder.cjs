@@ -95,8 +95,8 @@ module.exports = {
     uninstallerIcon: path.join(frontend, 'app.ico'),
     include: path.join(__dirname, 'scripts/installer.nsh'),
     artifactName: 'AHK-Manager-${version}-Setup-x64.${ext}',
-    installerLanguages: ['pt_BR'],
-    language: '1046',
+    installerLanguages: ['en_US'],
+    language: '1033',
   },
   publish: {
     provider: 'github',

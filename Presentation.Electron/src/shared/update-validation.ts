@@ -9,7 +9,6 @@ export const updateState = shape({
   availableVersion: nullable(text(64)),
   lastCheckedAt: nullable(text(64)),
   error: nullable(text(4000)),
-  accessConfigured: bool,
   progress: nullable(finiteProgress),
   releases: array(
     shape({

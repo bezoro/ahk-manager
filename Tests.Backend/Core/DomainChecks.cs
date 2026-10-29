@@ -175,7 +175,7 @@ public static partial class CoreSuite
             bounded.Issues.Count(i =>
                 i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true
             ) == 33
-                && bounded.Issues.Last().Detail == "Anotações @gesture adicionais omitidas: 48."
+                && bounded.Issues.Last().Detail == "Additional @gesture annotations omitted: 48."
                 && bounded.Hotkeys.Single().Chord == "F13",
             "annotation diagnostics retain32 plus accurate overflow and ordinary declarations"
         );
@@ -219,7 +219,8 @@ public static partial class CoreSuite
             globalBudget.Issues.Count(i =>
                 i.Detail?.Contains("@gesture", StringComparison.Ordinal) == true
             ) == 33
-                && globalBudget.Issues.Last().Detail == "Anotações @gesture adicionais omitidas: 8."
+                && globalBudget.Issues.Last().Detail
+                    == "Additional @gesture annotations omitted: 8."
                 && globalBudget.Hotkeys.Select(h => h.Chord).SequenceEqual(new[] { "F24", "F13" }),
             "32 annotation diagnostics plus accurate overflow shared across parent and included file"
         );

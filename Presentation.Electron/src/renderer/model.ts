@@ -22,7 +22,7 @@ export const nextQuery = (
 export const effectiveDescription = (script: ScriptSnapshot): string =>
   script.headerDescription?.trim() ? script.headerDescription : script.description;
 export function visibleScripts(snapshot: ManagerSnapshot, query: ScriptQuery): ScriptSnapshot[] {
-  const search = query.search.trim().toLocaleLowerCase('pt-BR');
+  const search = query.search.trim().toLocaleLowerCase('en-US');
   const names = new Map(snapshot.collections.map((c) => [c.id, c.name]));
   return snapshot.scripts
     .filter(
@@ -30,7 +30,7 @@ export function visibleScripts(snapshot: ManagerSnapshot, query: ScriptQuery): S
         (!query.collectionId || script.collectionId === query.collectionId) &&
         (!search ||
           `${script.friendlyName} ${script.path} ${effectiveDescription(script)}`
-            .toLocaleLowerCase('pt-BR')
+            .toLocaleLowerCase('en-US')
             .includes(search)) &&
         (query.status === 'All' ||
           (query.status === 'Running' && script.status === 'Running') ||
@@ -45,12 +45,12 @@ export function visibleScripts(snapshot: ManagerSnapshot, query: ScriptQuery): S
           : query.sort === 'Collection'
             ? (names.get(a.collectionId ?? '') ?? '').localeCompare(
                 names.get(b.collectionId ?? '') ?? '',
-                'pt-BR',
+                'en-US',
               )
             : 0;
       return (
         first ||
-        a.friendlyName.localeCompare(b.friendlyName, 'pt-BR', {
+        a.friendlyName.localeCompare(b.friendlyName, 'en-US', {
           sensitivity: 'base',
           numeric: true,
         }) ||
@@ -175,7 +175,7 @@ export function filterActivity(
   scriptId: string | null,
   result: string,
 ): ActivitySnapshot[] {
-  const needle = search.toLocaleLowerCase('pt-BR').trim();
+  const needle = search.toLocaleLowerCase('en-US').trim();
   return events.filter(
     (event) =>
       (!scriptId || event.scriptId === scriptId) &&
@@ -183,7 +183,7 @@ export function filterActivity(
       (!needle ||
         Object.values({ ...event, ...activityAssociation(event, scripts) })
           .join(' ')
-          .toLocaleLowerCase('pt-BR')
+          .toLocaleLowerCase('en-US')
           .includes(needle)),
   );
 }

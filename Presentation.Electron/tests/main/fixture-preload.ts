@@ -20,7 +20,6 @@ const api: AhkManagerApi = {
   getUpdateState: () => invoke('getUpdateState'),
   checkUpdates: () => invoke('checkUpdates'),
   installUpdate: (id) => invoke('installUpdate', id),
-  setUpdateToken: (token) => invoke('setUpdateToken', token),
   setUpdateChannel: (channel) => invoke('setUpdateChannel', channel),
   onUpdates: (listener) => listen('fixture:updates', listener),
   requestAdministration: () => invoke('requestAdministration'),
@@ -84,7 +83,7 @@ contextBridge.exposeInMainWorld('fixtureHarness', {
 window.addEventListener('DOMContentLoaded', () => {
   const banner = document.createElement('div');
   banner.id = 'fixture-warning';
-  banner.textContent = 'FIXTURE ISOLADA • dados de teste • nenhum script real';
+  banner.textContent = 'ISOLATED FIXTURE • test data • no real scripts';
   Object.assign(banner.style, {
     position: 'fixed',
     top: '9px',

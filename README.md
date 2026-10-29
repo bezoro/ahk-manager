@@ -1,47 +1,51 @@
 # AHK Manager
 
-Gerenciador de scripts AutoHotkey v2 para Windows 11 x64. A interface usa Electron, React e Fluent UI; o backend .NET controla processos, persistência e recuperação.
+An AutoHotkey v2 script manager for Windows 11 x64. The desktop interface uses Electron, React, and Fluent UI. A .NET backend owns process control, persistence, and recovery.
 
-[Baixar a versão mais recente](https://github.com/bezoro/ahk-manager/releases/latest)
+[Download the latest stable release](https://github.com/bezoro/ahk-manager/releases/latest)
 
-## Usar o aplicativo
+## Using the app
 
-- Cadastre scripts e escolha quais iniciam com o Windows.
-- Inicie, reinicie e pare cada script, com privilégios normais ou administrativos.
-- Edite no VS Code detectado automaticamente ou configure outro editor e seus argumentos.
-- Consulte atalhos, atividade e problemas de observação dos processos.
-- Atualize pelo aplicativo, escolha o canal estável ou de testes e use o histórico para voltar a uma versão preservada.
+- Add scripts and choose which ones start when you sign in to Windows.
+- Start, restart, and stop scripts with standard or administrator privileges.
+- Edit scripts in automatically detected VS Code, or configure another editor and its arguments.
+- Browse hotkeys, activity, and process observation problems.
+- Update from the app, choose Stable or Test, and use version history to return to a previous release.
 
-O Manager inicia com Windows e como administrador por padrão. As preferências são independentes e configuráveis. O primeiro uso administrativo solicita a confirmação do Windows. Scripts sem a opção administrativa continuam usando o privilégio padrão do usuário.
+The manager starts with Windows and requests administrator access by default. These preferences are independent and configurable. Scripts without the administrator option continue to use the standard user token.
 
-Fechar a janela pode manter o aplicativo na bandeja. **Sair mantendo os scripts** preserva os processos. **Parar scripts e sair** solicita saída normal das identidades verificadas e mantém o Manager aberto se não conseguir confirmar o resultado.
+Automatic sign-in does not display Manager confirmation or warning dialogs. Windows UAC may still request elevation permission; the main window follows your visibility preferences. Startup issues remain available in the app.
 
-Adicionar e analisar arquivos não executa os scripts. AutoHotkey v2 é um requisito separado para iniciá-los. O instalador inclui Electron e o backend autossuficiente; o usuário final não precisa instalar Node ou .NET.
+Closing the window can leave the app in the notification area. **Exit and keep scripts running** preserves script processes. **Stop scripts and exit** requests normal shutdown for verified processes and keeps the manager open if it cannot confirm the result.
 
-## Atualizações e dados
+Adding or inspecting files does not execute them. AutoHotkey v2 must be installed separately to run scripts. The installer includes Electron and the self-contained backend; users do not need Node.js or .NET.
 
-O aplicativo consulta as Releases públicas ao abrir e a cada 15 minutos, sem exigir login. O canal **Estável**, selecionado por padrão, recebe alterações da `main` que passaram pela CI. Em **Atualizações**, escolha **Testes** para receber prévias de pull requests antes do merge. Os dois canais usam o botão de atualização e permitem retornar pelo histórico. Voltar ao canal estável oferece a versão estável mais recente, mesmo quando ela é anterior à prévia instalada.
+## Updates and data
 
-O download e a instalação dependem de uma ação do usuário. Perfis, scripts e preferências de inicialização são preservados; uma falha confirmada na instalação restaura a cópia anterior. Versões sem o seletor de canais recebem primeiro uma atualização estável pelo botão existente. Consulte [UPDATES.md](UPDATES.md) para publicação, assinatura, primeira atualização de versões antigas e recuperação.
+The app checks public GitHub releases at startup and every 15 minutes. No GitHub account, token, or advanced access setting is required. **Stable** is the default channel. Select **Test** on the Updates page to try approved pull request builds before they are merged. Downloads and installations require an explicit action.
 
-Os dados operacionais ficam em `%LOCALAPPDATA%/Bezoro/AhkManagerElectron`. O armazenamento Chromium usa `%APPDATA%/Bezoro/AhkManagerElectron/Chromium`. A migração de um perfil anterior exige seleção, prévia e confirmação. A desinstalação preserva perfis e scripts.
+Version history supports returning to an earlier installer. Profiles, scripts, and startup preferences are preserved. A confirmed installation failure restores the previous installation. See [UPDATES.md](UPDATES.md) for channel behavior, integrity checks, signing, and recovery of older builds that cannot check for updates.
 
-## Desenvolver
+Operational data is stored in `%LOCALAPPDATA%/Bezoro/AhkManagerElectron`. Chromium storage is separate, under `%APPDATA%/Bezoro/AhkManagerElectron/Chromium`. Migrating an older profile requires selection, a preview, and confirmation. Uninstalling preserves profiles and scripts.
 
-Leia o [guia de contribuição](CONTRIBUTING.md) para preparar o ambiente, formatar, testar e gerar o instalador. O [mapa da arquitetura](ARCHITECTURE.md) explica as dependências e os fluxos do programa.
+## Contributing
 
-| Caminho                               | Responsabilidade                                                     |
-| ------------------------------------- | -------------------------------------------------------------------- |
-| `Core/`                               | Contratos, catálogo, persistência, processos e integração do Windows |
-| `Backend/`                            | Sessão do host, protocolo de comandos e coordenação administrativa   |
-| `Presentation.Electron/src/main/`     | Composição do aplicativo e integração com o desktop                  |
-| `Presentation.Electron/src/preload/`  | API limitada entre host e interface                                  |
-| `Presentation.Electron/src/renderer/` | Páginas, componentes e hooks da interface                            |
-| `UpdateHost/`                         | Aplicação de atualizações e restauração da instalação                |
-| `Tests.Backend/`                      | Testes do backend, do núcleo e adaptadores de ensaio                 |
-| `tools/`                              | Build, distribuição e validação isolada                              |
+Use English for source code, comments, documentation, commit messages, issues, and pull requests. User script names, paths, and existing data keep their original contents.
 
-Use Windows x64, PowerShell 7, Node 24 e o SDK .NET fixado em `global.json`. O build usa os locks de dependências do repositório. Na raiz:
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, formatting, tests, and packaging. [ARCHITECTURE.md](ARCHITECTURE.md) explains the dependencies and operational boundaries.
+
+| Path                                  | Responsibility                                                                |
+| ------------------------------------- | ----------------------------------------------------------------------------- |
+| `Core/`                               | Contracts, catalog, persistence, process observation, and Windows integration |
+| `Backend/`                            | Host session, command protocol, and administrative coordination               |
+| `Presentation.Electron/src/main/`     | Application composition and desktop integration                               |
+| `Presentation.Electron/src/preload/`  | Narrow interface between the host and renderer                                |
+| `Presentation.Electron/src/renderer/` | Pages, components, and interface hooks                                        |
+| `UpdateHost/`                         | Applying updates and restoring installations                                  |
+| `Tests.Backend/`                      | Backend and Core tests with isolated adapters                                 |
+| `tools/`                              | Builds, distribution, and isolated validation                                 |
+
+Use Windows x64, PowerShell 7, Node.js 24, and the .NET SDK pinned in `global.json`. Dependencies are installed from the repository's lock files. From the repository root:
 
 ```powershell
 $build = Join-Path $env:TEMP ('ahk-manager-' + [guid]::NewGuid().ToString('N'))
@@ -49,6 +53,6 @@ $build = Join-Path $env:TEMP ('ahk-manager-' + [guid]::NewGuid().ToString('N'))
 ./tools/Package-Electron.ps1 -BuildRoot $build -OutputRoot "${build}-package"
 ```
 
-A CI Windows verifica formatação, dependências entre camadas, tipos, testes .NET e Node, capturas da interface e instalação, atualização e rollback. Os artefatos incluem instalador, logs e capturas. [SAFE-TESTS.md](SAFE-TESTS.md) descreve o escopo dos ensaios e [VALIDATION.md](VALIDATION.md) conserva os registros de validação.
+Windows CI checks formatting, architecture boundaries, types, .NET and Node tests, interface screenshots, and real installer update/rollback behavior. Artifacts contain the installer, logs, and screenshots. [SAFE-TESTS.md](SAFE-TESTS.md) describes test scope; [VALIDATION.md](VALIDATION.md) preserves historical validation evidence.
 
-Os projetos WinUI, WPF e suas ferramentas anteriores permanecem no repositório como implementações históricas, fora da solução e da distribuição ativas. O código compartilhado atual pertence ao `Core/`. A [documentação histórica](docs/history.md) preserva as notas das versões anteriores.
+WinUI and WPF projects remain as historical implementations outside the active solution and distribution. Current shared code belongs in `Core/`. Earlier release notes are preserved in [docs/history.md](docs/history.md).

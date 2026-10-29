@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Button, Spinner } from '@fluentui/react-components';
 import type { HostState } from '../../shared/contracts.js';
-import { text } from '../resources/pt-BR.js';
+import { text } from '../resources/en-US.js';
 
 export function DisconnectedPage({
   host,

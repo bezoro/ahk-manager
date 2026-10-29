@@ -85,7 +85,6 @@ function fixture() {
       snapshot: updateState,
       check: async () => updateState,
       install: async () => updateState,
-      setToken: async () => updateState,
       setChannel: async () => updateState,
     },
     preflight: new AdministrationPreflight(),
@@ -242,7 +241,7 @@ test('an obsolete document invalidates async scope and cannot receive a complete
   assert.deepEqual(observed, [true]);
   f.guard.invalidate();
   release();
-  await assert.rejects(request, /documento/i);
+  await assert.rejects(request, /document/i);
   assert.deepEqual(observed, [true, false]);
   assert.equal(f.documentScope.getStore(), undefined);
 });
@@ -326,4 +325,15 @@ test('channel changes cannot bypass a pending application transition', async () 
     await assert.rejects(invoke('setUpdateChannel', { channel: 'test' }));
     assert.equal(requests, 0);
   }
+});
+
+test('the public updater does not register a GitHub credential endpoint', async () => {
+  const f = fixture();
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  await assert.rejects(
+    invoke('setUpdateToken', { token: 'obsolete-fixture-value' }),
+    /Unregistered handler/,
+  );
+  assert.equal(f.ipc.handlers.has('manager:setUpdateToken'), false);
 });

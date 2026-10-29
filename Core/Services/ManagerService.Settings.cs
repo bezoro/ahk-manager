@@ -64,7 +64,7 @@ public sealed partial class ManagerService
                         ? new OperationResult(
                             Outcome.Failed,
                             ReasonCode.ManualElevationRequired,
-                            "As preferências foram salvas. Confirme a permissão do Windows para concluir o início automático como administrador."
+                            "The preferences were saved. Confirm Windows permission to finish configuring administrator autostart."
                         )
                         : await startup
                             .SetEnabledAsync(

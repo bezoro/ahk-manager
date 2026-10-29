@@ -35,6 +35,7 @@ const scenarios =
     : null;
 if (fs.existsSync(output)) throw new Error('Fresh isolated fixture output required');
 fs.mkdirSync(output, { recursive: true });
+app.commandLine.appendSwitch('lang', 'en-US');
 app.setPath('userData', path.join(output, 'Chromium'));
 app.setPath('sessionData', path.join(output, 'session'));
 app.setPath('crashDumps', path.join(output, 'crashes'));
@@ -53,15 +54,15 @@ const fixtureSnapshot: ManagerSnapshot = {
   ...snapshot(),
   revision: '1',
   collections: [
-    { id: '33333333-3333-3333-3333-333333333333', name: 'Produtividade' },
-    { id: '44444444-4444-4444-4444-444444444444', name: 'Sistema' },
+    { id: '33333333-3333-3333-3333-333333333333', name: 'Productivity' },
+    { id: '44444444-4444-4444-4444-444444444444', name: 'System' },
   ],
   scripts: [
     {
       ...example,
-      friendlyName: 'Captura de tela',
-      description: 'Capturas e anotações rápidas — dados de teste',
-      headerDescription: 'Descrição do arquivo — FIXTURE ISOLADA\nSegunda linha de demonstração.',
+      friendlyName: 'Screen capture',
+      description: 'Quick captures and annotations - test data',
+      headerDescription: 'File description - ISOLATED FIXTURE\nSecond demonstration line.',
       path: 'C:\\FixtureIsolada\\Captura.ahk',
       collectionId: '33333333-3333-3333-3333-333333333333',
       runAtLogin: true,
@@ -100,21 +101,21 @@ const fixtureSnapshot: ManagerSnapshot = {
     {
       ...example,
       id: '55555555-5555-5555-5555-555555555555',
-      friendlyName: 'Expansão de texto',
+      friendlyName: 'Text expansion',
       path: 'C:\\FixtureIsolada\\Texto.ahk',
       collectionId: '33333333-3333-3333-3333-333333333333',
     },
     {
       ...example,
       id: '66666666-6666-6666-6666-666666666666',
-      friendlyName: 'Organizar janelas',
+      friendlyName: 'Arrange windows',
       path: 'C:\\FixtureIsolada\\Janelas.ahk',
       collectionId: '44444444-4444-4444-4444-444444444444',
       status: 'Unknown',
       issues: [
         {
           code: 'ObservationIncomplete',
-          detail: 'A identidade não foi confirmada nesta fixture.',
+          detail: 'The identity was not verified in this fixture.',
           scriptId: null,
         },
       ],
@@ -122,7 +123,7 @@ const fixtureSnapshot: ManagerSnapshot = {
     {
       ...example,
       id: '77777777-7777-7777-7777-777777777777',
-      friendlyName: 'Modo de concentração',
+      friendlyName: 'Focus mode',
       path: 'C:\\FixtureIsolada\\Foco.ahk',
       hotkeys: [
         {
@@ -141,7 +142,7 @@ const fixtureSnapshot: ManagerSnapshot = {
   issues: [
     {
       code: 'PartialAnalysis',
-      detail: 'FIXTURE ISOLADA — dados de teste; nenhum script real.',
+      detail: 'ISOLATED FIXTURE - test data; no real scripts.',
       scriptId: null,
     },
   ],
@@ -153,7 +154,7 @@ const fixtureSnapshot: ManagerSnapshot = {
       operation: 'Start',
       outcome: 'Confirmed',
       code: 'None',
-      detail: 'Fixture de apresentação; nenhum processo foi iniciado.',
+      detail: 'Presentation fixture; no process was started.',
     },
   ],
   runningCount: 1,
@@ -211,7 +212,7 @@ function emitTheme() {
 const result: OperationResult = {
   outcome: 'Confirmed',
   code: 'None',
-  detail: 'Fixture isolada; nenhum efeito real.',
+  detail: 'Isolated fixture; no real effects.',
   correlationId: null,
   succeeded: true,
 };
@@ -239,7 +240,7 @@ app
       minWidth: 760,
       minHeight: 560,
       show: false,
-      title: 'AHK Manager — FIXTURE ISOLADA',
+      title: 'AHK Manager - ISOLATED FIXTURE',
       titleBarStyle: 'hidden',
       titleBarOverlay: { height: 44 },
       backgroundColor: '#00000000',
@@ -324,7 +325,7 @@ app
       }
       calls.push({
         method,
-        args: method === 'setUpdateToken' ? [args[0] === null ? null : '[redacted]'] : args,
+        args,
       });
       const response = responses.get(method);
       if (response) {
@@ -349,11 +350,6 @@ app
           'fixture update channel',
         );
         updates = { ...updates, channel, phase: 'idle' };
-        window.webContents.send('fixture:updates', updates);
-        return updates;
-      }
-      if (method === 'setUpdateToken') {
-        updates = { ...updates, accessConfigured: args[0] !== null };
         window.webContents.send('fixture:updates', updates);
         return updates;
       }

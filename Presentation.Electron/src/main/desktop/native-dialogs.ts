@@ -1,7 +1,7 @@
 import { dialog, type BrowserWindow } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { hostText as t } from '../../shared/host-pt-BR.js';
+import { hostText as t } from '../../shared/host-en-US.js';
 import type { NativeBoundary } from '../controller.js';
 
 /** Native dialogs retain the authenticated document scope across their asynchronous replies. */

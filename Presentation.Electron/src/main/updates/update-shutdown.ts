@@ -8,7 +8,7 @@ export async function shutdownForUpdate(
 ): Promise<void> {
   let active = true;
   const check = (): void => {
-    if (!active) throw new Error('A preparação da atualização foi cancelada.');
+    if (!active) throw new Error('Update preparation was cancelled.');
   };
   try {
     await withinDeadline(
@@ -33,12 +33,10 @@ export async function shutdownForUpdate(
       schedule,
     );
     if (boundary.backendPresent() && !boundary.backendExited())
-      throw new Error('O backend não confirmou o encerramento.');
+      throw new Error('The backend did not confirm shutdown.');
   } catch (error) {
     if (error instanceof Error && error.message === 'DeadlineExceeded')
-      throw new Error(
-        'O backend não confirmou o encerramento no prazo. A atualização foi cancelada.',
-      );
+      throw new Error('The backend did not confirm shutdown in time. The update was cancelled.');
     throw error;
   } finally {
     active = false;

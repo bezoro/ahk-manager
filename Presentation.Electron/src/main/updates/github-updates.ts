@@ -34,8 +34,7 @@ export interface RemoteUpdateRelease {
 export const compareVersions = compareUpdateVersions;
 
 export function assetUrl(id: number): string {
-  if (!Number.isSafeInteger(id) || id <= 0)
-    throw new Error('O identificador da atualização é inválido.');
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('The update identifier is invalid.');
   return `${REPOSITORY_API}/releases/assets/${id}`;
 }
 
@@ -55,7 +54,7 @@ const isoDate = (value: unknown): value is string =>
 class UpdateRequestError extends Error {}
 const invalidManifest = (): UpdateRequestError =>
   new UpdateRequestError(
-    'A versão publicada possui informações de atualização inválidas. Nenhum arquivo foi instalado.',
+    'The published release has invalid update metadata. No files were installed.',
   );
 
 function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
@@ -231,19 +230,14 @@ export class GitHubUpdateClient {
   private readonly responses = new Map<string, { etag: string; value: unknown }>();
   private readonly manifests = new Map<string, RemoteUpdateRelease>();
   private listed = new Map<string, Candidate>();
-  private credential: string | null | undefined;
   private channel: UpdateChannel = 'stable';
   private generation = 0;
   constructor(private readonly fetcher: typeof fetch = globalThis.fetch) {}
 
-  async releases(
-    token: string | null,
-    channel: UpdateChannel = 'stable',
-  ): Promise<RemoteUpdateRelease[]> {
+  async releases(channel: UpdateChannel = 'stable'): Promise<RemoteUpdateRelease[]> {
     try {
       if (!validUpdateChannel(channel))
-        throw new UpdateRequestError('O canal de atualização é inválido.');
-      this.useCredential(token);
+        throw new UpdateRequestError('The update channel is invalid.');
       if (channel !== this.channel) {
         this.channel = channel;
         this.generation++;
@@ -258,7 +252,6 @@ export class GitHubUpdateClient {
       for (let page = 1; page <= 3; page++) {
         const rows = await this.json(
           `${REPOSITORY_API}/releases?per_page=100&page=${page}`,
-          token,
           METADATA_LIMIT,
           true,
           generation,
@@ -280,7 +273,6 @@ export class GitHubUpdateClient {
       if (truncated) {
         const latest = await this.json(
           `${REPOSITORY_API}/releases/latest`,
-          token,
           METADATA_LIMIT,
           true,
           generation,
@@ -306,59 +298,46 @@ export class GitHubUpdateClient {
       const sorted = [...found.values()].sort((a, b) => compareVersions(b.version, a.version));
       // Resolve only the newest manifest during polling. Older releases are
       // resolved immediately before installation, keeping public API use bounded.
-      if (sorted[0]) await this.resolveCandidate(sorted[0], token, generation);
+      if (sorted[0]) await this.resolveCandidate(sorted[0], generation);
       const result = sorted.map((item) => {
         const cached = this.cached(item);
         return cached ? { ...cached, publishedAt: item.publishedAt } : releaseFromMetadata(item);
       });
-      this.requireCredential(token, generation);
+      this.requireGeneration(generation);
       this.listed = found;
       return result;
     } catch (error) {
       if (error instanceof UpdateRequestError) throw error;
       throw new UpdateRequestError(
-        'Não foi possível consultar as atualizações. Verifique a conexão e tente novamente.',
+        'Updates could not be checked. Check your connection and try again.',
       );
     }
   }
 
-  async resolve(id: string, token: string | null): Promise<RemoteUpdateRelease> {
+  async resolve(id: string): Promise<RemoteUpdateRelease> {
     try {
-      this.useCredential(token);
       const generation = this.generation;
       const item = this.listed.get(id);
       if (!item)
         throw new UpdateRequestError(
-          'Esta versão não está no histórico consultado. Verifique as atualizações e tente novamente.',
+          'This version is not in the checked history. Check for updates and try again.',
         );
       return {
-        ...(await this.resolveCandidate(item, token, generation)),
+        ...(await this.resolveCandidate(item, generation)),
         publishedAt: item.publishedAt,
       };
     } catch (error) {
       if (error instanceof UpdateRequestError) throw error;
       throw new UpdateRequestError(
-        'Não foi possível consultar esta versão. Verifique a conexão e tente novamente.',
+        'This version could not be checked. Check your connection and try again.',
       );
     }
   }
 
-  private useCredential(token: string | null): void {
-    if (token !== null && !/^[A-Za-z0-9_]{1,512}$/.test(token))
-      throw new UpdateRequestError('O acesso ao GitHub é inválido.');
-    if (this.credential !== token) {
-      this.generation++;
-      this.responses.clear();
-      this.manifests.clear();
-      this.listed.clear();
-      this.credential = token;
-    }
-  }
-
-  private requireCredential(token: string | null, generation: number): void {
-    if (this.credential !== token || this.generation !== generation)
+  private requireGeneration(generation: number): void {
+    if (this.generation !== generation)
       throw new UpdateRequestError(
-        'O acesso ou canal de atualizações mudou durante a consulta. Verifique as atualizações novamente.',
+        'The update channel changed during the request. Check for updates again.',
       );
   }
 
@@ -382,14 +361,13 @@ export class GitHubUpdateClient {
 
   private async resolveCandidate(
     item: Candidate,
-    token: string | null,
     generation: number,
   ): Promise<RemoteUpdateRelease> {
-    this.requireCredential(token, generation);
+    this.requireGeneration(generation);
     const cached = this.cached(item);
     if (cached) return cached;
     const release = releaseFromManifest(
-      await this.json(assetUrl(item.manifest.id), token, MANIFEST_LIMIT, false, generation),
+      await this.json(assetUrl(item.manifest.id), MANIFEST_LIMIT, false, generation),
       item,
     );
     this.manifests.set(this.key(item), release);
@@ -399,13 +377,12 @@ export class GitHubUpdateClient {
 
   private async json(
     url: string,
-    token: string | null,
     maximum: number,
     metadata: boolean,
     generation: number,
     optionalNotFound = false,
   ): Promise<unknown> {
-    this.requireCredential(token, generation);
+    this.requireGeneration(generation);
     let location = new URL(url);
     const cached = metadata ? this.responses.get(url) : undefined;
     const signal = AbortSignal.timeout(15000);
@@ -426,16 +403,16 @@ export class GitHubUpdateClient {
       };
       if (api) {
         headers['X-GitHub-Api-Version'] = '2022-11-28';
-        if (token) headers.Authorization = `Bearer ${token}`;
         if (cached && metadata) headers['If-None-Match'] = cached.etag;
       }
       const response = await this.fetcher(location.href, {
         method: 'GET',
         headers,
         redirect: 'manual',
+        credentials: 'omit',
         signal,
       });
-      this.requireCredential(token, generation);
+      this.requireGeneration(generation);
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const redirect = response.headers.get('location');
         await response.body?.cancel();
@@ -458,19 +435,19 @@ export class GitHubUpdateClient {
       ) {
         await response.body?.cancel();
         throw new UpdateRequestError(
-          'O GitHub limitou as consultas de atualização. Aguarde alguns minutos e tente novamente.',
+          'GitHub has temporarily limited update checks. Wait before checking again.',
         );
       }
       if ([401, 403, 404].includes(response.status)) {
         await response.body?.cancel();
         throw new UpdateRequestError(
-          'Não foi possível acessar as versões no GitHub. Verifique a conexão e tente novamente.',
+          'The public GitHub releases could not be accessed. Check your connection and try again.',
         );
       }
       if (response.status !== 200 || !response.body) {
         await response.body?.cancel();
         throw new UpdateRequestError(
-          'O GitHub não respondeu à consulta de atualizações. Tente novamente mais tarde.',
+          'GitHub did not respond to the update check. Try again later.',
         );
       }
       const length = response.headers.get('content-length');
@@ -502,7 +479,7 @@ export class GitHubUpdateClient {
         throw invalidManifest();
       }
       const value = parseJson(text);
-      this.requireCredential(token, generation);
+      this.requireGeneration(generation);
       const etag = response.headers.get('etag');
       if (metadata && api && etag && etag.length <= 512) this.responses.set(url, { etag, value });
       return value;

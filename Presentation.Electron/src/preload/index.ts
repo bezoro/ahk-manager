@@ -100,7 +100,6 @@ const api: AhkManagerApi = {
   getUpdateState: () => checked('getUpdateState', {}, updateState),
   checkUpdates: () => checked('checkUpdates', {}, updateState),
   installUpdate: (id) => checked('installUpdate', { id }, updateState),
-  setUpdateToken: (token) => checked('setUpdateToken', { token }, updateState),
   setUpdateChannel: (channel) => checked('setUpdateChannel', { channel }, updateState),
   onUpdates: (listener) => subscribe('manager:updates', listener, updateState),
   requestAdministration: () => checked('requestAdministration', {}, operationResult),
