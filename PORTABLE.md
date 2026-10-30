@@ -56,6 +56,8 @@ Do not delete `Updates/operations` while an update has an unresolved result. An 
 
 Command logging is enabled automatically. Open **Help > Open logs folder** to inspect `Data/Logs`, including when the backend is unavailable. A custom data location keeps its logs in that location's `Logs` directory. The existing **Activity** page continues to show script and settings results.
 
+The installed edition writes to `%LOCALAPPDATA%/Bezoro/AhkManagerElectronDiagnostics/Logs`. Keeping these startup logs outside its operational profile preserves the empty destination required for profile migration, while recording backend initialization and load failures.
+
 The JSON Lines files record command starts and completions, UTC timestamps, durations, result and reason codes, and selected preference flags. Session and request IDs relate an interface command to its backend calls. Cancelled, refused, partial and unknown results remain distinct from success. Startup, tray actions, background update checks and shutdown are included after the data folder is prepared. A start without a completion can indicate that the process exited before reporting its result.
 
 Logs rotate automatically, retaining up to five verified files of 2 MiB each. Unknown files in `Logs` are preserved. Logging errors never repeat or block an application command; an unavailable log folder is reported inline when opened from Help. Logs do not contain raw request bodies, authentication tokens, clipboard text, script contents or exception messages. Keep the corresponding Activity history and `Updates/operations` evidence when investigating a script or update failure.

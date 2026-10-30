@@ -75,11 +75,12 @@ import {
 } from './storage/data-migration.js';
 import { withDataMoveLease } from './storage/data-move-lease.js';
 import {
-  CommandLog,
+  type CommandLog,
   type CommandLogBoundary,
   type CommandDetails,
   type CommandSource,
 } from './logging/command-log.js';
+import { createCommandLog } from './logging/create-command-log.js';
 import {
   acquirePortableStorageLease,
   type PortableStorageLease,
@@ -316,9 +317,9 @@ export function startManager(): void {
       } catch (error) {
         storageError = safeError(error);
       }
-      // Logs belong beside Profile, so creating them cannot invalidate a fresh profile import.
-      // A pending data move is completed above before any log files are opened or written.
-      if (deployment.mode === 'portable') commandLog = new CommandLog(deployment.dataDirectory);
+      // Logging avoids migration destinations. A pending data move is completed above
+      // before any log files are opened or written.
+      commandLog = createCommandLog(deployment, localAppData);
       process.on('uncaughtExceptionMonitor', (error) => recordFailure('uncaughtException', error));
     } catch (error) {
       storageError = safeError(error);
@@ -853,9 +854,6 @@ export function startManager(): void {
         }
       }
       controller.setSnapshot(await backend.request<ManagerSnapshot>('load', {}));
-      // Installed profiles may still show the migration picker before load. Do not create
-      // their log folder while an empty destination is required for that migration.
-      commandLog ??= new CommandLog(deployment.dataDirectory);
       controller.setConnection('ready');
       if (initialAdoption.descriptor) {
         const result = await backend.request<OperationResult>(

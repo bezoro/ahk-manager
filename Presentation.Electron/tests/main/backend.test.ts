@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CommandLog, type CommandLogBoundary } from '../../src/main/logging/command-log.js';
+import { createCommandLog } from '../../src/main/logging/create-command-log.js';
 import { snapshot as validateSnapshot } from '../../src/shared/validation.js';
 import { BackendClient, MAX_FRAME, UnknownAfterDispatchError } from '../../src/main/backend.js';
 import { snapshot, withHeaderDescription, planId } from './fixtures.js';
@@ -221,6 +222,37 @@ test('backend traces correlate with their UI command and retain protocol error c
   );
   assert.doesNotMatch(text, new RegExp(nonce));
   assert.doesNotMatch(text, /private-protocol-error-secret|parentCreated|hostExecutable|payload/);
+});
+
+test('an installed OS spawn failure is logged before profile initialization and keeps diagnostics available', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-installed-spawn-log-'));
+  const profile = path.join(directory, 'Bezoro', 'AhkManagerElectron');
+  const log = createCommandLog({ mode: 'installed', dataDirectory: profile }, directory);
+  t.after(() => {
+    log.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const f = setup({ commandLog: log, failedSpawn: true });
+  await assert.rejects(
+    log.run('backend', 'start', () => f.client.start()),
+    /spawn ENOENT/,
+  );
+  assert.equal(f.client.exited, true);
+  assert.equal(f.calls.length, 0);
+  assert.equal(log.status().available, true);
+  assert.equal(fs.existsSync(profile), false);
+  log.close();
+  const records = fs.readdirSync(log.directory).flatMap((file) =>
+    fs
+      .readFileSync(path.join(log.directory, file), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)),
+  );
+  assert.equal(
+    records.filter((record) => record.command === 'start' && record.phase === 'error').length,
+    1,
+  );
 });
 test('trusted child proof and hello retain exact FILETIME and revision strings', async () => {
   const { client, calls } = setup();
