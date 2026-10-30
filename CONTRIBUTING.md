@@ -28,6 +28,8 @@ For a substantial change that needs validation before merging, a maintainer appl
 
 Run local checks while iterating and group fixes before requesting another Windows run. Documentation-only follow-ups do not normally need the full suite. **Run workflow** remains available for an explicit validation run. Publication still requires the approved `main` push or trusted PR preview flow described in [UPDATES.md](UPDATES.md).
 
+Apply **ci:hold** to cancel a PR validation that is blocked or no longer useful. That request starts no Windows runners. Unrelated labels neither start nor cancel the suite. Remove the hold label before deliberately requesting the next validation milestone.
+
 ## Frontend
 
 ```powershell

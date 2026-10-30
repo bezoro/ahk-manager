@@ -15,4 +15,10 @@ try {
     $proof = $fixture.Proof
 }
 finally { if ($fixture) { Remove-PortableSigningFixture -Fixture $fixture } }
-$proof | ConvertTo-Json -Depth 8
+$proof['cleanupConfirmed'] = $true
+$summary = $proof | ConvertTo-Json -Depth 8
+$bytes = [Text.UTF8Encoding]::new($false).GetBytes($summary)
+$output = [IO.File]::Open($OutputRoot + '.summary.json', [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+try { $output.Write($bytes, 0, $bytes.Length) }
+finally { $output.Dispose() }
+Write-Host $summary

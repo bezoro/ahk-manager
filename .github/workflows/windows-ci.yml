@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && github.event.label.name != 'ci:windows' && github.event.label.name != 'ci:hold' && 'unrelated-label' || 'validation' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -342,6 +342,13 @@ jobs:
         run: |
           ./tools/Build-PortableTestBaseline.ps1 -FrontendRoot "$env:CI_OUTPUT/frontend" -CandidateApplicationRoot "$env:CI_OUTPUT/installer/win-unpacked" -OutputRoot "$env:CI_OUTPUT/portable-baseline" -Commit $env:AHK_SOURCE_COMMIT
 
+      - name: Verify isolated publisher trust before starting real-app runners
+        id: portable-signing
+        if: ${{ !cancelled() && steps.portable-baseline.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          ./tools/Test-PortableSigningFixture.ps1 -ApplicationRoot "$env:CI_OUTPUT/portable-baseline/application/win-unpacked" -CandidateManifestPath "$env:CI_OUTPUT/installer/ahk-manager-portable-release.json" -BaselineManifestPath "$env:CI_OUTPUT/portable-baseline/package/ahk-manager-portable-release.json" -PublisherPolicyPath "$env:CI_OUTPUT/portable-baseline/package/publisher-policy.json" -OutputRoot "$env:CI_OUTPUT/portable-signing-fixture-tests"
+
       - name: Download the pinned published 1.2.16 installer for recovery tests
         id: baseline-installer
         if: ${{ !cancelled() && steps.installer-build.outcome == 'success' }}
@@ -378,6 +385,10 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/portable-evidence/*.json
             ${{ runner.temp }}/ahk-manager-ci/portable-launcher-tests/*.json
             ${{ runner.temp }}/ahk-manager-ci/portable-baseline/evidence/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-signing-fixture-tests/**/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-signing-fixture-tests/**/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/portable-signing-fixture-tests.stages.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-signing-fixture-tests.summary.json
             ${{ runner.temp }}/ahk-manager-ci/portable-package-validation/*.json
           if-no-files-found: warn
           retention-days: 14

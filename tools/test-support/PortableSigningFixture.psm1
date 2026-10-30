@@ -1,4 +1,6 @@
 #requires -Version 7.0
+# This CA exists only in elevated disposable runners. Machine-root access avoids
+# CurrentUser protected-root dialogs without changing production verification.
 Set-StrictMode -Version Latest
 $script:fixtures = @{}
 
@@ -6,6 +8,79 @@ function Assert-FixtureRunner {
     if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
         throw 'Portable signing fixtures require a disposable GitHub-hosted Windows runner.'
     }
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        if (-not [Security.Principal.WindowsPrincipal]::new($identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Portable signing fixtures require the disposable runner elevated administrative token.' }
+    }
+    finally { $identity.Dispose() }
+}
+
+function Write-FixtureStage($State, [string]$Stage) {
+    $event = [ordered]@{ atUtc = [DateTimeOffset]::UtcNow.ToString('O'); stage = $Stage }
+    $State.Stages.Add($event)
+    [IO.File]::WriteAllText($State.CheckpointPath, (ConvertTo-Json -InputObject $State.Stages.ToArray() -Depth 5), [Text.UTF8Encoding]::new($false))
+    Write-Host ('Portable signing fixture: ' + $Stage)
+}
+
+function Initialize-FixtureTrustWorker {
+    if ('AhkManager.TestSupport.PortableFixtureTrust' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading.Tasks;
+namespace AhkManager.TestSupport {
+    public static class PortableFixtureTrust {
+        public static Task Add(byte[] bytes) {
+            byte[] owned = (byte[])bytes.Clone();
+            return Task.Run(() => Change(owned, true));
+        }
+        public static Task Remove(byte[] bytes) {
+            byte[] owned = (byte[])bytes.Clone();
+            return Task.Run(() => Change(owned, false));
+        }
+        private static void Change(byte[] bytes, bool add) {
+            using (var certificate = X509CertificateLoader.LoadCertificate(bytes))
+            using (var store = new X509Store(StoreName.Root, StoreLocation.LocalMachine)) {
+                if (certificate.HasPrivateKey) throw new CryptographicException("Fixture trust must contain only a public certificate.");
+                store.Open(OpenFlags.ReadWrite);
+                var existing = store.Certificates.Find(X509FindType.FindByThumbprint, certificate.Thumbprint, false);
+                if (add) {
+                    if (existing.Count != 0) {
+                        foreach (var item in existing) item.Dispose();
+                        throw new CryptographicException("The fresh fixture root already exists.");
+                    }
+                    store.Add(certificate);
+                } else {
+                    foreach (var item in existing) {
+                        using (item) {
+                            if (!item.RawData.AsSpan().SequenceEqual(bytes)) throw new CryptographicException("Fixture trust identity changed.");
+                            store.Remove(item);
+                        }
+                    }
+                }
+                var observed = store.Certificates.Find(X509FindType.FindByThumbprint, certificate.Thumbprint, false);
+                try {
+                    if (observed.Count != (add ? 1 : 0)) throw new CryptographicException("Fixture trust mutation was not confirmed.");
+                    if (add && !observed[0].RawData.AsSpan().SequenceEqual(bytes)) throw new CryptographicException("Fixture trust identity changed.");
+                } finally { foreach (var item in observed) item.Dispose(); }
+            }
+        }
+    }
+}
+'@
+}
+
+function Wait-FixtureTrust($State, [Threading.Tasks.Task]$Task, [string]$Operation) {
+    $State.TrustWorker = $Task
+    try {
+        if (-not $Task.Wait(15000)) {
+            Write-FixtureStage $State ($Operation + '-timeout-preserved-for-runner-disposal')
+            throw ('The disposable fixture trust ' + $Operation + ' did not finish in 15 seconds. Its state was preserved for runner disposal.')
+        }
+        $null = $Task.GetAwaiter().GetResult()
+    }
+    finally { if ($Task.IsCompleted) { $State.TrustWorker = $null } }
 }
 
 function Assert-FixturePath([string]$Path) {
@@ -128,16 +203,11 @@ function New-FixtureCertificate($State, [string]$Publisher) {
 }
 
 function Add-FixtureTrust($State) {
-    $publicRoot = [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadCertificate($State.RootDer)
-    $store = [Security.Cryptography.X509Certificates.X509Store]::new([Security.Cryptography.X509Certificates.StoreName]::Root, [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-    try {
-        if ($publicRoot.HasPrivateKey) { throw 'A fixture trust store must never receive a private key.' }
-        $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-        if ($store.Certificates.Find([Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint, $State.RootThumbprint, $false).Count -ne 0) { throw 'The fresh fixture root already exists in the user trust store.' }
-        $State.TrustAttempted = $true
-        $store.Add($publicRoot)
-    }
-    finally { $store.Dispose(); $publicRoot.Dispose() }
+    Initialize-FixtureTrustWorker
+    $State.TrustAttempted = $true
+    Write-FixtureStage $State 'adding-public-root-to-disposable-machine-store'
+    Wait-FixtureTrust $State ([AhkManager.TestSupport.PortableFixtureTrust]::Add($State.RootDer)) 'add'
+    Write-FixtureStage $State 'public-machine-root-added'
 }
 
 function New-FixtureSignature($Certificate, [byte[]]$Manifest, [string]$Output) {
@@ -246,16 +316,20 @@ function New-PortableSigningFixture {
     $temporary = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($env:RUNNER_TEMP)) + [IO.Path]::DirectorySeparatorChar
     if (-not $output.StartsWith($temporary, [StringComparison]::OrdinalIgnoreCase)) { throw 'Signing fixture files must remain inside the disposable runner temporary directory.' }
     $policy = Get-FixturePolicy $ApplicationRoot $PublisherPolicyPath $CandidateManifestPath $BaselineManifestPath
+    $checkpoint = $output + '.stages.json'
+    if (Test-Path -LiteralPath $checkpoint) { throw 'The signing fixture checkpoint file must be fresh.' }
     New-FixtureDirectory $output
     $id = [Guid]::NewGuid().ToString('D')
-    $state = [pscustomobject]@{ Id = $id; Root = $output; RootKey = $null; LeafKey = $null; RootCertificate = $null; LeafCertificate = $null; RootDer = $null; RootThumbprint = $null; TrustAttempted = $false; CrlPath = $null; ProbePath = $null }
+    $state = [pscustomobject]@{ Id = $id; Root = $output; RootKey = $null; LeafKey = $null; RootCertificate = $null; LeafCertificate = $null; RootDer = $null; RootThumbprint = $null; TrustAttempted = $false; TrustWorker = $null; CrlPath = $null; ProbePath = $null; CheckpointPath = $checkpoint; Stages = [Collections.Generic.List[object]]::new() }
     $script:fixtures.Add($id, $state)
     [IO.File]::WriteAllText((Join-Path $output 'fixture-owner.txt'), $id, [Text.UTF8Encoding]::new($false))
     $handle = [pscustomobject]@{ Id = $id; OutputRoot = $output }
     try {
         Add-Type -AssemblyName System.Security.Cryptography.Pkcs
         $publisher = if ($policy.Names.Count) { $policy.Names[0] } else { 'AHK Manager disposable portable CI publisher' }
+        Write-FixtureStage $state 'creating-ephemeral-ca-leaf-and-signed-crl'
         New-FixtureCertificate $state $publisher
+        Write-FixtureStage $state 'ephemeral-ca-leaf-and-signed-crl-created'
         Add-FixtureTrust $state
         $candidateBytes = Read-FixtureBytes $CandidateManifestPath 65536
         $baselineBytes = Read-FixtureBytes $BaselineManifestPath 65536
@@ -263,10 +337,14 @@ function New-PortableSigningFixture {
         $baselineHash = [Convert]::ToHexStringLower([Security.Cryptography.SHA256]::HashData($baselineBytes))
         $candidateSignature = Join-Path $output 'candidate-release.json.p7s'
         $baselineSignature = Join-Path $output 'baseline-release.json.p7s'
+        Write-FixtureStage $state 'signing-exact-tested-manifest-bytes'
         New-FixtureSignature $state.LeafCertificate $candidateBytes $candidateSignature
         New-FixtureSignature $state.LeafCertificate $baselineBytes $baselineSignature
+        Write-FixtureStage $state 'compiling-isolated-read-only-native-probe'
         New-FixtureProbe $state $ApplicationRoot
+        Write-FixtureStage $state 'isolated-native-probe-compiled'
         foreach ($entry in @(@{ Manifest = $CandidateManifestPath; Signature = $candidateSignature; Hash = $candidateHash }, @{ Manifest = $BaselineManifestPath; Signature = $baselineSignature; Hash = $baselineHash })) {
+            Write-FixtureStage $state ('verifying-production-native-manifest-' + $entry.Hash)
             $result = Invoke-FixtureNative $state $entry.Manifest $entry.Signature @($publisher)
             if ($result.ExitCode -ne 0 -or $result.Text -cne ('{"valid":true,"manifestSha256":"' + $entry.Hash + '"}')) {
                 $chainStatus = Get-FixtureChainStatus $state.LeafCertificate
@@ -282,12 +360,18 @@ function New-PortableSigningFixture {
         $changed = Invoke-FixtureNative $state $tampered $candidateSignature @($publisher)
         if ($changed.ExitCode -ne 65 -or $changed.Text -cne '{"valid":false}') { throw 'The production native CMS verifier accepted altered manifest bytes.' }
         if ((Get-FileHash -LiteralPath $CandidateManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $candidateHash -or (Get-FileHash -LiteralPath $BaselineManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $baselineHash) { throw 'Signing fixtures changed a tested manifest.' }
+        Write-FixtureStage $state 'production-native-signature-proofs-complete'
         return [pscustomobject]@{
             Id = $id; OutputRoot = $output; CandidateSignaturePath = $candidateSignature; BaselineSignaturePath = $baselineSignature; PublisherNames = $policy.Names; ProbePublisherName = $publisher
-            Proof = [ordered]@{ fixture = $true; productionNativeCli = $true; publisherPolicyConfigured = $policy.Names.Count -gt 0; sourceCommit = $policy.SourceCommit; publisherPolicySha256 = $policy.PolicySha256; candidateManifestSha256 = $candidateHash; baselineManifestSha256 = $baselineHash; candidateVerified = $true; baselineVerified = $true; alteredManifestRefused = $true; differentPublisherRefused = $true; onlineRevocation = $true; crlDistribution = 'file'; trustScope = 'CurrentUser/Root'; privateKeysPersisted = $false }
+            Proof = [ordered]@{ fixture = $true; productionNativeCli = $true; publisherPolicyConfigured = $policy.Names.Count -gt 0; sourceCommit = $policy.SourceCommit; publisherPolicySha256 = $policy.PolicySha256; candidateManifestSha256 = $candidateHash; baselineManifestSha256 = $baselineHash; candidateVerified = $true; baselineVerified = $true; alteredManifestRefused = $true; differentPublisherRefused = $true; onlineRevocation = $true; crlDistribution = 'file'; trustScope = 'LocalMachine/Root'; trustGuard = 'github-hosted-elevated-disposable-runner'; privateKeysPersisted = $false }
         }
     }
-    catch { $failure = $_; Remove-PortableSigningFixture $handle; throw $failure }
+    catch {
+        $failure = $_
+        try { Remove-PortableSigningFixture $handle }
+        catch { Write-Host ('Portable signing fixture cleanup: ' + $_.Exception.Message) }
+        throw $failure
+    }
 }
 
 function Remove-PortableSigningFixture {
@@ -297,25 +381,20 @@ function Remove-PortableSigningFixture {
     if (-not $script:fixtures.ContainsKey($Fixture.Id)) { return }
     $state = $script:fixtures[$Fixture.Id]
     try {
+        if ($state.TrustWorker -and -not $state.TrustWorker.IsCompleted) {
+            Write-FixtureStage $state 'cleanup-deferred-unobserved-trust-worker'
+            throw 'The disposable fixture trust worker is still active. Its state was preserved for runner disposal.'
+        }
         if ($state.TrustAttempted) {
-            $store = [Security.Cryptography.X509Certificates.X509Store]::new([Security.Cryptography.X509Certificates.StoreName]::Root, [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-            try {
-                $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-                foreach ($certificate in $store.Certificates.Find([Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint, $state.RootThumbprint, $false)) {
-                    try {
-                        if ([Convert]::ToBase64String($certificate.RawData) -cne [Convert]::ToBase64String($state.RootDer)) { throw 'The disposable trust root identity changed before cleanup.' }
-                        $store.Remove($certificate)
-                    }
-                    finally { $certificate.Dispose() }
-                }
-                if ($store.Certificates.Find([Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint, $state.RootThumbprint, $false).Count -ne 0) { throw 'The disposable fixture trust root could not be removed.' }
-            }
-            finally { $store.Dispose() }
+            Write-FixtureStage $state 'removing-owned-public-machine-root'
+            Wait-FixtureTrust $state ([AhkManager.TestSupport.PortableFixtureTrust]::Remove($state.RootDer)) 'remove'
+            Write-FixtureStage $state 'owned-public-machine-root-removed'
         }
         Assert-FixturePath $state.Root
         if ([IO.File]::ReadAllText((Join-Path $state.Root 'fixture-owner.txt')) -cne $state.Id) { throw 'The owned signing fixture directory changed before cleanup.' }
         foreach ($entry in Get-ChildItem -LiteralPath $state.Root -Force -Recurse) { if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A redirected signing fixture file was preserved during cleanup.' } }
         [IO.Directory]::Delete($state.Root, $true)
+        Write-FixtureStage $state 'owned-fixture-files-removed'
     }
     finally {
         foreach ($resource in @($state.LeafCertificate, $state.RootCertificate, $state.LeafKey, $state.RootKey)) { if ($resource) { $resource.Dispose() } }
