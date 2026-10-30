@@ -20,7 +20,9 @@ internal static class StartupTaskSchedulerChecks
             throw new PlatformNotSupportedException(
                 "The Task Scheduler round trip requires Windows."
             );
-        using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
+        using var identity = WindowsIdentity.GetCurrent(
+            TokenAccessLevels.Query | TokenAccessLevels.Duplicate
+        );
         string sid =
             identity.User?.Value ?? throw new InvalidOperationException("User SID unavailable.");
         string account = identity.Name;

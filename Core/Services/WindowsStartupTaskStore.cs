@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -282,7 +284,9 @@ internal static class WindowsStartupTaskStore
         try
         {
             string? sid = IsSidText(identity) ? identity : resolveAccountSid(identity);
-            return sid is null ? null : new SecurityIdentifier(sid).Value;
+            return sid is not null && TryDecodeSid(sid, out byte[] binary)
+                ? new SecurityIdentifier(binary, 0).Value
+                : null;
         }
         catch (Exception error)
             when (error
@@ -305,6 +309,67 @@ internal static class WindowsStartupTaskStore
             @"\AS-[0-9]+(?:-|\z)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
         );
+
+    // Windows' string SID conversion can accept overflowing numeric fields.
+    // Decode bounded values first so canonicalization cannot change their meaning.
+    internal static bool TryDecodeSid(string? text, out byte[] binary)
+    {
+        binary = [];
+        if (string.IsNullOrEmpty(text) || text.Length > 512 || text.Any(char.IsControl))
+            return false;
+        string[] parts = text.Split('-');
+        if (
+            parts.Length is < 3 or > 18
+            || parts[0] is not ("S" or "s")
+            || !byte.TryParse(
+                parts[1],
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out byte revision
+            )
+            || revision != 1
+        )
+            return false;
+        string authorityText = parts[2];
+        ulong authority;
+        bool authorityRead = authorityText.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? ulong.TryParse(
+                authorityText.AsSpan(2),
+                NumberStyles.AllowHexSpecifier,
+                CultureInfo.InvariantCulture,
+                out authority
+            )
+            : ulong.TryParse(
+                authorityText,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out authority
+            );
+        if (!authorityRead || authority > 0xFFFFFFFFFFFF)
+            return false;
+        var subauthorities = new uint[parts.Length - 3];
+        for (int index = 0; index < subauthorities.Length; index++)
+            if (
+                !uint.TryParse(
+                    parts[index + 3],
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out subauthorities[index]
+                )
+            )
+                return false;
+        binary = new byte[8 + 4 * subauthorities.Length];
+        binary[0] = revision;
+        binary[1] = checked((byte)subauthorities.Length);
+        for (int index = 0; index < 6; index++)
+            binary[index + 2] = (byte)(authority >> ((5 - index) * 8) & 0xFF);
+        for (int index = 0; index < subauthorities.Length; index++)
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                binary.AsSpan(8 + 4 * index, 4),
+                subauthorities[index]
+            );
+        return true;
+    }
 
     static string AccountSid(string account) =>
         ((SecurityIdentifier)new NTAccount(account).Translate(typeof(SecurityIdentifier))).Value;

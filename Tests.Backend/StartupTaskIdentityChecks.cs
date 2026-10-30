@@ -19,6 +19,7 @@ internal static class StartupTaskIdentityChecks
 
     internal static async Task RunAsync(string root, Action<bool, string> check)
     {
+        CheckSidPolicy(check);
         var adapter = new Adapter();
         var startup = new UserStartupService(
             adapter,
@@ -121,6 +122,29 @@ internal static class StartupTaskIdentityChecks
             direct.UserLogonOnly && direct.UserSid == UserSid,
             "literal SIDs need no account lookup"
         );
+        var maximumRid = WindowsStartupTaskStore.Parse(
+            Xml("S-1-5-4294967295", "S-1-5-4294967295"),
+            _ =>
+                throw new InvalidOperationException(
+                    "A bounded literal SID needs no account lookup."
+                )
+        );
+        check(
+            maximumRid.UserLogonOnly && maximumRid.UserSid == "S-1-5-4294967295",
+            "the maximum UInt32 subauthority remains a valid literal SID"
+        );
+        var decimalAuthority = WindowsStartupTaskStore.Parse(
+            Xml("S-1-281474976710655-1", "S-1-281474976710655-1")
+        );
+        var hexAuthority = WindowsStartupTaskStore.Parse(
+            Xml("S-1-0xFFFFFFFFFFFF-1", "S-1-0xFFFFFFFFFFFF-1")
+        );
+        check(
+            decimalAuthority.UserLogonOnly
+                && hexAuthority.UserLogonOnly
+                && decimalAuthority.UserSid == hexAuthority.UserSid,
+            "decimal and hexadecimal 48-bit authorities canonicalize to the same exact SID"
+        );
 
         foreach (
             var pair in new[]
@@ -171,7 +195,11 @@ internal static class StartupTaskIdentityChecks
                     !parsed.UserLogonOnly
                         && parsed.Command.Length == 0
                         && parsed.Fingerprint == Hash(xml),
-                    "malformed principal or trigger identity fails closed while retaining the XML fingerprint"
+                    "malformed "
+                        + (principal ? "principal" : "trigger")
+                        + " identity fails closed with its XML fingerprint: '"
+                        + malformed.Replace("\t", @"\t")
+                        + "'"
                 );
             }
         }
@@ -205,7 +233,16 @@ internal static class StartupTaskIdentityChecks
                 );
             }
         }
-        foreach (string? invalidResult in new[] { null, "", "not-a-sid", "S-1-5-invalid" })
+        foreach (
+            string? invalidResult in new[]
+            {
+                null,
+                "",
+                "not-a-sid",
+                "S-1-5-invalid",
+                "S-1-5-4294967296",
+            }
+        )
         {
             var parsed = WindowsStartupTaskStore.Parse(Xml(Account, UserSid), _ => invalidResult);
             check(
@@ -264,6 +301,55 @@ internal static class StartupTaskIdentityChecks
                 && adapter.Task == equivalent
                 && adapter.Writes == 0,
             "a concurrent equivalent account rewrite cannot bypass the observed XML fingerprint guard"
+        );
+    }
+
+    static void CheckSidPolicy(Action<bool, string> check)
+    {
+        foreach (
+            var sample in new[]
+            {
+                (Text: "S-1-5-0", Valid: true),
+                (Text: "S-1-5-4294967295", Valid: true),
+                (Text: "S-1-5-4294967296", Valid: false),
+                (Text: "S-1-5-999999999999999999999999999999999", Valid: false),
+                (Text: "S-1-281474976710655-1", Valid: true),
+                (Text: "S-1-281474976710656-1", Valid: false),
+                (Text: "S-1-0xFFFFFFFFFFFF-1", Valid: true),
+                (Text: "S-1-0x1000000000000-1", Valid: false),
+                (Text: "S-1-0xFFFFFFFFFFFFFFFFF-1", Valid: false),
+                (Text: "S-2-5-1", Valid: false),
+                (Text: "S-256-5-1", Valid: false),
+                (Text: "S-1-5--1", Valid: false),
+                (Text: "S-1-5-+1", Valid: false),
+                (Text: "S-1-5-0x1", Valid: false),
+                (Text: "S-1-5-1 ", Valid: false),
+                (Text: "S-1\0-5-1", Valid: false),
+                (Text: "S-1-5\0-1", Valid: false),
+                (Text: "S-1-0x5\0-1", Valid: false),
+                (Text: "S-1-5-1\0", Valid: false),
+                (Text: "S-1-5-1-", Valid: false),
+                (
+                    Text: "S-1-5-" + string.Join('-', Enumerable.Repeat("4294967295", 15)),
+                    Valid: true
+                ),
+                (Text: "S-1-5-" + string.Join('-', Enumerable.Repeat("1", 16)), Valid: false),
+            }
+        )
+        {
+            bool valid = WindowsStartupTaskStore.TryDecodeSid(sample.Text, out byte[] binary);
+            check(
+                valid == sample.Valid && (valid || binary.Length == 0),
+                "SID numeric bounds and syntax are enforced before Windows conversion: "
+                    + sample.Text.Replace("\0", "\\0", StringComparison.Ordinal)
+            );
+        }
+        check(
+            WindowsStartupTaskStore.TryDecodeSid(
+                "S-1-0x010203040506-4294967295",
+                out byte[] encoded
+            ) && encoded.SequenceEqual(new byte[] { 1, 1, 1, 2, 3, 4, 5, 6, 255, 255, 255, 255 }),
+            "binary SID encoding preserves big-endian 48-bit authority and little-endian UInt32 subauthorities"
         );
     }
 

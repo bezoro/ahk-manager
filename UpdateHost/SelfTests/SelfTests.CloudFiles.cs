@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using Bezoro.AhkManager.Core.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 
@@ -34,6 +35,8 @@ internal static partial class SelfTests
             return;
         }
         CloudFilesNative.RequireSuccess(registration, "register the isolated Cloud Files root");
+        string onDemandDirectory = Path.Combine(syncRoot, "on-demand-directory");
+        bool onDemandConverted = false;
         try
         {
             CloudFilesNative.VerifyRegistration(syncRoot, nonce, expected[""]);
@@ -65,11 +68,32 @@ internal static partial class SelfTests
             )
                 CloudFilesNative.Convert(Path.Combine(syncRoot, path), dehydrate: false);
 
+            _ = CloudFilesNative.Observe("fully-populated-app", layout.Application);
+            _ = CloudFilesNative.Observe("fully-populated-data", layout.Data);
+            var marker = CloudFilesNative.Observe("hydrated-marker", layout.Marker);
+
+            // Fully populated folders can use a normal representation. Create
+            // a separate on-demand folder to exercise the actual Cloud tag;
+            // never enumerate it until its owned cleanup marks it populated.
+            Directory.CreateDirectory(onDemandDirectory);
+            expected.Add("on-demand-directory", CloudFilesNative.Identity(onDemandDirectory));
+            CloudFilesNative.Convert(onDemandDirectory, dehydrate: false, onDemand: true);
+            onDemandConverted = true;
+            var directory = CloudFilesNative.Observe("on-demand-directory", onDemandDirectory);
             check(
-                CloudFilesNative.IsCloud(layout.Application)
-                    && CloudFilesNative.IsCloud(layout.Data)
-                    && CloudFilesNative.IsCloud(layout.Marker),
-                "CFAPI creates actual Cloud-tagged application, data and regular file entries"
+                directory.ActualCloudTag && (directory.Attributes & 0x10) != 0,
+                "CFAPI creates an actual Cloud-tagged on-demand directory"
+            );
+            WindowsStoragePath.VerifyEntry(onDemandDirectory);
+            using (var retainedDirectory = new DirectoryLease([onDemandDirectory]))
+                check(
+                    true,
+                    "native namespace leases retain a real Cloud-tagged directory without population"
+                );
+
+            check(
+                marker.ManagedAndHydrated,
+                "CFAPI confirms the regular fixture file is cloud-managed and fully hydrated"
             );
             WindowsStoragePath.VerifyEntry(layout.Marker);
             WindowsStoragePath.RequireNtfs(layout.Root);
@@ -117,10 +141,8 @@ internal static partial class SelfTests
             File.WriteAllText(offline, "Disposable offline Cloud Files test content.");
             expected.Add("offline.txt", CloudFilesNative.Identity(offline));
             CloudFilesNative.Convert(offline, dehydrate: true);
-            check(
-                CloudFilesNative.IsCloud(offline),
-                "CFAPI creates an actual dehydrated Cloud file"
-            );
+            var unavailableFile = CloudFilesNative.Observe("dehydrated-file", offline);
+            check(unavailableFile.ActualCloudTag, "CFAPI creates an actual dehydrated Cloud file");
             StorageRefused(
                 () => WindowsStoragePath.VerifyEntry(offline),
                 StoragePathFailure.CloudFileUnavailable,
@@ -179,6 +201,11 @@ internal static partial class SelfTests
             // Unregistration can delete dehydrated children. Never apply it to
             // an unfamiliar registration, replaced entry, or unexpected file.
             CloudFilesNative.VerifyRegistration(syncRoot, nonce, expected[""]);
+            if (onDemandConverted)
+                CloudFilesNative.CompleteDirectory(
+                    onDemandDirectory,
+                    expected["on-demand-directory"]
+                );
             CloudFilesNative.VerifyTree(syncRoot, expected);
             CloudFilesNative.RequireSuccess(
                 CloudFilesNative.Unregister(syncRoot),
@@ -215,6 +242,9 @@ internal static partial class SelfTests
                         "CfGetPlatformInfo",
                         "CfRegisterSyncRoot",
                         "CfConvertToPlaceholder",
+                        "CfUpdatePlaceholder",
+                        "CfGetPlaceholderInfo",
+                        "CfGetPlaceholderStateFromAttributeTag",
                         "CfGetSyncRootInfoByHandle",
                         "CfUnregisterSyncRoot",
                     }
@@ -277,7 +307,7 @@ internal static partial class SelfTests
                 {
                     StructSize = (uint)Marshal.SizeOf<Policies>(),
                     HydrationPrimary = 2,
-                    PopulationPrimary = 3,
+                    PopulationPrimary = 2,
                 };
                 return RegisterSyncRoot(root, ref registration, ref policies, 6);
             }
@@ -287,7 +317,7 @@ internal static partial class SelfTests
             }
         }
 
-        internal static void Convert(string path, bool dehydrate)
+        internal static void Convert(string path, bool dehydrate, bool onDemand = false)
         {
             using var handle = Open(path, 0xC0000000, dehydrate ? 0u : 7u, 0, 3, 0x02200000, 0);
             if (handle.IsInvalid)
@@ -304,7 +334,9 @@ internal static partial class SelfTests
                         handle,
                         pin.AddrOfPinnedObject(),
                         (uint)identity.Length,
-                        dehydrate ? 3u : 1u,
+                        dehydrate ? 3u
+                            : onDemand ? 5u
+                            : 1u,
                         0,
                         0
                     ),
@@ -315,6 +347,26 @@ internal static partial class SelfTests
             {
                 pin.Free();
             }
+        }
+
+        internal static void CompleteDirectory(string path, Native.FileStamp expected)
+        {
+            using var handle = Open(path, 0xC0000000, 3, 0, 3, 0x02200000, 0);
+            if (
+                handle.IsInvalid
+                || !Native.GetFileInformationByHandle(handle, out var actual)
+                || !SameIdentity(expected, actual)
+                || (actual.Attributes & 0x10) == 0
+            )
+                throw new IOException(
+                    "The on-demand fixture directory changed; cleanup was refused."
+                );
+            WindowsStoragePath.VerifyHandle(handle);
+            RequireSuccess(
+                UpdatePlaceholder(handle, 0, 0, 0, 0, 0, 0x10, 0, 0),
+                "mark the exact owned Cloud directory fully populated before cleanup"
+            );
+            Console.WriteLine("CFAPI stage: owned on-demand directory marked fully populated");
         }
 
         internal static Native.FileStamp Identity(string path)
@@ -331,15 +383,90 @@ internal static partial class SelfTests
             && expected.IndexLow == actual.IndexLow
             && (expected.Attributes & 0x10) == (actual.Attributes & 0x10);
 
-        internal static bool IsCloud(string path)
+        internal sealed record Observation(
+            uint Attributes,
+            uint Tag,
+            uint RawTag,
+            int RawError,
+            uint State,
+            int PlaceholderResult,
+            long OnDiskBytes,
+            long LogicalBytes
+        )
+        {
+            internal bool ActualCloudTag =>
+                (Attributes & 0x400) != 0 && WindowsStoragePath.IsCloudTag(Tag)
+                || RawError == 0 && WindowsStoragePath.IsCloudTag(RawTag);
+            internal bool ManagedAndHydrated =>
+                PlaceholderResult >= 0
+                && (Attributes & (0x1000 | 0x400000)) == 0
+                && OnDiskBytes >= LogicalBytes
+                && LogicalBytes > 0;
+        }
+
+        internal static Observation Observe(string label, string path)
         {
             // The unavailable-file probe must inspect its tag without asking
             // the production availability policy to accept that entry.
             using var handle = Open(path, 0x80, 7, 0, 3, 0x02200000, 0);
-            if (handle.IsInvalid || !GetAttributeTag(handle, 9, out var information, 8))
+            if (
+                handle.IsInvalid
+                || !GetAttributeTag(handle, 9, out var information, 8)
+                || !Native.GetFileInformationByHandle(handle, out var identity)
+            )
                 throw new IOException("Cloud Files fixture tags could not be inspected.");
-            return (information.Attributes & 0x400) != 0
-                && WindowsStoragePath.IsCloudTag(information.Tag);
+            byte[] reparse = new byte[16384];
+            bool raw = GetReparsePoint(
+                handle,
+                0x900A8,
+                0,
+                0,
+                reparse,
+                (uint)reparse.Length,
+                out uint rawLength,
+                0
+            );
+            int rawError = raw ? 0 : Marshal.GetLastWin32Error();
+            if (raw && rawLength < 8)
+                throw new IOException("The Cloud Files reparse observation was truncated.");
+            byte[] placeholder = new byte[4096];
+            int result = GetPlaceholderInfo(
+                handle,
+                1,
+                placeholder,
+                (uint)placeholder.Length,
+                out uint returned
+            );
+            if (result >= 0 && returned < 60)
+                throw new IOException("The Cloud Files placeholder observation was truncated.");
+            var observation = new Observation(
+                information.Attributes,
+                information.Tag,
+                raw ? BitConverter.ToUInt32(reparse) : 0,
+                rawError,
+                GetPlaceholderState(information.Attributes, information.Tag),
+                result,
+                result >= 0 ? BitConverter.ToInt64(placeholder) : -1,
+                (long)(((ulong)identity.SizeHigh << 32) | identity.SizeLow)
+            );
+            Console.WriteLine(
+                "CFAPI observation: "
+                    + JsonSerializer.Serialize(
+                        new
+                        {
+                            label,
+                            attributes = observation.Attributes.ToString("X8"),
+                            metadataTag = observation.Tag.ToString("X8"),
+                            rawTag = observation.RawTag.ToString("X8"),
+                            rawError = observation.RawError,
+                            state = observation.State.ToString("X8"),
+                            placeholderResult = observation.PlaceholderResult.ToString("X8"),
+                            onDiskBytes = observation.OnDiskBytes,
+                            logicalBytes = observation.LogicalBytes,
+                        }
+                    )
+            );
+            return observation;
         }
 
         internal static void VerifyRegistration(
@@ -490,6 +617,34 @@ internal static partial class SelfTests
             nint overlapped
         );
 
+        [DllImport("CldApi.dll", EntryPoint = "CfUpdatePlaceholder")]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        static extern int UpdatePlaceholder(
+            SafeFileHandle handle,
+            nint metadata,
+            nint identity,
+            uint identityLength,
+            nint ranges,
+            uint rangeCount,
+            uint flags,
+            nint usn,
+            nint overlapped
+        );
+
+        [DllImport("CldApi.dll", EntryPoint = "CfGetPlaceholderInfo")]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        static extern int GetPlaceholderInfo(
+            SafeFileHandle handle,
+            int kind,
+            [Out] byte[] information,
+            uint length,
+            out uint returned
+        );
+
+        [DllImport("CldApi.dll", EntryPoint = "CfGetPlaceholderStateFromAttributeTag")]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        static extern uint GetPlaceholderState(uint attributes, uint tag);
+
         [DllImport("CldApi.dll", EntryPoint = "CfGetSyncRootInfoByHandle")]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         static extern int GetSyncRootInfo(
@@ -531,6 +686,19 @@ internal static partial class SelfTests
             int kind,
             out AttributeTag information,
             uint length
+        );
+
+        [DllImport("kernel32.dll", EntryPoint = "DeviceIoControl", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool GetReparsePoint(
+            SafeFileHandle handle,
+            uint control,
+            nint input,
+            uint inputLength,
+            [Out] byte[] output,
+            uint outputLength,
+            out uint returned,
+            nint overlapped
         );
     }
 }
