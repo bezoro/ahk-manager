@@ -16,6 +16,10 @@ internal static partial class SelfTests
             return;
         }
 
+        // This test must see placeholders even if Windows selects a disguised
+        // compatibility view for this executable. The process scope survives
+        // asynchronous snapshot continuations and is restored on every exit.
+        using var processExposure = CloudFilesNative.ExposeProcess();
         string syncRoot = Path.Combine(root, "cloud-files-" + Guid.NewGuid().ToString("N"));
         SnapshotSecurity.CreatePrivateDirectory(syncRoot);
         WindowsStoragePath.RequireNtfs(syncRoot);
@@ -39,153 +43,170 @@ internal static partial class SelfTests
         bool onDemandConverted = false;
         try
         {
-            CloudFilesNative.VerifyRegistration(syncRoot, nonce, expected[""]);
-            var layout = CreatePortableFixture(Path.Combine(syncRoot, "Manager"), "1.2.0");
-            var ownedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                layout.Root,
-                layout.Marker,
-                Path.Combine(layout.Root, PortableLayout.Descriptor),
-                layout.Data,
-                layout.Updates,
-            };
-            foreach (var file in PortableFixtureDescriptor("1.2.0").Files)
-                for (
-                    string? path = Path.Combine(layout.Root, file.Path.Replace('/', '\\'));
-                    path is not null && PortableLayout.SameOrChild(path, layout.Root);
-                    path = Path.GetDirectoryName(path)
-                )
-                    ownedPaths.Add(path);
-            foreach (string path in ownedPaths)
-                expected.Add(Path.GetRelativePath(syncRoot, path), CloudFilesNative.Identity(path));
-
-            // Ordinary local bytes are converted without dehydration. No provider
-            // connection, network access or hydration callback is involved.
-            foreach (
-                string path in expected
-                    .Keys.Where(path => path.Length > 0)
-                    .OrderByDescending(path => path.Length)
-            )
-                CloudFilesNative.Convert(Path.Combine(syncRoot, path), dehydrate: false);
-
-            _ = CloudFilesNative.Observe("fully-populated-app", layout.Application);
-            _ = CloudFilesNative.Observe("fully-populated-data", layout.Data);
-            var marker = CloudFilesNative.Observe("hydrated-marker", layout.Marker);
-
-            // Fully populated folders can use a normal representation. Create
-            // a separate on-demand folder to exercise the actual Cloud tag;
-            // never enumerate it until its owned cleanup marks it populated.
-            Directory.CreateDirectory(onDemandDirectory);
-            expected.Add("on-demand-directory", CloudFilesNative.Identity(onDemandDirectory));
-            CloudFilesNative.Convert(onDemandDirectory, dehydrate: false, onDemand: true);
-            onDemandConverted = true;
-            var directory = CloudFilesNative.Observe("on-demand-directory", onDemandDirectory);
-            check(
-                directory.ActualCloudTag && (directory.Attributes & 0x10) != 0,
-                "CFAPI creates an actual Cloud-tagged on-demand directory"
-            );
-            WindowsStoragePath.VerifyEntry(onDemandDirectory);
-            using (var retainedDirectory = new DirectoryLease([onDemandDirectory]))
-                check(
-                    true,
-                    "native namespace leases retain a real Cloud-tagged directory without population"
-                );
-
-            check(
-                marker.ManagedAndHydrated,
-                "CFAPI confirms the regular fixture file is cloud-managed and fully hydrated"
-            );
-            WindowsStoragePath.VerifyEntry(layout.Marker);
-            WindowsStoragePath.RequireNtfs(layout.Root);
-            WindowsStoragePath.RequireNtfs(layout.Data);
-            using (var namespaces = new DirectoryLease([layout.Root, layout.Data]))
-            using (var inventory = new PortableInventory(layout.Root))
-            {
-                check(
-                    inventory.Files.Count == PortablePayload.RequiredFiles.Length,
-                    "native inventory verifies actual hydrated Cloud files through retained handles"
-                );
-                string executable = Path.Combine(layout.Application, PortableLayout.Executable);
-                using var file = FileLease.Open(executable, 4096);
-                check(
-                    file.Read(4096)
-                        .SequenceEqual(PortableBytes("1.2.0", "App/" + PortableLayout.Executable)),
-                    "a no-follow retained Cloud metadata handle permits normal verified data reads"
-                );
-                bool renameBlocked = false;
-                try
-                {
-                    File.Move(executable, executable + ".moved");
-                }
-                catch (IOException failure) when ((failure.HResult & 0xFFFF) == 32)
-                {
-                    renameBlocked = true;
-                }
-                check(
-                    renameBlocked,
-                    "a hydrated Cloud file remains protected against namespace swaps"
-                );
-            }
-
+            PortableLayout layout;
             string backup = Path.Combine(root, "cloud-snapshot-" + Guid.NewGuid().ToString("N"));
-            var snapshot = await InstallationSnapshot
-                .Copy(layout.Application, backup)
-                .ConfigureAwait(false);
-            InstallationSnapshot.Verify(backup, snapshot);
-            check(
-                snapshot.Files.Length > 0,
-                "native recovery snapshots preserve the verified bytes of Cloud-tagged files"
-            );
-
-            string offline = Path.Combine(syncRoot, "offline.txt");
-            File.WriteAllText(offline, "Disposable offline Cloud Files test content.");
-            expected.Add("offline.txt", CloudFilesNative.Identity(offline));
-            CloudFilesNative.Convert(offline, dehydrate: true);
-            var unavailableFile = CloudFilesNative.Observe("dehydrated-file", offline);
-            check(unavailableFile.ActualCloudTag, "CFAPI creates an actual dehydrated Cloud file");
-            StorageRefused(
-                () => WindowsStoragePath.VerifyEntry(offline),
-                StoragePathFailure.CloudFileUnavailable,
-                check,
-                "unavailable Cloud files are refused by metadata before any data recall"
-            );
-            StorageRefused(
-                () =>
+            Task<SnapshotManifest> copying;
+            using (var threadExposure = CloudFilesNative.ExposeThread())
+            {
+                CloudFilesNative.VerifyRegistration(syncRoot, nonce, expected[""]);
+                layout = CreatePortableFixture(Path.Combine(syncRoot, "Manager"), "1.2.0");
+                var ownedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    using var file = FileLease.Open(offline, 4096);
-                },
-                StoragePathFailure.CloudFileUnavailable,
-                check,
-                "native file leases refuse an actual offline placeholder without a provider"
-            );
+                    layout.Root,
+                    layout.Marker,
+                    Path.Combine(layout.Root, PortableLayout.Descriptor),
+                    layout.Data,
+                    layout.Updates,
+                };
+                foreach (var file in PortableFixtureDescriptor("1.2.0").Files)
+                    for (
+                        string? path = Path.Combine(layout.Root, file.Path.Replace('/', '\\'));
+                        path is not null && PortableLayout.SameOrChild(path, layout.Root);
+                        path = Path.GetDirectoryName(path)
+                    )
+                        ownedPaths.Add(path);
+                foreach (string path in ownedPaths)
+                    expected.Add(
+                        Path.GetRelativePath(syncRoot, path),
+                        CloudFilesNative.Identity(path)
+                    );
 
-            string link = Path.Combine(syncRoot, "redirected.txt");
-            bool linkCreated = false;
-            try
-            {
-                File.CreateSymbolicLink(link, layout.Marker);
-                linkCreated = true;
-            }
-            catch (IOException failure) when ((failure.HResult & 0xFFFF) == 1314)
-            {
-                Console.WriteLine(
-                    "SKIP native Cloud symlink probe: ERROR_PRIVILEGE_NOT_HELD (1314)"
+                // Ordinary local bytes are converted without dehydration. No provider
+                // connection, network access or hydration callback is involved.
+                foreach (
+                    string path in expected
+                        .Keys.Where(path => path.Length > 0)
+                        .OrderByDescending(path => path.Length)
+                )
+                    CloudFilesNative.Convert(Path.Combine(syncRoot, path), dehydrate: false);
+
+                _ = CloudFilesNative.Observe("fully-populated-app", layout.Application);
+                _ = CloudFilesNative.Observe("fully-populated-data", layout.Data);
+                var marker = CloudFilesNative.Observe("hydrated-marker", layout.Marker);
+
+                // Fully populated folders can use a normal representation. Create
+                // a separate on-demand folder to exercise the actual Cloud tag;
+                // never enumerate it until its owned cleanup marks it populated.
+                Directory.CreateDirectory(onDemandDirectory);
+                expected.Add("on-demand-directory", CloudFilesNative.Identity(onDemandDirectory));
+                CloudFilesNative.Convert(onDemandDirectory, dehydrate: false, onDemand: true);
+                onDemandConverted = true;
+                var directory = CloudFilesNative.Observe("on-demand-directory", onDemandDirectory);
+                check(
+                    directory.ActualCloudTag && (directory.Attributes & 0x10) != 0,
+                    "CFAPI creates an actual Cloud-tagged on-demand directory"
                 );
-            }
-            if (linkCreated)
-            {
-                try
+                WindowsStoragePath.VerifyEntry(onDemandDirectory);
+                using (var retainedDirectory = new DirectoryLease([onDemandDirectory]))
+                    check(
+                        true,
+                        "native namespace leases retain a real Cloud-tagged directory without population"
+                    );
+
+                check(
+                    marker.ManagedAndHydrated,
+                    "CFAPI confirms the regular fixture file is cloud-managed and fully hydrated"
+                );
+                WindowsStoragePath.VerifyEntry(layout.Marker);
+                WindowsStoragePath.RequireNtfs(layout.Root);
+                WindowsStoragePath.RequireNtfs(layout.Data);
+                using (var namespaces = new DirectoryLease([layout.Root, layout.Data]))
+                using (var inventory = new PortableInventory(layout.Root))
                 {
-                    StorageRefused(
-                        () => WindowsStoragePath.VerifyEntry(link),
-                        StoragePathFailure.RedirectedPath,
-                        check,
-                        "Cloud support still refuses an actual symbolic link"
+                    check(
+                        inventory.Files.Count == PortablePayload.RequiredFiles.Length,
+                        "native inventory verifies actual hydrated Cloud files through retained handles"
+                    );
+                    string executable = Path.Combine(layout.Application, PortableLayout.Executable);
+                    using var file = FileLease.Open(executable, 4096);
+                    check(
+                        file.Read(4096)
+                            .SequenceEqual(
+                                PortableBytes("1.2.0", "App/" + PortableLayout.Executable)
+                            ),
+                        "a no-follow retained Cloud metadata handle permits normal verified data reads"
+                    );
+                    bool renameBlocked = false;
+                    try
+                    {
+                        File.Move(executable, executable + ".moved");
+                    }
+                    catch (IOException failure) when ((failure.HResult & 0xFFFF) == 32)
+                    {
+                        renameBlocked = true;
+                    }
+                    check(
+                        renameBlocked,
+                        "a hydrated Cloud file remains protected against namespace swaps"
                     );
                 }
-                finally
+
+                // Copy pins and validates the source synchronously before its
+                // first await. Never carry a thread compatibility scope across it.
+                copying = InstallationSnapshot.Copy(layout.Application, backup);
+            }
+            var snapshot = await copying.ConfigureAwait(false);
+            using (var threadExposure = CloudFilesNative.ExposeThread())
+            {
+                InstallationSnapshot.Verify(backup, snapshot);
+                check(
+                    snapshot.Files.Length > 0,
+                    "native recovery snapshots preserve the verified bytes of Cloud-tagged files"
+                );
+
+                string offline = Path.Combine(syncRoot, "offline.txt");
+                File.WriteAllText(offline, "Disposable offline Cloud Files test content.");
+                expected.Add("offline.txt", CloudFilesNative.Identity(offline));
+                CloudFilesNative.Convert(offline, dehydrate: true);
+                var unavailableFile = CloudFilesNative.Observe("dehydrated-file", offline);
+                check(
+                    unavailableFile.ActualCloudTag,
+                    "CFAPI creates an actual dehydrated Cloud file"
+                );
+                StorageRefused(
+                    () => WindowsStoragePath.VerifyEntry(offline),
+                    StoragePathFailure.CloudFileUnavailable,
+                    check,
+                    "unavailable Cloud files are refused by metadata before any data recall"
+                );
+                StorageRefused(
+                    () =>
+                    {
+                        using var file = FileLease.Open(offline, 4096);
+                    },
+                    StoragePathFailure.CloudFileUnavailable,
+                    check,
+                    "native file leases refuse an actual offline placeholder without a provider"
+                );
+
+                string link = Path.Combine(syncRoot, "redirected.txt");
+                bool linkCreated = false;
+                try
                 {
-                    File.Delete(link);
+                    File.CreateSymbolicLink(link, layout.Marker);
+                    linkCreated = true;
+                }
+                catch (IOException failure) when ((failure.HResult & 0xFFFF) == 1314)
+                {
+                    Console.WriteLine(
+                        "SKIP native Cloud symlink probe: ERROR_PRIVILEGE_NOT_HELD (1314)"
+                    );
+                }
+                if (linkCreated)
+                {
+                    try
+                    {
+                        StorageRefused(
+                            () => WindowsStoragePath.VerifyEntry(link),
+                            StoragePathFailure.RedirectedPath,
+                            check,
+                            "Cloud support still refuses an actual symbolic link"
+                        );
+                    }
+                    finally
+                    {
+                        File.Delete(link);
+                    }
                 }
             }
         }
@@ -198,6 +219,7 @@ internal static partial class SelfTests
         }
         finally
         {
+            using var threadExposure = CloudFilesNative.ExposeThread();
             // Unregistration can delete dehydrated children. Never apply it to
             // an unfamiliar registration, replaced entry, or unexpected file.
             CloudFilesNative.VerifyRegistration(syncRoot, nonce, expected[""]);
@@ -220,6 +242,119 @@ internal static partial class SelfTests
 
     static class CloudFilesNative
     {
+        internal static PlaceholderModeScope ExposeProcess()
+        {
+            if (
+                !NativeLibrary.TryLoad(
+                    "ntdll.dll",
+                    typeof(SelfTests).Assembly,
+                    DllImportSearchPath.System32,
+                    out nint library
+                )
+            )
+                throw new IOException(
+                    "System32/ntdll.dll is unavailable for the Cloud Files test."
+                );
+            try
+            {
+                foreach (
+                    string export in new[]
+                    {
+                        "RtlQueryProcessPlaceholderCompatibilityMode",
+                        "RtlSetProcessPlaceholderCompatibilityMode",
+                        "RtlQueryThreadPlaceholderCompatibilityMode",
+                        "RtlSetThreadPlaceholderCompatibilityMode",
+                    }
+                )
+                    if (!NativeLibrary.TryGetExport(library, export, out _))
+                        throw new IOException(
+                            "The Cloud Files compatibility export is unavailable: " + export
+                        );
+            }
+            finally
+            {
+                NativeLibrary.Free(library);
+            }
+            return new PlaceholderModeScope(process: true);
+        }
+
+        internal static PlaceholderModeScope ExposeThread() => new(process: false);
+
+        // Only process scopes may surround asynchronous work. Thread scopes are
+        // confined to synchronous blocks and verify their disposal thread.
+        internal sealed class PlaceholderModeScope : IDisposable
+        {
+            readonly bool process;
+            readonly int thread;
+            readonly sbyte previous;
+            bool disposed;
+
+            internal PlaceholderModeScope(bool process)
+            {
+                this.process = process;
+                thread = Environment.CurrentManagedThreadId;
+                LogModes(process ? "process-before" : "thread-before");
+                previous = Set(2);
+                if (previous < 0)
+                    throw new IOException(
+                        "The Cloud Files placeholder compatibility mode could not be set."
+                    );
+                try
+                {
+                    if (Current() != 2)
+                        throw new IOException("The Cloud Files placeholder view was not exposed.");
+                    LogModes(process ? "process-exposed" : "thread-exposed");
+                }
+                catch
+                {
+                    _ = Set(previous);
+                    throw;
+                }
+            }
+
+            sbyte Current() => process ? QueryProcessMode() : QueryThreadMode();
+
+            sbyte Set(sbyte mode) => process ? SetProcessMode(mode) : SetThreadMode(mode);
+
+            public void Dispose()
+            {
+                if (disposed)
+                    return;
+                if (!process && thread != Environment.CurrentManagedThreadId)
+                    throw new InvalidOperationException(
+                        "A thread placeholder scope cannot cross an await."
+                    );
+                if (Set(previous) < 0 || Current() != previous)
+                    throw new IOException(
+                        "The original Cloud Files placeholder compatibility mode could not be restored."
+                    );
+                disposed = true;
+                LogModes(process ? "process-restored" : "thread-restored");
+            }
+        }
+
+        static void LogModes(string stage)
+        {
+            sbyte processMode = QueryProcessMode();
+            sbyte threadMode = QueryThreadMode();
+            if (processMode < 0 || threadMode < 0)
+                throw new IOException(
+                    "Cloud Files placeholder compatibility modes could not be queried."
+                );
+            Console.WriteLine(
+                "CFAPI compatibility: "
+                    + JsonSerializer.Serialize(
+                        new
+                        {
+                            stage,
+                            processMode,
+                            threadMode,
+                            managedThread = Environment.CurrentManagedThreadId,
+                        }
+                    )
+            );
+        }
+
         internal static bool Available(out string reason)
         {
             if (
@@ -596,6 +731,24 @@ internal static partial class SelfTests
         [DllImport("CldApi.dll", EntryPoint = "CfGetPlatformInfo")]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         static extern int GetPlatformInfo(out Platform platform);
+
+        // NTSYSAPI CHAR NTAPI declarations use signed 8-bit values, including
+        // negative error sentinels. These are not HRESULT or BOOLEAN functions.
+        [DllImport("ntdll.dll", EntryPoint = "RtlQueryProcessPlaceholderCompatibilityMode")]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        static extern sbyte QueryProcessMode();
+
+        [DllImport("ntdll.dll", EntryPoint = "RtlSetProcessPlaceholderCompatibilityMode")]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        static extern sbyte SetProcessMode(sbyte mode);
+
+        [DllImport("ntdll.dll", EntryPoint = "RtlQueryThreadPlaceholderCompatibilityMode")]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        static extern sbyte QueryThreadMode();
+
+        [DllImport("ntdll.dll", EntryPoint = "RtlSetThreadPlaceholderCompatibilityMode")]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        static extern sbyte SetThreadMode(sbyte mode);
 
         [DllImport("CldApi.dll", EntryPoint = "CfRegisterSyncRoot", CharSet = CharSet.Unicode)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

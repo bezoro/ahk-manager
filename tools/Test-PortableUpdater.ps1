@@ -353,7 +353,7 @@ function Run-Update([string]$Phase, $Target) {
 function Move-PortableRoot {
     if ($Scenario -cne 'default' -or $session -or $helperInFlight) { throw 'Whole-folder relocation requires the normally closed default portable fixture.' }
     $originalRoot = $portableRoot
-    $destination = Join-Path $parent 'Relocated Portable Manager'
+    $destination = Join-Path $parent 'Relocated Portable Manager & Data'
     Check (-not (Test-Path -LiteralPath $destination) -and (Join-Path $originalRoot 'Data') -eq $dataRoot) 'whole-folder relocation starts with the default relative Data folder and a fresh sibling destination'
     $configuration = Get-Content -LiteralPath (Join-Path $originalRoot 'portable.json') -Raw | ConvertFrom-Json
     Check ($configuration.dataDirectory -ceq 'Data') 'the portable configuration retains a relative Data location before the folder is moved'

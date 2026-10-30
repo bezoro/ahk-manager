@@ -52,7 +52,7 @@ internal static class WindowsStoragePath
         if ((attributes & Directory) == 0 && (attributes & Unavailable) != 0)
             throw new StoragePathException(
                 StoragePathFailure.CloudFileUnavailable,
-                "An application or data file is not available on this device."
+                "A file is not available on this device."
             );
     }
 

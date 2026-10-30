@@ -74,7 +74,11 @@ internal static class StartupTaskSchedulerChecks
                 xml.Root.Element(Ns + "RegistrationInfo")!
                     .AddFirst(new XElement(Ns + "Description", fixture.Marker));
                 string registered = fixture.Register(xml.ToString(SaveOptions.DisableFormatting));
-                File.WriteAllText(Path.Combine(root, $"registered-{index++:D2}.xml"), registered);
+                File.WriteAllText(
+                    Path.Combine(root, $"registered-{index++:D2}.xml"),
+                    registered,
+                    Encoding.Unicode
+                );
                 var parsed = WindowsStartupTaskStore.Parse(registered);
                 Check(
                     parsed with { Fingerprint = "" } == specification

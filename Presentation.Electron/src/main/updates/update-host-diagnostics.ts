@@ -128,7 +128,7 @@ export function updateHostRefusalMessage(refusal: UpdateHostRefusal | null): str
   if (refusal.code === 'unsupported-filesystem')
     return 'Updates require NTFS storage for the application and update cache. ReFS, FAT32 and exFAT are not supported. Nothing was changed.';
   if (refusal.code === 'cloud-file-unavailable')
-    return 'Some application or update files are not available locally. In OneDrive, choose "Always keep on this device", wait for syncing to finish, then try the update again. Nothing was changed.';
+    return 'Some application or update files are not available locally. Make the complete portable folder available offline in your sync app, wait for syncing to finish, then try the update again. Nothing was changed.';
   if (refusal.code === 'redirected-path')
     return 'The application or update path contains a symbolic link, junction or unsupported redirect. Use a local folder without redirected path components. Nothing was changed.';
   if (refusal.phase === 'registration' && refusal.code === 'invalid-data')

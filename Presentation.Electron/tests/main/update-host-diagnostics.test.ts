@@ -130,7 +130,7 @@ test('storage refusal codes explain NTFS and cloud availability before generic o
     assert.doesNotMatch(ntfs, /permissions|Setup/);
     assert.match(
       updateHostRefusalMessage({ schemaVersion: 1, phase, code: 'cloud-file-unavailable' }),
-      /OneDrive.*Always keep on this device.*syncing/,
+      /available offline.*sync app.*syncing/,
     );
     assert.match(
       updateHostRefusalMessage({ schemaVersion: 1, phase, code: 'redirected-path' }),

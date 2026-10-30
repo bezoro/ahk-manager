@@ -67,7 +67,7 @@ test('portable initialization uses only its packaged helper and bounds diagnosti
 test('portable initialization distinguishes NTFS requirements, unavailable cloud files, permissions and package failures', () => {
   const expected: Array<[string, RegExp]> = [
     ['unsupported-filesystem', /requires NTFS.*ReFS, FAT32 and exFAT are not supported/],
-    ['cloud-file-unavailable', /OneDrive.*Always keep on this device.*syncing/],
+    ['cloud-file-unavailable', /available offline.*sync app.*syncing/],
     ['redirected-path', /symbolic link, junction or unsupported redirect/],
     ['access-denied', /owned by your Windows account.*permissions/],
     ['incomplete-package', /package is incomplete.*entire portable ZIP/],
@@ -81,7 +81,7 @@ test('portable initialization distinguishes NTFS requirements, unavailable cloud
   for (const code of ['sharing-violation', 'lock-violation']) {
     const error = refusal(wire(code));
     assert.equal(error.code, 'files-in-use');
-    assert.match(error.message, /Another application.*OneDrive finish syncing/);
+    assert.match(error.message, /Another application.*sync app finish syncing/);
   }
 });
 

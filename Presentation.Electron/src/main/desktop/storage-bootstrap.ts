@@ -29,7 +29,7 @@ function initializationMessage(code: InitializationCode): string {
     case 'unsupported-filesystem':
       return 'Portable Manager requires NTFS storage for its app and data folders. ReFS, FAT32 and exFAT are not supported. Extract the portable ZIP into an NTFS folder and try again.';
     case 'cloud-file-unavailable':
-      return 'Some Manager or data files are not available locally. In OneDrive, choose "Always keep on this device", wait for syncing to finish, then open Manager again.';
+      return 'Some Manager or data files are not available locally. Make the complete portable folder available offline in your sync app, wait for syncing to finish, then open Manager again.';
     case 'redirected-path':
       return 'The portable app or data path contains a symbolic link, junction or unsupported redirect. Use a local folder without redirected path components.';
     case 'access-denied':
@@ -41,7 +41,7 @@ function initializationMessage(code: InitializationCode): string {
     case 'data-unavailable':
       return 'The configured data folder could not be opened or verified. Check that its drive is available, its parent folder exists, and your Windows account can access it. Your existing data and recovery files were preserved.';
     case 'files-in-use':
-      return 'Another application is using the portable app or data files. Close other Manager windows and let OneDrive finish syncing, then try again.';
+      return 'Another application is using the portable app or data files. Close other Manager windows and let your sync app finish syncing, then try again.';
     default:
       return 'The portable folder could not be prepared. Your existing data was preserved. Check folder access and try again.';
   }

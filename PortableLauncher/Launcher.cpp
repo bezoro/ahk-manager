@@ -141,18 +141,17 @@ int Fail(Failure failure = Failure::Package) {
         case Failure::FileSystem:
             message = L"AHK Manager Portable requires NTFS. ReFS, exFAT and FAT are not "
                       L"supported. Extract the complete portable ZIP into its own folder "
-                      L"on a local NTFS drive. OneDrive on NTFS is supported when the files "
-                      L"are kept on this device.";
+                      L"on a local NTFS drive and keep its files available on this device.";
             break;
         case Failure::Cloud:
-            message = L"Some AHK Manager files are not available on this device. In OneDrive, "
-                      L"right-click the complete portable folder, choose 'Always keep on "
-                      L"this device', and wait for the download to finish before opening Manager.";
+            message = L"Some AHK Manager files are not available on this device. Make the "
+                      L"complete portable folder available offline in your sync app and "
+                      L"wait for the download to finish before opening Manager.";
             break;
         case Failure::Redirected:
             message = L"The portable folder contains a junction, symbolic link or unsupported "
-                      L"redirected path. Use a regular local NTFS folder or a locally "
-                      L"available OneDrive folder.";
+                      L"redirected path. Use a regular local NTFS folder with files "
+                      L"available offline.";
             break;
         case Failure::Access:
             message = L"AHK Manager cannot access its portable folder. Check your account's "
