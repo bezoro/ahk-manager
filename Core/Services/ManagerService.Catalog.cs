@@ -139,7 +139,14 @@ public sealed partial class ManagerService
                                     if (++entries > 20000 || files.Count >= 2000)
                                         break;
                                     var attributes = File.GetAttributes(item);
-                                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                                    try
+                                    {
+                                        if ((attributes & FileAttributes.ReparsePoint) != 0)
+                                            WindowsStoragePath.VerifyEntry(item);
+                                        else
+                                            WindowsStoragePath.ValidateEntry((uint)attributes, 0);
+                                    }
+                                    catch (Exception ex) when (SafeJsonFiles.Known(ex))
                                     {
                                         issues.Add(new(ReasonCode.InvalidPath, item));
                                         continue;

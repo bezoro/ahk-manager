@@ -42,6 +42,8 @@ $complete = $false
 $outputCreated = $false
 $startupWritten = $false
 $updatesRoot = $null
+$searchShortcutPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'Microsoft/Windows/Start Menu/Programs/AHK Manager Portable.lnk'
+$searchShortcutBefore = $null
 $retiredDataHashes = @{}
 $signingFixture = $null
 $signingFixtureCleanup = 'NotCreated'
@@ -54,6 +56,49 @@ function Check([bool]$Condition, [string]$Name) {
 function Trace([string]$Message) { $line = [DateTimeOffset]::UtcNow.ToString('O') + ' ' + $Message; $trace.Add($line); Write-Host $line }
 function Write-Json([string]$Name, [object]$Value) { [IO.File]::WriteAllText((Join-Path $OutputRoot $Name), ($Value | ConvertTo-Json -Depth 35), $utf8) }
 function Hash([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Same-Path([string]$First, [string]$Second) {
+    return [String]::Equals([IO.Path]::GetFullPath($First), [IO.Path]::GetFullPath($Second), [StringComparison]::OrdinalIgnoreCase)
+}
+function Check-SearchShortcut([string]$Phase) {
+    $launcher = Join-Path $portableRoot 'Bezoro.AhkManager.exe'
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $matched = $false
+    $observation = $null
+    do {
+        if ($session.Process.HasExited -or -not [AhkManager.TestSupport.InstalledUpdaterUi]::Matches($session.Process.Id, $session.Image, $session.Started)) { throw 'The owned portable session ended before its Search shortcut could be verified.' }
+        $shell = $null
+        $shortcut = $null
+        try {
+            if (Test-Path -LiteralPath $searchShortcutPath) {
+                $file = Get-Item -LiteralPath $searchShortcutPath -Force
+                if ($file -isnot [IO.FileInfo] -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $file.Length -le 0 -or $file.Length -gt 1MB) { throw 'The portable Search shortcut is not a bounded regular file.' }
+                $before = Hash $searchShortcutPath
+                $shell = New-Object -ComObject WScript.Shell
+                $shortcut = $shell.CreateShortcut($searchShortcutPath)
+                $target = [string]$shortcut.TargetPath
+                $workingDirectory = [string]$shortcut.WorkingDirectory
+                $icon = [string]$shortcut.IconLocation
+                $arguments = [string]$shortcut.Arguments
+                $description = [string]$shortcut.Description
+                $iconSeparator = $icon.LastIndexOf(',')
+                $iconPath = if ($iconSeparator -gt 0) { $icon.Substring(0, $iconSeparator).Trim('"') } else { '' }
+                $iconIndex = if ($iconSeparator -gt 0) { $icon.Substring($iconSeparator + 1).Trim() } else { '' }
+                $observation = [ordered]@{ fixture = $true; actualWindowsShell = $true; phase = $Phase; path = $searchShortcutPath; target = $target; workingDirectory = $workingDirectory; icon = $icon; arguments = $arguments; description = $description; sha256 = $before }
+                $matched = $target.Length -gt 0 -and $workingDirectory.Length -gt 0 -and $iconPath.Length -gt 0 -and (Same-Path $target $launcher) -and (Same-Path $workingDirectory $portableRoot) -and (Same-Path $iconPath $launcher) -and $iconIndex -ceq '0' -and $arguments -ceq '--foreground' -and $description -ceq 'Manage AutoHotkey scripts with AHK Manager Portable.' -and (Hash $searchShortcutPath) -ceq $before
+            }
+            else { $observation = [ordered]@{ fixture = $true; actualWindowsShell = $true; phase = $Phase; path = $searchShortcutPath; absent = $true } }
+        }
+        catch { $observation = [ordered]@{ fixture = $true; actualWindowsShell = $true; phase = $Phase; path = $searchShortcutPath; error = $_.Exception.Message } }
+        finally {
+            if ($shortcut -and [Runtime.InteropServices.Marshal]::IsComObject($shortcut)) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) }
+            if ($shell -and [Runtime.InteropServices.Marshal]::IsComObject($shell)) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
+        }
+        if ($matched) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    Write-Json ("search-shortcut-$Phase.json") $observation
+    Check $matched 'the actual current-user Windows Search shortcut launches the root executable in its folder with the correct icon and foreground argument'
+}
 function No-Registration {
     foreach ($hive in @([Microsoft.Win32.RegistryHive]::CurrentUser, [Microsoft.Win32.RegistryHive]::LocalMachine)) {
         foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
@@ -305,10 +350,71 @@ function Run-Update([string]$Phase, $Target) {
     } while ([DateTime]::UtcNow -lt $deadline)
     Check ($workspaces.Count -eq 0) 'a durable successful portable install removes its verified transaction workspace so the folder can be moved normally'
 }
+function Move-PortableRoot {
+    if ($Scenario -cne 'default' -or $session -or $helperInFlight) { throw 'Whole-folder relocation requires the normally closed default portable fixture.' }
+    $originalRoot = $portableRoot
+    $destination = Join-Path $parent 'Relocated Portable Manager'
+    Check (-not (Test-Path -LiteralPath $destination) -and (Join-Path $originalRoot 'Data') -eq $dataRoot) 'whole-folder relocation starts with the default relative Data folder and a fresh sibling destination'
+    $configuration = Get-Content -LiteralPath (Join-Path $originalRoot 'portable.json') -Raw | ConvertFrom-Json
+    Check ($configuration.dataDirectory -ceq 'Data') 'the portable configuration retains a relative Data location before the folder is moved'
+    $sourceFiles = @{}
+    foreach ($file in Get-ChildItem -LiteralPath (Join-Path $dataRoot 'Profile') -File -Recurse -Force) { $sourceFiles[[IO.Path]::GetRelativePath($originalRoot, $file.FullName)] = Hash $file.FullName }
+    foreach ($release in @($baseline, $candidate)) {
+        foreach ($name in @('archive.zip', 'release.json', 'release.json.p7s', 'receipt.json')) {
+            $file = Join-Path $updatesRoot "installers/$($release.Version)/$name"
+            $sourceFiles[[IO.Path]::GetRelativePath($originalRoot, $file)] = Hash $file
+        }
+    }
+    $priorShortcut = Hash $searchShortcutPath
+    $processPrefix = $originalRoot + [IO.Path]::DirectorySeparatorChar
+    $running = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and ($_.ExecutablePath.StartsWith($processPrefix, [StringComparison]::OrdinalIgnoreCase)) })
+    Check ($running.Count -eq 0) 'normal portable shutdown leaves no application or helper process in the folder to be moved'
+    [IO.Directory]::Move($originalRoot, $destination)
+    $script:portableRoot = $destination
+    $script:dataRoot = Join-Path $portableRoot 'Data'
+    $script:updatesRoot = Join-Path $dataRoot 'Updates'
+    $script:stateSentinel = Join-Path $dataRoot 'Profile/ci-state-sentinel.txt'
+    Check (-not (Test-Path -LiteralPath $originalRoot) -and (Hash (Join-Path $portableRoot 'portable.json')) -ceq $markerHash -and (Hash $searchShortcutPath) -ceq $priorShortcut) 'moving the whole closed portable folder preserves its relative configuration and leaves shortcut repair to the real application'
+    foreach ($relative in $sourceFiles.Keys) { Check ((Hash (Join-Path $portableRoot $relative)) -ceq $sourceFiles[$relative]) "whole-folder relocation preserves $relative" }
+    Write-Json 'portable-root-relocation.json' ([ordered]@{ fixture = $true; actualDirectoryMove = $true; source = $originalRoot; destination = $portableRoot; relativeDataDirectory = 'Data'; dataDirectory = $dataRoot; sourceAbsent = $true; preservedFiles = $sourceFiles })
+}
+function Check-RelocatedHistory {
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $history = $null
+    do {
+        $history = Invoke-PortableEvaluation $session 'window.ahkManager.getUpdateState()'
+        $cached = @($history.releases | Where-Object { $_.cached -and $_.version -in @($baseline.Version, $candidate.Version) })
+        if ($cached.Count -eq 2) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    Write-Json 'relocated-update-state.json' $history
+    Check ($cached.Count -eq 2 -and @($cached | Where-Object { $_.version -ceq $baseline.Version -and $_.installed }).Count -eq 1 -and @($cached | Where-Object { $_.version -ceq $candidate.Version -and $_.canInstall }).Count -eq 1) 'the real relocated app recognizes the installed baseline and verified cached update in its moved version history'
+    foreach ($release in @($baseline, $candidate)) {
+        $directory = Join-Path $updatesRoot "installers/$($release.Version)"
+        $archive = Join-Path $directory 'archive.zip'
+        $manifest = Join-Path $directory 'release.json'
+        $manifestFile = Get-Item -LiteralPath $manifest
+        if ($manifestFile -isnot [IO.FileInfo] -or $manifestFile.Length -le 0 -or $manifestFile.Length -gt 65536) { throw 'The moved version history manifest is not a bounded regular file.' }
+        $verified = ConvertFrom-PortableReleaseJson (Get-Content -LiteralPath $manifest -Raw)
+        $signature = if ($release.Version -ceq $baseline.Version) { $signingFixture.BaselineSignaturePath } else { $signingFixture.CandidateSignaturePath }
+        $receipt = Get-Content -LiteralPath (Join-Path $directory 'receipt.json') -Raw | ConvertFrom-Json
+        Check ($verified.Version -ceq $release.Version -and $verified.Commit -ceq $SourceCommit -and $verified.Sha256 -ceq $release.Sha256 -and $verified.ArchiveBytes -eq $release.ArchiveBytes -and (Hash $archive) -ceq $release.Sha256 -and (Get-Item -LiteralPath $archive).Length -eq $release.ArchiveBytes -and (Hash $manifest) -ceq $release.ManifestSha256 -and (Hash (Join-Path $directory 'release.json.p7s')) -ceq (Hash $signature) -and $receipt.schemaVersion -eq 1 -and $receipt.updateProtocol -eq 2 -and $receipt.version -ceq $release.Version -and $receipt.sha256 -ceq $release.Sha256 -and $receipt.bytes -eq $release.ArchiveBytes) 'the moved version history retains each exact verified package, manifest, cache receipt and authenticated signature'
+    }
+    $key = $registry.OpenSubKey($runPath)
+    try { Check ($key -and $key.GetValue($runValue) -ceq $startupCommand) 'whole-folder relocation preserves the unrelated Windows startup entry' }
+    finally { if ($key) { $key.Dispose() } }
+    Check ((Hash $stateSentinel) -ceq $stateHash -and (Hash $scriptFile) -ceq $scriptHash -and -not $inert.HasExited) 'the relocated app retains its user state, external AutoHotkey file and unrelated running process'
+    foreach ($path in $legacyHashes.Keys) { Check ((Hash $path) -ceq $legacyHashes[$path]) "whole-folder relocation preserves legacy source $([IO.Path]::GetFileName($path))" }
+    Check ((Get-Acl -LiteralPath $parent).Sddl -ceq $parentAcl -and (No-Registration)) 'whole-folder relocation changes neither shared parent permissions nor installer registration'
+}
 
 try {
     foreach ($path in @($legacyRoot, $legacyChromium)) { if (Test-Path -LiteralPath $path) { throw 'An existing operational profile will not be opened by this fixture.' } }
     if (@(Get-Process -Name 'Bezoro.AhkManager' -ErrorAction SilentlyContinue).Count -or -not (No-Registration)) { throw 'An existing Manager or registered installation prevents the portable fixture.' }
+    if (Test-Path -LiteralPath $searchShortcutPath) {
+        if ($Scenario -ne 'foreign-root') { throw 'An existing portable Search shortcut will not be replaced by this fixture.' }
+        $searchShortcutBefore = Hash $searchShortcutPath
+    }
     $baseline = Read-PortableReleaseManifest -ArchivePath $BaselineArchive -ManifestPath $BaselineManifest -ExpectedCommit $SourceCommit
     $candidate = Read-PortableReleaseManifest -ArchivePath $CandidateArchive -ManifestPath $CandidateManifest -ExpectedCommit $SourceCommit
     Check ($baseline.Version -cne $candidate.Version) 'both coherent fixture packages bind the same exact CI source and distinct versions'
@@ -375,6 +481,8 @@ try {
         Check ($dismissed -and $session.Process.WaitForExit(30000) -and $session.Process.ExitCode -eq 65) 'the actual portable app refuses an unknown root file and exits after its exact owned error dialog closes'
         Check ((Hash $foreign) -ceq $foreignHash -and (Get-Acl -LiteralPath $portableRoot).Sddl -ceq $rootAcl -and (Get-Acl -LiteralPath $parent).Sddl -ceq $parentAcl) 'failed initialization preserves unrelated files and both directory permission sets'
         Check (-not (Test-Path -LiteralPath $dataRoot) -and (No-Registration)) 'refused portable startup creates neither user Data nor installer registration'
+        $shortcutPreserved = if ($null -eq $searchShortcutBefore) { -not (Test-Path -LiteralPath $searchShortcutPath) } else { (Test-Path -LiteralPath $searchShortcutPath -PathType Leaf) -and (Hash $searchShortcutPath) -ceq $searchShortcutBefore }
+        Check $shortcutPreserved 'refused portable startup creates no Search shortcut and preserves any pre-existing entry'
         $session.Process.Dispose(); $session = $null
         $complete = $true
     }
@@ -413,6 +521,7 @@ try {
         $inert = [Diagnostics.Process]::Start($waiter)
         $session = Start-PortableSession -Root $portableRoot -EvidenceRoot $OutputRoot -ViaLauncher
         Wait-Ready $session $baseline.Version
+        Check-SearchShortcut 'initial'
         Capture-Preferences
         Check ((Is-Private $portableRoot) -and (Is-Private (Join-Path $portableRoot 'App')) -and (Is-Private $dataRoot)) 'first real launch secures only the dedicated portable runtime and Data folders'
         Check ((Get-Acl -LiteralPath $parent).Sddl -ceq $parentAcl) 'first launch preserves the permissive shared parent permissions'
@@ -441,10 +550,13 @@ try {
         $currentVersion = $candidate.Version
         $phaseStarted = [DateTime]::UtcNow
         Run-Update 'rollback' $baseline
+        if ($Scenario -eq 'default') { Move-PortableRoot }
         $finalRoot = Join-Path $OutputRoot 'final-launch'
         [IO.Directory]::CreateDirectory($finalRoot) | Out-Null
         $session = Start-PortableSession -Root $portableRoot -EvidenceRoot $finalRoot -ViaLauncher
         Wait-Ready $session $baseline.Version
+        Check-SearchShortcut 'final'
+        if ($Scenario -eq 'default') { Check-RelocatedHistory }
         Close-PortableSession $session; $session = $null
         $complete = $true
     }

@@ -60,22 +60,19 @@ public sealed record RuntimeProfileLayout
             return installed;
         }
         NoRedirects(marker);
+        WindowsStoragePath.RequireNtfs(root);
         if ((File.GetAttributes(marker) & FileAttributes.Directory) != 0)
             throw new InvalidDataException("The portable configuration is not a regular file.");
         using var input = new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (OperatingSystem.IsWindows())
+            WindowsStoragePath.VerifyHandle(input.SafeFileHandle);
         if (
             OperatingSystem.IsWindows()
             && (
                 !ProcessNative.GetFileInformationByHandle(input.SafeFileHandle, out var identity)
                 || identity.Links != 1
-                || (
-                    identity.Attributes
-                    & (uint)(
-                        FileAttributes.Directory
-                        | FileAttributes.ReparsePoint
-                        | FileAttributes.Device
-                    )
-                ) != 0
+                || (identity.Attributes & (uint)(FileAttributes.Directory | FileAttributes.Device))
+                    != 0
             )
         )
             throw new InvalidDataException(
@@ -198,6 +195,7 @@ public sealed record RuntimeProfileLayout
                 throw new InvalidDataException("Portable data cannot occupy a recovery workspace.");
         }
         NoRedirects(data);
+        WindowsStoragePath.RequireNtfs(data);
         if (Exists(data) && (File.GetAttributes(data) & FileAttributes.Directory) == 0)
             throw new InvalidDataException("The portable data location is not a directory.");
     }
@@ -245,12 +243,7 @@ public sealed record RuntimeProfileLayout
                 );
     }
 
-    internal static void NoRedirects(string path)
-    {
-        for (string? current = path; current is not null; current = Path.GetDirectoryName(current))
-            if (Exists(current) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                throw new IOException("Redirected portable paths are not supported.");
-    }
+    internal static void NoRedirects(string path) => WindowsStoragePath.NoRedirects(path);
 
     static bool Exists(string path)
     {

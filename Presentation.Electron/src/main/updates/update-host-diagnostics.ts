@@ -16,6 +16,8 @@ const phases = new Set([
   'package-ownership',
   'installation-paths',
   'installation-ownership',
+  'portable-initialization',
+  'portable-data-initialization',
   'installation-parent-ownership',
   'operation-lock',
   'operation-log',
@@ -44,6 +46,11 @@ const codes = new Set([
   'security-error',
   'timeout',
   'io-error',
+  'unsupported-filesystem',
+  'cloud-file-unavailable',
+  'redirected-path',
+  'incomplete-package',
+  'invalid-package',
 ]);
 const maximumBytes = 4096;
 
@@ -118,6 +125,12 @@ export function updateHostRefusalMessage(refusal: UpdateHostRefusal | null): str
   const fallback = 'The update helper rejected the update. The installation has been preserved.';
   if (refusal?.schemaVersion !== 1 || !phases.has(refusal.phase) || !codes.has(refusal.code))
     return fallback;
+  if (refusal.code === 'unsupported-filesystem')
+    return 'Updates require NTFS storage for the application and update cache. ReFS, FAT32 and exFAT are not supported. Nothing was changed.';
+  if (refusal.code === 'cloud-file-unavailable')
+    return 'Some application or update files are not available locally. In OneDrive, choose "Always keep on this device", wait for syncing to finish, then try the update again. Nothing was changed.';
+  if (refusal.code === 'redirected-path')
+    return 'The application or update path contains a symbolic link, junction or unsupported redirect. Use a local folder without redirected path components. Nothing was changed.';
   if (refusal.phase === 'registration' && refusal.code === 'invalid-data')
     return 'This copy of Manager is not registered for in-app updates. Run Manager Setup once, then open Manager from its installed shortcut. Your profile and scripts will be preserved.';
   if (['installation-ownership', 'installation-parent-ownership'].includes(refusal.phase))

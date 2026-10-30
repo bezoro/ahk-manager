@@ -320,6 +320,89 @@ test('linked operational files are refused without modifying the original profil
   assert.equal(await fs.readFile(f.marker, 'utf8'), f.initial);
 });
 
+for (const history of [false, true])
+  test(`cloud-tagged ${history ? 'update history' : 'profile files'} remain transferable with verified bytes`, async (t) => {
+    const enumerate = fs.readdir;
+    // libuv on Windows reports cloud reparse points as link Dirents, while lstat
+    // correctly reports their underlying regular file or directory. Model both
+    // APIs over real fixture data so a move still has to copy and verify bytes.
+    t.mock.method(fs, 'readdir', (async (...args: Parameters<typeof fs.readdir>) => {
+      const entries: unknown = await Reflect.apply(enumerate, fs, args);
+      if (
+        args[1] &&
+        typeof args[1] === 'object' &&
+        'withFileTypes' in args[1] &&
+        args[1].withFileTypes &&
+        Array.isArray(entries)
+      )
+        return entries.map(
+          (entry) =>
+            new Proxy(entry, {
+              get(target, key, receiver) {
+                if (key === 'isSymbolicLink') return () => true;
+                if (key === 'isDirectory' || key === 'isFile') return () => false;
+                return Reflect.get(target, key, receiver);
+              },
+            }),
+        );
+      return entries;
+    }) as typeof fs.readdir);
+    const f = await fixture(t);
+    let operation: string | null = null;
+    if (history) {
+      const operationId = randomUUID();
+      operation = path.join('Updates', 'operations', operationId, 'outcome.json');
+      const file = path.join(f.layout.dataDirectory, operation);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(
+        file,
+        JSON.stringify({ schemaVersion: 1, operationId, outcome: 'Failed' }),
+      );
+    }
+    await prepareDataMove(f.layout, f.target, f.preparePrivate);
+    const moved = await completePendingDataMove(f.layout);
+    assert.equal(
+      await fs.readFile(path.join(moved.profileDirectory, 'settings.json'), 'utf8'),
+      '{"fixture":"before"}',
+    );
+    assert.equal(
+      await fs.readFile(path.join(f.layout.profileDirectory, 'settings.json'), 'utf8'),
+      '{"fixture":"before"}',
+    );
+    if (operation)
+      assert.deepEqual(
+        await fs.readFile(path.join(moved.dataDirectory, operation)),
+        await fs.readFile(path.join(f.layout.dataDirectory, operation)),
+      );
+    assert.equal(resolveDeployment(f.executable, f.local).dataDirectory, f.target);
+  });
+
+test('actual linked data and update directories remain refused without touching their targets', async (t) => {
+  for (const history of [false, true]) {
+    const f = await fixture(t);
+    const target = path.join(f.parent, 'External linked folder');
+    await fs.mkdir(target);
+    const preserved = path.join(target, 'preserved.txt');
+    await fs.writeFile(preserved, 'External content must remain unchanged.');
+    const link = history
+      ? path.join(f.layout.updatesDirectory, 'operations', randomUUID())
+      : path.join(f.layout.dataDirectory, 'Linked data');
+    await fs.mkdir(path.dirname(link), { recursive: true });
+    await fs.symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    if (history)
+      await assert.rejects(
+        prepareDataMove(f.layout, f.target, f.preparePrivate),
+        /recovery history could not be verified/,
+      );
+    else {
+      await prepareDataMove(f.layout, f.target, f.preparePrivate);
+      await assert.rejects(completePendingDataMove(f.layout), /redirected entry/);
+    }
+    assert.equal(await fs.readFile(preserved, 'utf8'), 'External content must remain unchanged.');
+    assert.equal(await fs.readFile(f.marker, 'utf8'), f.initial);
+  }
+});
+
 test('the legacy public update-channel preference imports once without Setup packages or credentials', async (t) => {
   const f = await fixture(t);
   const old = path.join(f.layout.legacyDataDirectory, 'Updates');

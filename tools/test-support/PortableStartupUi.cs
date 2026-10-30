@@ -9,7 +9,7 @@ namespace AhkManager.TestSupport;
 public static class PortableStartupUi
 {
     public static string LastObservation { get; private set; } = "No refusal inspection has run.";
-    const string Refusal = "The portable folder could not be prepared. Extract the complete portable ZIP into its own local folder and check access to the app and data folders.";
+    const string Refusal = "The portable package or its data settings are invalid. Extract a fresh portable ZIP into a separate folder. Keep your existing Data folder and portable.json for recovery.";
     delegate bool WindowCallback(IntPtr window, IntPtr state);
     [DllImport("user32.dll")] static extern bool EnumWindows(WindowCallback callback, IntPtr state);
     [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr window, WindowCallback callback, IntPtr state);

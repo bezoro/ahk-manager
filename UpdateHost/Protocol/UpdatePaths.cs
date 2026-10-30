@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Bezoro.AhkManager.Core.Infrastructure;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
@@ -54,20 +55,7 @@ internal static class UpdatePaths
     internal static bool Equal(string left, string right) =>
         string.Equals(Local(left), Local(right), StringComparison.OrdinalIgnoreCase);
 
-    internal static void NoRedirects(string path)
-    {
-        for (
-            string? current = Local(path);
-            current is not null;
-            current = Path.GetDirectoryName(current)
-        )
-        {
-            if (!File.Exists(current) && !Directory.Exists(current))
-                continue;
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                throw new IOException("Redirected update path refused.");
-        }
-    }
+    internal static void NoRedirects(string path) => WindowsStoragePath.NoRedirects(Local(path));
 
     internal static string OperationDirectory(string updatesRoot, Guid operationId) =>
         Path.Combine(Local(updatesRoot), "operations", operationId.ToString("D"));

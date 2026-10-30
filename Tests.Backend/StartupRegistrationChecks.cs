@@ -482,6 +482,7 @@ internal static class StartupRegistrationChecks
             InspectEmbeddedTaskProperties(sid, check);
             ValidateNativeTaskDefinition(specification, check);
         }
+        await StartupTaskIdentityChecks.RunAsync(root, check);
         await StartupRelocationChecks.RunAsync(root, check);
     }
 
@@ -568,7 +569,7 @@ internal static class StartupRegistrationChecks
 
     sealed class TaskAdapter : IUserStartupAdapter, IUserStartupTaskAdapter
     {
-        public string UserSid => "S-1-5-21-startup-fixture";
+        public string UserSid => "S-1-5-21-100-200-300-1001";
         public string? Entry;
         public StartupTaskRegistration? Task;
         public int Writes;

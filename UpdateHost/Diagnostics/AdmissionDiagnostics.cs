@@ -1,12 +1,15 @@
 using System.ComponentModel;
 using System.Security;
 using System.Text.Json;
+using Bezoro.AhkManager.Core.Infrastructure;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
 internal enum UpdatePhase
 {
     Arguments,
+    PortableInitialization,
+    PortableDataInitialization,
     HostLocation,
     CacheOwnership,
     HostOwnership,
@@ -42,9 +45,13 @@ internal static class AdmissionDiagnostics
 
     internal static string Encode(UpdatePhase phase, Exception exception)
     {
+        if (exception is PortableDataInitializationException data)
+            exception = data.Failure;
         string name = phase switch
         {
             UpdatePhase.Arguments => "arguments",
+            UpdatePhase.PortableInitialization => "portable-initialization",
+            UpdatePhase.PortableDataInitialization => "portable-data-initialization",
             UpdatePhase.HostLocation => "host-location",
             UpdatePhase.CacheOwnership => "cache-ownership",
             UpdatePhase.HostOwnership => "host-ownership",
@@ -75,6 +82,13 @@ internal static class AdmissionDiagnostics
         };
         string code = exception switch
         {
+            StoragePathException storage => storage.Failure switch
+            {
+                StoragePathFailure.UnsupportedFileSystem => "unsupported-filesystem",
+                StoragePathFailure.RedirectedPath => "redirected-path",
+                StoragePathFailure.CloudFileUnavailable => "cloud-file-unavailable",
+                _ => throw new ArgumentOutOfRangeException(nameof(exception)),
+            },
             OperationCanceledException => "cancelled",
             InvalidDataException => "invalid-data",
             UnauthorizedAccessException => "access-denied",
@@ -92,6 +106,13 @@ internal static class AdmissionDiagnostics
                 nameof(exception)
             ),
         };
+        if (phase == UpdatePhase.PortableInitialization)
+            code = code switch
+            {
+                "file-not-found" or "directory-not-found" => "incomplete-package",
+                "invalid-data" or "invalid-json" => "invalid-package",
+                _ => code,
+            };
         // Both values are closed ASCII vocabularies. Never serialize exception
         // messages, paths, stack traces, or caller-controlled argument text.
         return Prefix

@@ -390,13 +390,11 @@ internal sealed class StartupContinuationStore(string root)
 
         static string ReadIdentity(FileStream file)
         {
+            WindowsStoragePath.VerifyHandle(file.SafeFileHandle);
             if (
                 !ProcessNative.GetFileInformationByHandle(file.SafeFileHandle, out var stamp)
                 || stamp.Links != 1
-                || (
-                    stamp.Attributes
-                    & (uint)(FileAttributes.Directory | FileAttributes.ReparsePoint)
-                ) != 0
+                || (stamp.Attributes & (uint)FileAttributes.Directory) != 0
             )
                 throw new IOException("Uncertain continuation file identity.");
             return $"{stamp.Volume:X8}:{stamp.IndexHigh:X8}{stamp.IndexLow:X8}";

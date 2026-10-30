@@ -16,6 +16,14 @@ AHK Manager/
 
 `Data` is created on first launch. The root executable launches the application under `App`; shortcuts and Windows startup should target the root executable. Keep the package files together. Do not extract a new version over a running copy or mix application files from different versions.
 
+## Windows integration
+
+No Setup or uninstall registration is required. Opening the root launcher starts Manager and its notification-area icon. A new profile starts Manager with Windows and requests administrator privileges by default; both preferences remain configurable. Windows may show UAC when elevation is needed.
+
+After obtaining writable ownership of its profile, Manager creates a current-user **AHK Manager Portable** shortcut in the Start Menu. It points to the root launcher, so Windows Search and PowerToys launchers that index Start Menu applications can discover it. Search results can take time to refresh, and the relevant PowerToys launcher must be enabled. Existing unrelated shortcuts are preserved.
+
+After closing Manager normally, you can move the complete portable folder. Open the root launcher in its new location once: the application derives the relative `Data` paths again and repairs its owned Start Menu shortcut and configured Windows startup registration. An external absolute data location keeps its original meaning. External script paths are preserved; moving Manager does not move those scripts.
+
 ## Importing current settings
 
 Before the first portable launch, close the current Manager with **Exit and keep scripts running**. Existing AHK processes can stay active. The portable edition imports the current Electron profile from `%LOCALAPPDATA%/Bezoro/AhkManagerElectron` into `Data/Profile`. It preserves the source and a migration backup. Script files remain at their original paths.
@@ -46,6 +54,14 @@ Do not delete `Updates/operations` while an update has an unresolved result. An 
 
 ## Supported locations
 
-Use a local Windows volume with NTFS access control. On first launch, the Manager restricts access to its own dedicated portable folder when it can prove the package and current-user ownership. It never changes permissions on the containing repository or drive. A folder containing unrelated files is refused instead of having its permissions rewritten.
+Use a local NTFS volume for both the application and its data. ReFS, exFAT and FAT are not supported. An unsupported filesystem has a separate startup message; permission failures and incomplete packages do not appear as filesystem errors. On first launch, the Manager restricts access to its own dedicated portable folder when it can prove the package and current-user ownership. It never changes permissions on the containing repository or drive. A folder containing unrelated files is refused instead of having its permissions rewritten.
 
-The application and data folders must remain private to the current user, Administrators, and SYSTEM. Network paths, redirected folders, and filesystems without the required access controls are refused. Moving a private folder to another Windows account or computer may require a normal copy into a new user-owned folder because Windows account identities differ. Portable packaging does not bypass Windows UAC or make external script paths portable.
+The application and data folders must remain private to the current user, Administrators, and SYSTEM. Network paths, junctions, symbolic links and unknown reparse tags are refused. Recognized Windows Cloud Files tags, used by OneDrive, are accepted without relaxing file identities, ownership, permissions or package integrity checks. Moving a private folder to another Windows account or computer may require a normal copy into a new user-owned folder because Windows account identities differ. Portable packaging does not bypass Windows UAC or make external script paths portable.
+
+## OneDrive backup
+
+You can keep the complete portable folder on OneDrive when its local volume is NTFS. Keep `Data` beside the root launcher to include the profile and downloaded version history in that folder's backup. In Explorer, right-click the complete portable folder and choose **Always keep on this device**. Wait for the files to finish downloading before opening Manager. Files that still require a cloud recall are refused with a message explaining how to make them available locally.
+
+Close Manager normally before moving its folder or making a consistent copy of its data. After moving it, launch the root `Bezoro.AhkManager.exe` and update shortcuts to that path. Owned Windows startup tasks can be repaired after relocation; account names and SIDs are compared by resolved Windows identity.
+
+Scripts do not have to be in `Data` or in the portable folder. The catalog stores their absolute paths and identifies running scripts outside the installation, including on other local drives. Importing or moving the profile does not copy those scripts. Back up external script files separately if they are outside your OneDrive folder.

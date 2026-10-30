@@ -1,3 +1,5 @@
+using Bezoro.AhkManager.Core.Infrastructure;
+
 namespace Bezoro.AhkManager.UpdateHost;
 
 // Every source file stays read-locked until the entire copy has been verified.
@@ -55,9 +57,8 @@ internal static class InstallationSnapshot
                     string relative = UpdatePaths.Relative(root, entry);
                     if (!paths.Add(relative))
                         throw new IOException("Ambiguous installation path.");
+                    WindowsStoragePath.VerifyEntry(entry);
                     var attributes = File.GetAttributes(entry);
-                    if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
-                        throw new IOException("Redirected installation entry refused.");
                     if ((attributes & FileAttributes.Directory) != 0)
                     {
                         sources.Directories.Add(new(relative, SnapshotSecurity.Read(entry, true)));

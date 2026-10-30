@@ -102,9 +102,12 @@ export async function inventoryData(root: string, includeExcluded = false): Prom
     if (depth > 32) throw fail('The data folder has too many nested directories.');
     const directory = path.join(root, relative);
     await readDirectoryIdentity(directory);
-    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      const name = relative ? path.join(relative, entry.name) : entry.name;
+    for (const entryName of await fs.readdir(directory)) {
+      const name = relative ? path.join(relative, entryName) : entryName;
       if (!includeExcluded && excluded(name)) continue;
+      // Windows directory enumeration labels cloud placeholders as links. lstat
+      // distinguishes them from actual symlinks without following those links.
+      const entry = await fs.lstat(path.join(root, name));
       if (entry.isSymbolicLink()) throw fail('The data folder contains a redirected entry.');
       if (entry.isDirectory()) {
         if (result.directories.length >= maximumDirectories)

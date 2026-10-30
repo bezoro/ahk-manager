@@ -163,20 +163,22 @@ async function assertUpdatesSettled(dataDirectory: string): Promise<void> {
   const operations = path.join(dataDirectory, 'Updates', 'operations');
   if (!(await dataDirectoryExists(operations))) return;
   assertStoragePath(operations);
-  const entries = await fs.readdir(operations, { withFileTypes: true });
+  const entries = await fs.readdir(operations);
   if (entries.length > 1000)
     throw fail('The update recovery history exceeds its inspection limit.');
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.isSymbolicLink() || !guid.test(entry.name))
+  for (const name of entries) {
+    if (!guid.test(name)) throw fail('The update recovery history could not be verified.');
+    const operation = path.join(operations, name);
+    const entry = await fs.lstat(operation);
+    if (!entry.isDirectory() || entry.isSymbolicLink())
       throw fail('The update recovery history could not be verified.');
-    const operation = path.join(operations, entry.name);
     const outcomePath = path.join(operation, 'outcome.json');
     if (await dataDirectoryExists(outcomePath)) {
       const outcome = readStorageJson(outcomePath, 65536);
       if (
         storageObject(outcome) &&
         outcome.schemaVersion === 1 &&
-        outcome.operationId === entry.name &&
+        outcome.operationId === name &&
         ['Installed', 'RolledBack', 'Failed'].includes(String(outcome.outcome))
       )
         continue;
@@ -189,7 +191,7 @@ async function assertUpdatesSettled(dataDirectory: string): Promise<void> {
         storageObject(cancel) &&
         storageKeys(cancel, ['schemaVersion', 'operationId']) &&
         cancel.schemaVersion === 1 &&
-        cancel.operationId === entry.name &&
+        cancel.operationId === name &&
         !(await dataDirectoryExists(path.join(operation, 'ready.json')))
       )
         continue;

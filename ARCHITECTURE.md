@@ -31,6 +31,8 @@ Within `Presentation.Electron`, `src/main/desktop/` owns theme, tray, dialogs, a
 
 `Bezoro.AhkManager.sln` contains Core, Backend, UpdateHost, and Tests.Backend. Active .NET projects target `net10.0-windows`; published executables are self-contained for `win-x64`.
 
+`Core/Infrastructure/WindowsStoragePath.cs` is the single BCL-only Windows storage policy. UpdateHost source-links that exact file to keep its standalone executable independent of Core assemblies. The architecture check permits only this explicit source link. Cloud Files tags are inspected through no-follow metadata handles; name-surrogate and unknown tags remain rejected. Portable application and data volumes must be NTFS. External script paths are not restricted to the portable data folder or its volume.
+
 ## Operation flow
 
 1. The renderer submits an action with its selection through the preload API.

@@ -223,6 +223,10 @@ internal static class PortableProfileChecks
         CreateSource(layout);
         string externalScript = Path.Combine(fixture, "existing-script.ahk");
         await File.WriteAllTextAsync(externalScript, "; existing inert external script\n");
+        string otherDriveScript = Path.GetPathRoot(fixture)!
+            .StartsWith("Q:", StringComparison.OrdinalIgnoreCase)
+            ? @"R:\External scripts\preserved-reference.ahk"
+            : @"Q:\External scripts\preserved-reference.ahk";
         var document = new SettingsDocument
         {
             LastLoginKey = "same-user-logon",
@@ -233,6 +237,11 @@ internal static class PortableProfileChecks
                     Path = externalScript,
                     FriendlyName = "Existing script",
                     RunAtLogin = true,
+                },
+                new()
+                {
+                    Path = otherDriveScript,
+                    FriendlyName = "Existing script on another drive",
                 },
             ],
             Settings = new() { StartInTray = true, Window = new(12, 24, 1024, 768, true, 144) },
@@ -291,6 +300,13 @@ internal static class PortableProfileChecks
                     .SequenceEqual(source)
                 && File.ReadAllText(externalScript) == "; existing inert external script\n",
             "profile import preserves source bytes, window placement, login marker and external script references without moving scripts"
+        );
+        check(
+            imported.Document.Scripts[1].Path == otherDriveScript
+                && !Directory
+                    .EnumerateFiles(layout.DataRoot, "*.ahk", SearchOption.AllDirectories)
+                    .Any(),
+            "profile import preserves script references on another local drive without copying scripts into portable data"
         );
         var journal = new OperationJournal(Path.Combine(layout.ProfileRoot, "operations.json"));
         await journal.LoadAsync();

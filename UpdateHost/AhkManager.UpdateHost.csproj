@@ -15,6 +15,10 @@
         <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     </PropertyGroup>
     <ItemGroup>
+        <Compile
+            Include="../Core/Infrastructure/WindowsStoragePath.cs"
+            Link="Interop/WindowsStoragePath.cs"
+        />
         <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     </ItemGroup>
 </Project>

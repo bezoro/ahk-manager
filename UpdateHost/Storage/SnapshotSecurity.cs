@@ -149,6 +149,7 @@ internal static class SnapshotSecurity
 
     internal static void VerifyPrivate(string path, bool directory, bool requireProtected = false)
     {
+        UpdatePaths.NoRedirects(path);
         using var identity = WindowsIdentity.GetCurrent();
         var trusted = new HashSet<string>(
             [

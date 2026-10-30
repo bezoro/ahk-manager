@@ -14,6 +14,7 @@ import {
   verifyPortableManifestPolicy,
 } from '../../src/main/updates/portable-update-signature.js';
 import { readPortablePackageProof } from '../../src/main/updates/portable-package-proof.js';
+import { resolveDeployment } from '../../src/main/storage/deployment.js';
 
 const API = 'https://api.github.com/repos/bezoro/ahk-manager';
 const CDN = 'https://release-assets.githubusercontent.com';
@@ -109,6 +110,68 @@ function fixtureFetch(
     throw new Error('Unexpected fixture request.');
   }) as typeof fetch;
 }
+
+test('moving the complete portable folder preserves external script references and verified update history', async (t) => {
+  const { root } = await disk(t);
+  const original = path.join(root, 'original');
+  const relocated = path.join(root, 'relocated portable folder');
+  const external = path.join(root, 'external scripts', 'independent.ahk');
+  await fs.mkdir(path.join(original, 'App'), { recursive: true });
+  await fs.mkdir(path.dirname(external), { recursive: true });
+  await fs.writeFile(external, '; Independent script: never executed by this fixture.');
+  await fs.writeFile(
+    path.join(original, 'portable.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      applicationId: 'Bezoro.AhkManager.Electron',
+      dataDirectory: 'Data',
+    }),
+  );
+  const before = resolveDeployment(
+    path.join(original, 'App', 'Bezoro.AhkManager.exe'),
+    path.join(root, 'local-app-data'),
+  );
+  await fs.mkdir(before.profileDirectory, { recursive: true });
+  const settings = JSON.stringify({
+    Scripts: [{ Path: external, StartWithWindows: true, RunAsAdministrator: true }],
+    Settings: { Theme: 'Dark', LaunchManagerAtLogin: true, LaunchManagerAsAdministrator: true },
+  });
+  await fs.writeFile(path.join(before.profileDirectory, 'settings.json'), settings);
+  const initialStore = new UpdateStore(before.updatesDirectory, 'portable');
+  await initialStore.saveChannel('test');
+  const f = portable();
+  const downloaded = await downloadPortableRelease(f.release, () => {}, {
+    store: initialStore,
+    fetcher: fixtureFetch(f, () => new Response(f.body)),
+    verifyManifest: async () => {},
+  });
+  await initialStore.cache(f.release.version, downloaded, f.release.sha256, f.release.bytes);
+
+  await fs.rename(original, relocated);
+  const after = resolveDeployment(
+    path.join(relocated, 'App', 'Bezoro.AhkManager.exe'),
+    path.join(root, 'local-app-data'),
+  );
+  assert.equal(after.launchExecutable, path.join(relocated, 'Bezoro.AhkManager.exe'));
+  assert.equal(after.dataDirectory, path.join(relocated, 'Data'));
+  assert.equal(
+    await fs.readFile(path.join(after.profileDirectory, 'settings.json'), 'utf8'),
+    settings,
+  );
+  assert.equal(
+    await fs.readFile(external, 'utf8'),
+    '; Independent script: never executed by this fixture.',
+  );
+  const store = new UpdateStore(after.updatesDirectory, 'portable');
+  assert.equal(await store.readChannel(), 'test');
+  const history = await store.cached();
+  assert.equal(history.length, 1);
+  assert.equal(history[0]!.version, f.release.version);
+  assert.ok(history[0]!.installerPath.startsWith(after.updatesDirectory + path.sep));
+  await store.verify(history[0]!);
+  await store.saveChannel('stable');
+  await assert.rejects(fs.lstat(original), { code: 'ENOENT' });
+});
 
 test('portable catalog selects only its own manifest and archive, retaining exact metadata for signatures', async () => {
   const f = portable();

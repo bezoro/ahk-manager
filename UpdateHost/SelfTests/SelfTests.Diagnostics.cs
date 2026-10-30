@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Security;
 using System.Text;
 using System.Text.Json;
+using Bezoro.AhkManager.Core.Infrastructure;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
@@ -25,6 +26,15 @@ internal static partial class SelfTests
             (new TimeoutException(sensitive), "timeout"),
             (new Win32Exception(87, sensitive), "native-error"),
             (new IOException(sensitive), "io-error"),
+            (
+                new StoragePathException(StoragePathFailure.UnsupportedFileSystem),
+                "unsupported-filesystem"
+            ),
+            (new StoragePathException(StoragePathFailure.RedirectedPath), "redirected-path"),
+            (
+                new StoragePathException(StoragePathFailure.CloudFileUnavailable),
+                "cloud-file-unavailable"
+            ),
         ];
         foreach (UpdatePhase phase in Enum.GetValues<UpdatePhase>())
         {
@@ -47,9 +57,63 @@ internal static partial class SelfTests
                     && root.GetProperty("schemaVersion").GetInt32() == 1
                     && root.GetProperty("phase").GetString() is { Length: > 0 } name
                     && name.All(c => char.IsAsciiLetterLower(c) || c == '-')
-                    && root.GetProperty("code").GetString() == item.Code;
+                    && root.GetProperty("code").GetString()
+                        == (
+                            phase == UpdatePhase.PortableInitialization
+                                ? item.Code switch
+                                {
+                                    "file-not-found" or "directory-not-found" =>
+                                        "incomplete-package",
+                                    "invalid-data" or "invalid-json" => "invalid-package",
+                                    _ => item.Code,
+                                }
+                                : item.Code
+                        );
             }
             check(valid, "bounded path-free refusal diagnostics cover " + phase);
+        }
+        foreach (
+            var item in new (Exception Failure, string Code)[]
+            {
+                (new DirectoryNotFoundException(sensitive), "directory-not-found"),
+                (new Win32Exception(3, sensitive), "directory-not-found"),
+                (new UnauthorizedAccessException(sensitive), "access-denied"),
+                (
+                    new StoragePathException(StoragePathFailure.UnsupportedFileSystem),
+                    "unsupported-filesystem"
+                ),
+                (
+                    new StoragePathException(StoragePathFailure.CloudFileUnavailable),
+                    "cloud-file-unavailable"
+                ),
+            }
+        )
+        {
+            var failure = new PortableDataInitializationException(item.Failure);
+            using var diagnostic = JsonDocument.Parse(
+                AdmissionDiagnostics.Encode(
+                    UpdatePhase.PortableDataInitialization,
+                    failure.Failure
+                )[AdmissionDiagnostics.Prefix.Length..]
+            );
+            check(
+                ReferenceEquals(failure.Failure, item.Failure)
+                    && ReferenceEquals(failure.InnerException, item.Failure)
+                    && diagnostic.RootElement.GetProperty("phase").GetString()
+                        == "portable-data-initialization"
+                    && diagnostic.RootElement.GetProperty("code").GetString() == item.Code,
+                "portable data failures retain their reason without implying an incomplete package"
+            );
+            using var updateDiagnostic = JsonDocument.Parse(
+                AdmissionDiagnostics.Encode(UpdatePhase.Arguments, failure)[
+                    AdmissionDiagnostics.Prefix.Length..
+                ]
+            );
+            check(
+                updateDiagnostic.RootElement.GetProperty("phase").GetString() == "arguments"
+                    && updateDiagnostic.RootElement.GetProperty("code").GetString() == item.Code,
+                "a data location refusal during an update preserves its original reason and phase"
+            );
         }
         foreach (
             var item in new[]

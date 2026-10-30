@@ -293,7 +293,7 @@ internal static class StartupRelocationChecks
 
     sealed class Adapter : IUserStartupAdapter, IUserStartupTaskAdapter
     {
-        public string UserSid => "S-1-5-21-relocation-fixture";
+        public string UserSid => "S-1-5-21-100-200-300-1002";
         public string? Entry;
         public StartupTaskRegistration? Task;
         public StartupTaskRegistration? ReplaceBeforeRemoval,

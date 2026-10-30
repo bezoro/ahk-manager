@@ -211,6 +211,12 @@ jobs:
           & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --startup-inspection --root "$env:CI_OUTPUT/startup-inspection" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/startup-inspection.log"
           if ($LASTEXITCODE -ne 0) { throw 'Windows startup inspection failed.' }
 
+      - name: Verify current-user identities through isolated Task Scheduler registration
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --startup-task-integration --root "$env:CI_OUTPUT/startup-task-integration" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/startup-task-integration.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated Task Scheduler identity checks failed.' }
+
       - name: Typecheck frontend
         if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
         working-directory: Presentation.Electron
@@ -375,6 +381,10 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/backend/**/*.json
             ${{ runner.temp }}/ahk-manager-ci/backend/*.txt
             ${{ runner.temp }}/ahk-manager-ci/startup-inspection/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/startup-task-integration/*.xml
+            ${{ runner.temp }}/ahk-manager-ci/startup-task-integration/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/startup-task-integration/*.json
+            ${{ runner.temp }}/ahk-manager-ci/startup-task-integration/*.log
             ${{ runner.temp }}/ahk-manager-ci/frontend/build-info.json
             ${{ runner.temp }}/ahk-manager-ci/update-host-tests/*.json
             ${{ runner.temp }}/ahk-manager-ci/update-network/*.json

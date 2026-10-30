@@ -1,3 +1,5 @@
+using Bezoro.AhkManager.Core.Infrastructure;
+
 namespace Bezoro.AhkManager.UpdateHost;
 
 internal static class PortableInitialization
@@ -7,17 +9,36 @@ internal static class PortableInitialization
         var layout =
             PortableLayout.FromParent()
             ?? throw new InvalidDataException("The parent is not a portable Manager.");
-        using var directories = new DirectoryLease([
-            layout.Root,
-            Directory.Exists(layout.Data) ? layout.Data : Path.GetDirectoryName(layout.Data)!,
-        ]);
+        using var directories = new DirectoryLease([layout.Root]);
+        using var dataDirectories = RetainDataDirectory(layout);
         using var marker = FileLease.Open(layout.Marker, 4096);
         if (marker.Hash() != layout.MarkerHash)
             throw new InvalidDataException("Portable configuration changed before initialization.");
         VerifySourceHelper(layout);
         Initialize(layout);
-        InitializeData(layout);
+        try
+        {
+            InitializeData(layout);
+        }
+        catch (Exception failure) when (UpdateProtocol.Known(failure))
+        {
+            throw new PortableDataInitializationException(failure);
+        }
         return layout;
+    }
+
+    static DirectoryLease RetainDataDirectory(PortableLayout layout)
+    {
+        try
+        {
+            return new DirectoryLease([
+                Directory.Exists(layout.Data) ? layout.Data : Path.GetDirectoryName(layout.Data)!,
+            ]);
+        }
+        catch (Exception failure) when (UpdateProtocol.Known(failure))
+        {
+            throw new PortableDataInitializationException(failure);
+        }
     }
 
     internal static void VerifySourceHelper(PortableLayout layout)
@@ -129,6 +150,7 @@ internal static class PortableInitialization
         foreach (string entry in Directory.EnumerateFileSystemEntries(layout.Root))
         {
             string name = Path.GetFileName(entry);
+            WindowsStoragePath.VerifyEntry(entry);
             var attributes = File.GetAttributes(entry);
             if (
                 name.StartsWith(".app-stage-", StringComparison.Ordinal)
@@ -156,7 +178,6 @@ internal static class PortableInitialization
             }
             if (
                 !allowed.TryGetValue(name, out bool directory)
-                || (attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0
                 || ((attributes & FileAttributes.Directory) != 0) != directory
             )
                 throw new InvalidDataException(

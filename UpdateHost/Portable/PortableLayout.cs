@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
+using Bezoro.AhkManager.Core.Infrastructure;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
@@ -83,6 +84,7 @@ internal sealed record PortableLayout(
         if (UpdatePaths.Equal(root, Path.GetPathRoot(root)!))
             throw new InvalidDataException("A portable container cannot be a drive root.");
         UpdatePaths.NoRedirects(root);
+        WindowsStoragePath.RequireNtfs(root);
         using var marker = FileLease.Open(Path.Combine(root, "portable.json"), 4096);
         var configuration = UpdateProtocol.Read<PortableConfiguration>(marker.Read(4096));
         if (
@@ -92,7 +94,15 @@ internal sealed record PortableLayout(
             || configuration.DataDirectory.Contains('/')
         )
             throw new InvalidDataException("The portable configuration is invalid.");
-        string data = ResolveDataDirectory(root, configuration.DataDirectory);
+        string data;
+        try
+        {
+            data = ResolveDataDirectory(root, configuration.DataDirectory);
+        }
+        catch (Exception failure) when (UpdateProtocol.Known(failure))
+        {
+            throw new PortableDataInitializationException(failure);
+        }
         return new(root, Path.Combine(root, "App"), data, marker.Hash());
     }
 
@@ -151,6 +161,7 @@ internal sealed record PortableLayout(
                 throw new InvalidDataException("Portable data overlaps update recovery files.");
         }
         UpdatePaths.NoRedirects(data);
+        WindowsStoragePath.RequireNtfs(data);
         return data;
     }
 

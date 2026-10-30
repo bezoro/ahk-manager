@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using Bezoro.AhkManager.Core.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 
 namespace Bezoro.AhkManager.UpdateHost;
@@ -43,9 +44,10 @@ internal sealed class DirectoryLease : IDisposable
                     throw new Win32Exception(error, "A portable directory could not be retained.");
                 }
                 handles.Add(handle);
+                WindowsStoragePath.VerifyHandle(handle);
                 if (
                     !Native.GetFileInformationByHandle(handle, out var information)
-                    || (information.Attributes & 0x410) != 0x10
+                    || (information.Attributes & (uint)FileAttributes.Directory) == 0
                 )
                     throw new IOException(
                         "A retained portable directory is redirected or changed type."

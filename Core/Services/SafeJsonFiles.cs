@@ -31,16 +31,7 @@ internal static class SafeJsonFiles
             || path.AsSpan(2).Contains(':')
         )
             throw new IOException("Local absolute path required.");
-        for (
-            string? current = path;
-            current is not null;
-            current = System.IO.Path.GetDirectoryName(current)
-        )
-            if (
-                (File.Exists(current) || Directory.Exists(current))
-                && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0
-            )
-                throw new IOException("Redirected path refused.");
+        WindowsStoragePath.NoRedirects(path);
     }
 
     public static async Task<byte[]?> ReadAsync(string path, CancellationToken ct)

@@ -12,6 +12,10 @@ Backend tests use fresh roots and effect adapters. Startup inspection reads WMI 
 
 The updater's native self-tests cover bounded protocol documents, package validation, identity checks, access control, transaction failures, and recovery. Test-only inert image adapters are confined to those tests; production updates verify the actual executable metadata and package contents.
 
+`Tests.Backend.exe --startup-task-integration --root <new-absolute-fixture-directory>` performs the Windows Scheduler identity round trip. It registers disabled, inert tasks in a fresh GUID folder and tests SID/account-name combinations without running a task or touching Manager's production registration. Cleanup requires the acknowledged path, nonce and exact observed XML hash. Windows CI invokes it once and archives the task XML and check log. It validates registration; it does not simulate a Windows logon.
+
+The native Windows self-test also creates a private, nonce-bound Cloud Files sync root when CFAPI is available. It exercises real hydrated placeholders, offline-file refusal, retained metadata/data handles and recovery snapshots without OneDrive credentials or a network provider. It authenticates the exact root, registration and child inventory before unregistering, since unregistration can delete dehydrated files. Unsupported platforms report an explicit skip; failures on a supported platform fail validation. This test does not claim to exercise OneDrive synchronization itself.
+
 ## Interface captures
 
 `tools/Test-ElectronPresentation.ps1` opens the production renderer with a synthetic Electron host. It does not connect to the backend or execute scripts. It exercises light and dark themes, narrow layouts, 200% zoom, updates and rollback, preferences, and preparing or cancelling a custom data location. Screenshots and assertion results are saved in `windows-ui-evidence`.

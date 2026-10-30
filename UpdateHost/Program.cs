@@ -32,9 +32,14 @@ internal static class Program
                 _ = PortableInitialization.Run();
                 return 0;
             }
+            catch (PortableDataInitializationException failure)
+            {
+                AdmissionDiagnostics.Write(UpdatePhase.PortableDataInitialization, failure.Failure);
+                return 65;
+            }
             catch (Exception ex) when (UpdateProtocol.Known(ex))
             {
-                AdmissionDiagnostics.Write(UpdatePhase.InstallationOwnership, ex);
+                AdmissionDiagnostics.Write(UpdatePhase.PortableInitialization, ex);
                 return 65;
             }
         }

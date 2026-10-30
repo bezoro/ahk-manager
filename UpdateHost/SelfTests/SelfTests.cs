@@ -31,6 +31,9 @@ internal static partial class SelfTests
             "1.2.1"
         );
         CheckAdmissionDiagnostics(Check);
+        CheckStoragePathPolicy(Check);
+        CheckRetainedStorageHandles(root, Check);
+        await CheckCloudFiles(root, Check).ConfigureAwait(false);
         CheckProtocol(root, plan, Check);
         CheckReleaseVersions(root, plan, Check);
         CheckInstallerCommandLine(root, plan, Check);

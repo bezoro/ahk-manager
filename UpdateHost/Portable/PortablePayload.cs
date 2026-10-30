@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using Bezoro.AhkManager.Core.Infrastructure;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
@@ -199,9 +200,8 @@ internal static class PortablePayload
                     throw new InvalidDataException(
                         "The portable application has too many entries."
                     );
+                WindowsStoragePath.VerifyEntry(entry);
                 var attributes = File.GetAttributes(entry);
-                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
-                    throw new IOException("Redirected portable files are refused.");
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
                     if (

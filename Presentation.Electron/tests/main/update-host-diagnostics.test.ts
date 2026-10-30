@@ -118,3 +118,23 @@ test('preparation refusals explain supported recovery without exposing native di
     updateHostRefusalMessage(null),
   );
 });
+
+test('storage refusal codes explain NTFS and cloud availability before generic ownership guidance', () => {
+  for (const phase of ['cache-ownership', 'installation-ownership', 'portable-initialization']) {
+    const ntfs = updateHostRefusalMessage({
+      schemaVersion: 1,
+      phase,
+      code: 'unsupported-filesystem',
+    });
+    assert.match(ntfs, /require NTFS.*ReFS, FAT32 and exFAT/);
+    assert.doesNotMatch(ntfs, /permissions|Setup/);
+    assert.match(
+      updateHostRefusalMessage({ schemaVersion: 1, phase, code: 'cloud-file-unavailable' }),
+      /OneDrive.*Always keep on this device.*syncing/,
+    );
+    assert.match(
+      updateHostRefusalMessage({ schemaVersion: 1, phase, code: 'redirected-path' }),
+      /symbolic link, junction or unsupported redirect/,
+    );
+  }
+});

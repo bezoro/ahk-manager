@@ -66,6 +66,7 @@ import { createApplicationUpdates } from './updates/application-updates.js';
 import { verifyCachedPortablePackageSignature } from './updates/portable-update-signature.js';
 import { DataLocationController } from './desktop/data-location.js';
 import { initializePortableStorage } from './desktop/storage-bootstrap.js';
+import { ensurePortableSearchShortcut } from './desktop/portable-search-shortcut.js';
 import { resolveDeployment, samePath, type DeploymentLayout } from './storage/deployment.js';
 import {
   canKeepCurrentData,
@@ -751,6 +752,7 @@ export function startManager(): void {
       await backend.request<OperationResult>('initializeStartup', {});
     }
     await runLogin();
+    if (backend) registerPortableApplication(backend);
     if (
       lifecycle.shouldShowAtStartup(
         controller.state.snapshot?.settings,
@@ -838,6 +840,41 @@ export function startManager(): void {
       if (!lifecycle.quietStartup) show();
     }
   }
+  function registerPortableApplication(owner: BackendClient): void {
+    if (!app.isPackaged || process.platform !== 'win32' || deployment.mode !== 'portable') return;
+    let appDataDirectory: string;
+    try {
+      appDataDirectory = app.getPath('appData');
+    } catch {
+      return;
+    }
+    void ensurePortableSearchShortcut(deployment, {
+      platform: process.platform,
+      appDataDirectory,
+      permitted: () => {
+        const state = controller?.state;
+        return (
+          backend === owner &&
+          owner.ready &&
+          state?.connection === 'ready' &&
+          state.snapshot?.readOnly === false &&
+          state.snapshot.effectsAvailable &&
+          !state.administrationPending &&
+          !adoptionPending &&
+          !administration?.active &&
+          !updateApplying &&
+          !updateShutdownInFlight &&
+          !stopExit.active &&
+          !storageRestarting &&
+          !quitting
+        );
+      },
+      read: (file) => shell.readShortcutLink(file),
+      write: (file, operation, details) => shell.writeShortcutLink(file, operation, details),
+    })
+      .then((result) => diagnostics?.record('portable-search-shortcut', { result }))
+      .catch(() => {});
+  }
   async function reportLoginResult(result: OperationResult): Promise<void> {
     try {
       continuationOffer = backend?.ready
@@ -878,6 +915,7 @@ export function startManager(): void {
       adoptionPending = startupAdoptionBlocksInteraction(result);
       controller.setAdministrationPending(adoptionPending);
       controller.setConnection('ready');
+      if (backend) registerPortableApplication(backend);
       updateTray();
       show();
       if (window)
@@ -1228,6 +1266,7 @@ export function startManager(): void {
         if (updateShutdownInFlight) throw new Error('Wait for confirmed backend shutdown.');
         await startBackend();
         if (backend?.ready) await runLogin();
+        if (backend) registerPortableApplication(backend);
       },
       selectionChanged: (selected) => {
         diagnosticSelection = selected?.scriptId ?? null;
