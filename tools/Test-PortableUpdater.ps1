@@ -15,13 +15,11 @@ if (-not $IsWindows -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONME
 if (-not [IO.Path]::IsPathFullyQualified($OutputRoot) -or (Test-Path -LiteralPath $OutputRoot)) { throw 'Use a fresh absolute portable evidence directory.' }
 Import-Module (Join-Path $PSScriptRoot 'PortableRelease.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'test-support/PortableUpdaterSession.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'test-support/PortableSigningFixture.psm1') -Force
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/InstalledUpdaterUi.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableStartupUi.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableDataPickerUi.cs')
-$readStartupDialog = [Func[IntPtr, int, string, DateTime, string]] {
-    param([IntPtr]$WindowHandle, [int]$ProcessId, [string]$ImagePath, [DateTime]$StartedAt)
-    return [AhkManager.TestSupport.InstalledUpdaterUi]::AccessibleDialogText($WindowHandle, $ProcessId, $ImagePath, $StartedAt)
-}
+$readStartupDialog = [Delegate]::CreateDelegate([Func[IntPtr, int, string, DateTime, string]], [AhkManager.TestSupport.InstalledUpdaterUi], 'AccessibleDialogText')
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sid = $identity.User.Value
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -45,6 +43,8 @@ $outputCreated = $false
 $startupWritten = $false
 $updatesRoot = $null
 $retiredDataHashes = @{}
+$signingFixture = $null
+$signingFixtureCleanup = 'NotCreated'
 
 function Check([bool]$Condition, [string]$Name) {
     $checks.Add([ordered]@{ name = $Name; passed = $Condition })
@@ -98,11 +98,14 @@ function Save-OperationEvidence([string]$Phase, [string]$Operation) {
         if ($file.Name -match '\A(?:plan|ready|commit|cancel|outcome|helper-refusal)\.json\z|\Ahelper\.log\z' -and $file.Length -le 8MB) { Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $destination $file.Name) }
     }
 }
-function Seed-Package($Release, [string]$Archive, [string]$Manifest) {
+function Seed-Package($Release, [string]$Archive, [string]$Manifest, [string]$Signature) {
     $directory = Join-Path $updatesRoot (Join-Path 'installers' $Release.Version)
     [IO.Directory]::CreateDirectory($directory) | Out-Null
     [IO.File]::Copy($Archive, (Join-Path $directory 'archive.zip'), $false)
     [IO.File]::Copy($Manifest, (Join-Path $directory 'release.json'), $false)
+    $signatureFile = Get-Item -LiteralPath $Signature
+    if ($signatureFile -isnot [IO.FileInfo] -or $signatureFile.Length -le 0 -or $signatureFile.Length -gt 65536) { throw 'The isolated portable manifest signature is absent or oversized.' }
+    [IO.File]::Copy($Signature, (Join-Path $directory 'release.json.p7s'), $false)
     $receipt = [ordered]@{ schemaVersion = 1; updateProtocol = 2; version = $Release.Version; sha256 = $Release.Sha256; bytes = $Release.ArchiveBytes }
     [IO.File]::WriteAllText((Join-Path $directory 'receipt.json'), ($receipt | ConvertTo-Json -Compress), $utf8)
 }
@@ -319,6 +322,33 @@ try {
     $parentAcl = (Get-Acl -LiteralPath $parent).Sddl
     $portableRoot = Join-Path $parent 'Portable Manager'
     [IO.Compression.ZipFile]::ExtractToDirectory($BaselineArchive, $portableRoot)
+    $publisherPolicyPath = Join-Path (Split-Path -Parent $BaselineManifest) 'publisher-policy.json'
+    $policyFile = Get-Item -LiteralPath $publisherPolicyPath
+    if ($policyFile -isnot [IO.FileInfo] -or $policyFile.Length -le 0 -or $policyFile.Length -gt 65536) { throw 'The test-only application publisher policy is absent or oversized.' }
+    $policy = Get-Content -LiteralPath $publisherPolicyPath -Raw | ConvertFrom-Json
+    $candidateZip = [IO.Compression.ZipFile]::OpenRead($CandidateArchive)
+    try {
+        $entries = @($candidateZip.Entries | Where-Object { $_.FullName -ieq 'App/resources/app-update.yml' })
+        if ($entries.Count -ne 1 -or $entries[0].FullName -cne 'App/resources/app-update.yml' -or $entries[0].Length -le 0 -or $entries[0].Length -gt 65536) { throw 'The candidate archive has no exact bounded application publisher policy.' }
+        $stream = $entries[0].Open()
+        $buffer = [IO.MemoryStream]::new()
+        try {
+            $chunk = [byte[]]::new(4096)
+            while (($read = $stream.Read($chunk, 0, $chunk.Length)) -gt 0) {
+                if ($buffer.Length + $read -gt 65536) { throw 'The candidate publisher policy exceeds its bounded length.' }
+                $buffer.Write($chunk, 0, $read)
+            }
+            if ($buffer.Length -ne $entries[0].Length) { throw 'The candidate publisher policy differs from its declared archive length.' }
+            $policyHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($buffer.ToArray())).ToLowerInvariant()
+        }
+        finally { $buffer.Dispose(); $stream.Dispose() }
+    }
+    finally { $candidateZip.Dispose() }
+    Check ($policy.sourceCommit -ceq $SourceCommit -and $policy.candidatePolicySha256 -ceq $policyHash) 'the exact candidate archive publisher policy matches the source-bound production parser metadata'
+    $signingFixture = New-PortableSigningFixture -ApplicationRoot (Join-Path $portableRoot 'App') -CandidateManifestPath $CandidateManifest -BaselineManifestPath $BaselineManifest -PublisherPolicyPath $publisherPolicyPath -OutputRoot (Join-Path $OutputRoot 'signing-fixture')
+    $signingFixtureCleanup = 'Pending'
+    Write-Json 'portable-signing-proof.json' $signingFixture.Proof
+    Check ($null -ne $signingFixture -and (Test-Path -LiteralPath $signingFixture.CandidateSignaturePath -PathType Leaf) -and (Test-Path -LiteralPath $signingFixture.BaselineSignaturePath -PathType Leaf)) 'both exact portable manifests have authenticated fixture signatures before any cache entry is seeded'
     $dataRoot = Join-Path $portableRoot 'Data'
     if ($Scenario -eq 'custom-data') {
         $customParent = Join-Path $OutputRoot 'custom-state-parent'
@@ -341,6 +371,7 @@ try {
             Start-Sleep -Milliseconds 100
         } while (-not $session.Process.HasExited -and [DateTime]::UtcNow -lt $deadline)
         Write-Json 'foreign-root-windows.json' ([AhkManager.TestSupport.InstalledUpdaterUi]::Describe($session.Process.Id, $session.Image, $session.Started))
+        Write-Json 'foreign-root-observation.json' ([ordered]@{ fixture = $true; dismissed = $dismissed; processExited = $session.Process.HasExited; observation = [AhkManager.TestSupport.PortableStartupUi]::LastObservation })
         Check ($dismissed -and $session.Process.WaitForExit(30000) -and $session.Process.ExitCode -eq 65) 'the actual portable app refuses an unknown root file and exits after its exact owned error dialog closes'
         Check ((Hash $foreign) -ceq $foreignHash -and (Get-Acl -LiteralPath $portableRoot).Sddl -ceq $rootAcl -and (Get-Acl -LiteralPath $parent).Sddl -ceq $parentAcl) 'failed initialization preserves unrelated files and both directory permission sets'
         Check (-not (Test-Path -LiteralPath $dataRoot) -and (No-Registration)) 'refused portable startup creates neither user Data nor installer registration'
@@ -394,8 +425,8 @@ try {
         $stateSentinel = Join-Path $profile 'ci-state-sentinel.txt'
         [IO.File]::WriteAllText($stateSentinel, 'Portable user state survives update and rollback.', $utf8)
         $stateHash = Hash $stateSentinel
-        Seed-Package $baseline $BaselineArchive $BaselineManifest
-        Seed-Package $candidate $CandidateArchive $CandidateManifest
+        Seed-Package $baseline $BaselineArchive $BaselineManifest $signingFixture.BaselineSignaturePath
+        Seed-Package $candidate $CandidateArchive $CandidateManifest $signingFixture.CandidateSignaturePath
         [IO.File]::WriteAllText((Join-Path $updatesRoot 'update-channel.json'), '{"schemaVersion":1,"channel":"test"}', $utf8)
         if ($Scenario -eq 'custom-data') {
             $moveRoot = Join-Path $OutputRoot 'before-data-move'
@@ -434,10 +465,18 @@ finally {
     }
     if ($inert) { $inert.StandardInput.Close(); if (-not $inert.WaitForExit(10000)) { $failure = 'The unrelated fixture process did not exit after EOF; it was preserved.' }; $inert.Dispose() }
     if ($registry) { $registry.Dispose() }
+    if ($signingFixture) {
+        try {
+            $owned = @(Get-CimInstance Win32_Process -Filter "Name='Bezoro.AhkManager.exe'" | Where-Object { $_.ExecutablePath -eq (Join-Path $portableRoot 'App/Bezoro.AhkManager.exe') -or $_.ExecutablePath -eq (Join-Path $portableRoot 'Bezoro.AhkManager.exe') })
+            if (-not $helperInFlight -and $owned.Count -eq 0) { Remove-PortableSigningFixture -Fixture $signingFixture; $signingFixtureCleanup = 'Removed' }
+            else { $signingFixtureCleanup = 'PreservedForUnknownSession'; $trace.Add('The isolated signing fixture was preserved because an owned app or update helper may still be active.') }
+        }
+        catch { $signingFixtureCleanup = 'CleanupFailed'; $failure = 'The isolated signing fixture could not be removed: ' + $_.Exception.Message }
+    }
     $identity.Dispose()
     if ($outputCreated) {
         [IO.File]::WriteAllLines((Join-Path $OutputRoot 'portable-update.log'), $trace.ToArray(), $utf8)
-        Write-Json 'portable-update-summary.json' ([ordered]@{ fixture = $true; scenario = $Scenario; commit = $SourceCommit; complete = $complete; unknownHelperOutcome = $helperInFlight; checks = $checks.ToArray(); failure = $failure })
+        Write-Json 'portable-update-summary.json' ([ordered]@{ fixture = $true; scenario = $Scenario; commit = $SourceCommit; complete = $complete; unknownHelperOutcome = $helperInFlight; signingFixtureCleanup = $signingFixtureCleanup; checks = $checks.ToArray(); failure = $failure })
     }
 }
 if ($failure) { throw $failure }

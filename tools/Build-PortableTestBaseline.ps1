@@ -56,6 +56,8 @@ try {
     $manifest = Join-Path $packages 'ahk-manager-portable-release.json'
     & (Join-Path $PSScriptRoot 'New-PortableReleaseManifest.ps1') -ArchivePath $archive -OutputPath $manifest -Version $Version -Commit $Commit -Notes 'Isolated portable update regression baseline. Not a published release.'
     & (Join-Path $PSScriptRoot 'Test-PortablePackage.ps1') -ArchivePath $archive -ManifestPath $manifest -OutputRoot (Join-Path $OutputRoot 'evidence')
+    & node (Join-Path $repository 'Presentation.Electron/scripts/portable-test-policy.mjs') --candidate $candidatePolicy --baseline $baselinePolicy --output (Join-Path $packages 'publisher-policy.json') --commit $Commit
+    if ($LASTEXITCODE -ne 0) { throw 'The test baseline publisher policy could not be recorded.' }
 }
 finally { foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $previous[$name]) } }
 Write-Host "Built the coherent, test-only portable baseline $Version at $Commit."

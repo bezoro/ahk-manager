@@ -68,7 +68,13 @@ function Start-PortableSession {
         if (-not $process) { throw 'The root launcher did not create its exact portable application session.' }
     }
     $created = $process.StartTime.ToUniversalTime()
-    if ($created -lt $startedBefore -or -not [AhkManager.TestSupport.InstalledUpdaterUi]::Matches($process.Id, $application, $created)) { throw 'The portable application session identity changed.' }
+    $matches = [AhkManager.TestSupport.InstalledUpdaterUi]::Matches($process.Id, $application, $created)
+    # Kernel process creation timestamps can precede precise UtcNow by a clock
+    # tick. Identity still requires this retained PID, exact image and creation.
+    $inCreationWindow = $created -ge $startedBefore.AddSeconds(-1) -and $created -le [DateTime]::UtcNow.AddSeconds(1)
+    $identity = [ordered]@{ fixture = $true; pid = $process.Id; image = $application; launchRequestedAtUtc = $startedBefore.ToString('O'); processCreatedAtUtc = $created.ToString('O'); creationDeltaMilliseconds = ($created - $startedBefore).TotalMilliseconds; exactIdentityMatches = $matches; withinCreationWindow = $inCreationWindow }
+    [IO.File]::WriteAllText((Join-Path $EvidenceRoot 'session-identity.json'), ($identity | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    if (-not $inCreationWindow -or -not $matches) { throw 'The portable application session identity changed.' }
     $session = [pscustomobject]@{ Process = $process; Started = $created; Image = $application; Socket = $null; Sequence = 0; Capture = $null; Port = $port }
     if (-not $ViaLauncher) { $session.Capture = [AhkManager.TestSupport.InstalledUpdaterUi]::Capture($process, (Join-Path $EvidenceRoot 'manager.stdout.log'), (Join-Path $EvidenceRoot 'manager.stderr.log')) }
     if ($ExpectStartupRefusal) { return $session }

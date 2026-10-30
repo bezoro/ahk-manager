@@ -98,6 +98,14 @@ export function startManager(): void {
     deployment = resolveDeployment(app.getPath('exe'), localAppData);
     initializePortableStorage(deployment);
   } catch (error) {
+    const quiet =
+      !process.argv.includes('--foreground') &&
+      !process.argv.includes('--request-administrator') &&
+      (process.argv.includes('--login') || process.argv.includes('--background'));
+    if (quiet) {
+      app.exit(65);
+      return;
+    }
     void app.whenReady().then(() => {
       dialog.showErrorBox(t.title, safeError(error));
       app.exit(65);
@@ -218,7 +226,8 @@ export function startManager(): void {
       storageClosing = storageLease.close().then(
         () => {
           storageClosed = true;
-          app.quit();
+          // Leave the cancelled native quit callback before requesting exit again.
+          setImmediate(() => app.quit());
         },
         () => app.exit(65),
       );
@@ -263,12 +272,13 @@ export function startManager(): void {
       const current = resolveDeployment(app.getPath('exe'), localAppData);
       if (!samePath(current.dataDirectory, deployment.dataDirectory))
         throw new Error('The data location changed during startup. Open Manager again.');
-      storageLease = await acquirePortableStorageLease(deployment, (error) => {
-        // Losing namespace protection must stop writes and cannot authorize an update.
-        controller?.setConnection('failed', safeError(error));
-        quitting = true;
-        app.exit(65);
-      });
+      if (deployment.mode === 'portable')
+        storageLease = await acquirePortableStorageLease(deployment, (error) => {
+          // Losing namespace protection must stop writes and cannot authorize an update.
+          controller?.setConnection('failed', safeError(error));
+          quitting = true;
+          app.exit(65);
+        });
       try {
         await importLegacyUpdateChannel(deployment);
       } catch (error) {

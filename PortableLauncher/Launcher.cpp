@@ -2,6 +2,7 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include <shellapi.h>
 #include <strsafe.h>
 #include <cwchar>
 
@@ -34,7 +35,26 @@ bool RegularSibling(const wchar_t* name) {
                           FILE_ATTRIBUTE_DEVICE)) == 0;
 }
 
+bool QuietStartup() {
+    int count = 0;
+    wchar_t** arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (arguments == nullptr) return false;
+    bool quiet = false;
+    bool explicitRequest = false;
+    for (int index = 1; index < count; ++index) {
+        if (wcscmp(arguments[index], L"--login") == 0 ||
+            wcscmp(arguments[index], L"--background") == 0)
+            quiet = true;
+        if (wcscmp(arguments[index], L"--foreground") == 0 ||
+            wcscmp(arguments[index], L"--request-administrator") == 0)
+            explicitRequest = true;
+    }
+    LocalFree(arguments);
+    return quiet && !explicitRequest;
+}
+
 int Fail() {
+    if (QuietStartup()) return 1;
     MessageBoxW(nullptr,
                 L"AHK Manager could not start. Keep the portable launcher, portable.json, "
                 L"and App folder together, then try again.",

@@ -1,0 +1,326 @@
+#requires -Version 7.0
+Set-StrictMode -Version Latest
+$script:fixtures = @{}
+
+function Assert-FixtureRunner {
+    if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+        throw 'Portable signing fixtures require a disposable GitHub-hosted Windows runner.'
+    }
+}
+
+function Assert-FixturePath([string]$Path) {
+    if (-not [IO.Path]::IsPathFullyQualified($Path)) { throw 'Fixture paths must be absolute.' }
+    for ($current = [IO.Path]::GetFullPath($Path); $current; $current = [IO.Path]::GetDirectoryName($current)) {
+        if ((Test-Path -LiteralPath $current) -and ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Redirected fixture paths are refused.' }
+    }
+}
+
+function New-FixtureDirectory([string]$Path) {
+    Assert-FixturePath $Path
+    if (Test-Path -LiteralPath $Path) { throw 'Signing fixture directories must be fresh.' }
+    [IO.Directory]::CreateDirectory($Path) | Out-Null
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $acl = [Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetOwner($identity.User)
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @($identity.User.Value, 'S-1-5-18', 'S-1-5-32-544')) {
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid), [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit', [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow))
+        }
+        Set-Acl -LiteralPath $Path -AclObject $acl
+    }
+    finally { $identity.Dispose() }
+}
+
+function Read-FixtureBytes([string]$Path, [long]$Maximum) {
+    Assert-FixturePath $Path
+    $file = Get-Item -LiteralPath $Path -Force
+    if ($file -isnot [IO.FileInfo] -or $file.Length -lt 2 -or $file.Length -gt $Maximum) { throw 'The signing fixture input is not a bounded regular file.' }
+    return ,([IO.File]::ReadAllBytes($file.FullName))
+}
+
+function Read-FixtureJson([string]$Path) {
+    $options = [Text.Json.JsonDocumentOptions]::new()
+    $options.MaxDepth = 12
+    $document = [Text.Json.JsonDocument]::Parse([ReadOnlyMemory[byte]]::new((Read-FixtureBytes $Path 65536)), $options)
+    try { Assert-FixtureJsonMembers $document.RootElement; return $document }
+    catch { $document.Dispose(); throw }
+}
+
+function Assert-FixtureJsonMembers($Element) {
+    if ($Element.ValueKind -eq [Text.Json.JsonValueKind]::Object) {
+        $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($property in $Element.EnumerateObject()) {
+            if (-not $names.Add($property.Name)) { throw 'Duplicate signing fixture metadata fields are refused.' }
+            Assert-FixtureJsonMembers $property.Value
+        }
+    }
+    elseif ($Element.ValueKind -eq [Text.Json.JsonValueKind]::Array) { foreach ($value in $Element.EnumerateArray()) { Assert-FixtureJsonMembers $value } }
+}
+
+function Get-FixturePolicy([string]$ApplicationRoot, [string]$PublisherPolicyPath, [string]$CandidateManifestPath, [string]$BaselineManifestPath) {
+    $policy = Read-FixtureJson $PublisherPolicyPath
+    $candidate = $null
+    $baseline = $null
+    try {
+        $root = $policy.RootElement
+        $expected = @('schemaVersion', 'names', 'candidatePolicySha256', 'baselinePolicySha256', 'sourceCommit')
+        $names = @($root.EnumerateObject() | ForEach-Object Name)
+        if ($root.ValueKind -ne [Text.Json.JsonValueKind]::Object -or $names.Count -ne $expected.Count -or @($names | Where-Object { $_ -cnotin $expected }).Count -ne 0 -or $root.GetProperty('schemaVersion').GetInt32() -ne 1) { throw 'The test-only publisher policy schema is invalid.' }
+        $publishers = $root.GetProperty('names')
+        if ($publishers.ValueKind -ne [Text.Json.JsonValueKind]::Array -or $publishers.GetArrayLength() -gt 32) { throw 'The test-only publisher names are invalid.' }
+        $values = [Collections.Generic.List[string]]::new()
+        foreach ($publisher in $publishers.EnumerateArray()) {
+            if ($publisher.ValueKind -ne [Text.Json.JsonValueKind]::String) { throw 'The test-only publisher names are invalid.' }
+            $name = $publisher.GetString()
+            if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 1024 -or $name.ToCharArray().Where({ [char]::IsControl($_) }).Count -ne 0) { throw 'The test-only publisher names are invalid.' }
+            $values.Add($name)
+        }
+        $actual = (Get-FileHash -LiteralPath (Join-Path $ApplicationRoot 'resources/app-update.yml') -Algorithm SHA256).Hash.ToLowerInvariant()
+        foreach ($field in @('candidatePolicySha256', 'baselinePolicySha256')) {
+            $hash = $root.GetProperty($field).GetString()
+            if ($hash -cnotmatch '\A[0-9a-f]{64}\z' -or $hash -cne $actual) { throw 'The packaged publisher policy differs from the verified test-only policy.' }
+        }
+        $commit = $root.GetProperty('sourceCommit').GetString()
+        $candidate = Read-FixtureJson $CandidateManifestPath
+        $baseline = Read-FixtureJson $BaselineManifestPath
+        if ($commit -cnotmatch '\A[0-9a-f]{40}\z' -or $candidate.RootElement.GetProperty('commit').GetString() -cne $commit -or $baseline.RootElement.GetProperty('commit').GetString() -cne $commit) { throw 'Publisher fixture provenance differs from the exact tested manifests.' }
+        return [pscustomobject]@{ Names = $values.ToArray(); SourceCommit = $commit; PolicySha256 = $actual }
+    }
+    finally { if ($baseline) { $baseline.Dispose() }; if ($candidate) { $candidate.Dispose() }; $policy.Dispose() }
+}
+
+function New-FixtureCertificate($State, [string]$Publisher) {
+    $now = [DateTimeOffset]::UtcNow
+    $State.RootKey = [Security.Cryptography.RSA]::Create(2048)
+    $State.LeafKey = [Security.Cryptography.RSA]::Create(2048)
+    $rootName = [Security.Cryptography.X509Certificates.X500DistinguishedNameBuilder]::new()
+    $rootName.AddCommonName('AHK Manager disposable CI root ' + $State.Id)
+    $rootRequest = [Security.Cryptography.X509Certificates.CertificateRequest]::new($rootName.Build(), $State.RootKey, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $null = $rootRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $true, 0, $true))
+    $null = $rootRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new([Security.Cryptography.X509Certificates.X509KeyUsageFlags]'KeyCertSign, CrlSign', $true))
+    $null = $rootRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509SubjectKeyIdentifierExtension]::new($rootRequest.PublicKey, $false))
+    $State.RootCertificate = $rootRequest.CreateSelfSigned($now.AddMinutes(-5), $now.AddHours(2))
+    $State.RootDer = $State.RootCertificate.RawData
+    $State.RootThumbprint = $State.RootCertificate.Thumbprint
+    $State.CrlPath = Join-Path $State.Root 'issuer.crl'
+    $crlUri = [Uri]::new($State.CrlPath)
+    if (-not $crlUri.IsFile -or -not $crlUri.IsLoopback) { throw 'The fixture CRL must use its own local file URL.' }
+    $builder = [Security.Cryptography.X509Certificates.CertificateRevocationListBuilder]::new()
+    $crl = $builder.Build($State.RootCertificate, [Numerics.BigInteger]::One, $now.AddHours(1), [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1, $now.AddMinutes(-2))
+    [IO.File]::WriteAllBytes($State.CrlPath, $crl)
+    $leafName = [Security.Cryptography.X509Certificates.X500DistinguishedNameBuilder]::new()
+    $leafName.AddCommonName($Publisher)
+    $leafRequest = [Security.Cryptography.X509Certificates.CertificateRequest]::new($leafName.Build(), $State.LeafKey, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $null = $leafRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
+    $null = $leafRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new([Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature, $true))
+    $usage = [Security.Cryptography.OidCollection]::new()
+    $usage.Add([Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.3')) | Out-Null
+    $null = $leafRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($usage, $true))
+    $null = $leafRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509SubjectKeyIdentifierExtension]::new($leafRequest.PublicKey, $false))
+    $null = $leafRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509AuthorityKeyIdentifierExtension]::CreateFromCertificate($State.RootCertificate, $true, $false))
+    $null = $leafRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.CertificateRevocationListBuilder]::BuildCrlDistributionPointExtension([string[]]@($crlUri.AbsoluteUri), $false))
+    $serial = [byte[]]::new(16)
+    [Security.Cryptography.RandomNumberGenerator]::Fill($serial)
+    $publicLeaf = $leafRequest.Create($State.RootCertificate, $now.AddMinutes(-4), $now.AddMinutes(55), $serial)
+    try { $State.LeafCertificate = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::CopyWithPrivateKey($publicLeaf, $State.LeafKey) }
+    finally { $publicLeaf.Dispose() }
+}
+
+function Add-FixtureTrust($State) {
+    $publicRoot = [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadCertificate($State.RootDer)
+    $store = [Security.Cryptography.X509Certificates.X509Store]::new([Security.Cryptography.X509Certificates.StoreName]::Root, [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+    try {
+        if ($publicRoot.HasPrivateKey) { throw 'A fixture trust store must never receive a private key.' }
+        $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        if ($store.Certificates.Find([Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint, $State.RootThumbprint, $false).Count -ne 0) { throw 'The fresh fixture root already exists in the user trust store.' }
+        $State.TrustAttempted = $true
+        $store.Add($publicRoot)
+    }
+    finally { $store.Dispose(); $publicRoot.Dispose() }
+}
+
+function New-FixtureSignature($Certificate, [byte[]]$Manifest, [string]$Output) {
+    $cms = [Security.Cryptography.Pkcs.SignedCms]::new([Security.Cryptography.Pkcs.ContentInfo]::new($Manifest), $true)
+    $signer = [Security.Cryptography.Pkcs.CmsSigner]::new($Certificate)
+    $signer.DigestAlgorithm = [Security.Cryptography.Oid]::new('2.16.840.1.101.3.4.2.1')
+    $signer.IncludeOption = [Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
+    $cms.ComputeSignature($signer)
+    [IO.File]::WriteAllBytes($Output, $cms.Encode())
+}
+
+function New-FixtureProbe($State, [string]$ApplicationRoot) {
+    $root = Join-Path $State.Root 'native-probe'
+    foreach ($directory in @($root, (Join-Path $root 'App'), (Join-Path $root 'App/backend'), (Join-Path $root 'App/backend/update'), (Join-Path $root 'Data'))) { New-FixtureDirectory $directory }
+    [IO.File]::Copy((Join-Path $ApplicationRoot 'backend/update/AhkManager.UpdateHost.exe'), (Join-Path $root 'App/backend/update/AhkManager.UpdateHost.exe'), $false)
+    [IO.File]::WriteAllText((Join-Path $root 'portable.json'), '{"schemaVersion":1,"applicationId":"Bezoro.AhkManager.Electron","dataDirectory":"Data"}', [Text.UTF8Encoding]::new($false))
+    $source = @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+internal static class Program {
+    private static int Main(string[] args) {
+        try {
+            if (args.Length != 1) return 64;
+            var request = File.ReadAllBytes(args[0]);
+            if (request.Length < 2 || request.Length > 65536) return 64;
+            var helper = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "backend", "update", "AhkManager.UpdateHost.exe");
+            var info = new ProcessStartInfo(helper, "--verify-portable-manifest") {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardInput = true, RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            using (var child = Process.Start(info)) {
+                if (child == null) return 70;
+                var output = child.StandardOutput.ReadToEndAsync();
+                var error = child.StandardError.ReadToEndAsync();
+                child.StandardInput.BaseStream.Write(request, 0, request.Length);
+                child.StandardInput.BaseStream.Flush();
+                child.StandardInput.BaseStream.Close();
+                if (!child.WaitForExit(30000)) return 75;
+                if (output.Result.Length > 4096 || error.Result.Length > 65536) return 65;
+                Console.Write(output.Result);
+                return child.ExitCode;
+            }
+        } catch (Exception error) { Console.Error.WriteLine(error.GetType().Name); return 65; }
+    }
+}
+'@
+    $sourcePath = Join-Path $State.Root 'probe-parent.cs'
+    [IO.File]::WriteAllText($sourcePath, $source, [Text.UTF8Encoding]::new($false))
+    $State.ProbePath = Join-Path $root 'App/Bezoro.AhkManager.exe'
+    $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+    if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'The disposable runner needs its installed .NET Framework C# compiler.' }
+    & $compiler '/nologo' '/warnaserror+' '/target:exe' '/platform:x64' (('/out:' + $State.ProbePath)) $sourcePath | Out-Host
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $State.ProbePath -PathType Leaf)) { throw 'The isolated read-only native CMS probe could not be compiled.' }
+}
+
+function Invoke-FixtureNative($State, [string]$ManifestPath, [string]$SignaturePath, [string[]]$Publishers) {
+    $requestPath = Join-Path $State.Root ('request-' + [Guid]::NewGuid().ToString('N') + '.json')
+    [IO.File]::WriteAllText($requestPath, (@{ manifestPath = $ManifestPath; signaturePath = $SignaturePath; publishers = $Publishers } | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+    $start = [Diagnostics.ProcessStartInfo]::new($State.ProbePath)
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.ArgumentList.Add($requestPath)
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errorOutput = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(45000)) { throw 'The isolated native CMS probe did not exit before its deadline.' }
+        $text = $output.GetAwaiter().GetResult().Trim()
+        $errorText = $errorOutput.GetAwaiter().GetResult()
+        if ($text.Length -gt 4096 -or $errorText.Length -gt 65536) { throw 'The isolated native CMS response exceeded its limits.' }
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Text = $text; ErrorType = $errorText.Trim() }
+    }
+    finally { $process.Dispose() }
+}
+
+function Get-FixtureChainStatus($Certificate) {
+    $chain = [Security.Cryptography.X509Certificates.X509Chain]::new()
+    try {
+        $chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+        $chain.ChainPolicy.RevocationFlag = [Security.Cryptography.X509Certificates.X509RevocationFlag]::ExcludeRoot
+        $chain.ChainPolicy.UrlRetrievalTimeout = [TimeSpan]::FromSeconds(5)
+        $null = $chain.ChainPolicy.ApplicationPolicy.Add([Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.3'))
+        $null = $chain.Build($Certificate)
+        return (@($chain.ChainStatus | ForEach-Object { $_.Status.ToString() }) -join ',')
+    }
+    finally { $chain.Dispose() }
+}
+
+function New-PortableSigningFixture {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ApplicationRoot,
+        [Parameter(Mandatory = $true)][string]$PublisherPolicyPath,
+        [Parameter(Mandatory = $true)][string]$CandidateManifestPath,
+        [Parameter(Mandatory = $true)][string]$BaselineManifestPath,
+        [Parameter(Mandatory = $true)][string]$OutputRoot
+    )
+    Assert-FixtureRunner
+    Assert-FixturePath $OutputRoot
+    $output = [IO.Path]::GetFullPath($OutputRoot)
+    $temporary = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($env:RUNNER_TEMP)) + [IO.Path]::DirectorySeparatorChar
+    if (-not $output.StartsWith($temporary, [StringComparison]::OrdinalIgnoreCase)) { throw 'Signing fixture files must remain inside the disposable runner temporary directory.' }
+    $policy = Get-FixturePolicy $ApplicationRoot $PublisherPolicyPath $CandidateManifestPath $BaselineManifestPath
+    New-FixtureDirectory $output
+    $id = [Guid]::NewGuid().ToString('D')
+    $state = [pscustomobject]@{ Id = $id; Root = $output; RootKey = $null; LeafKey = $null; RootCertificate = $null; LeafCertificate = $null; RootDer = $null; RootThumbprint = $null; TrustAttempted = $false; CrlPath = $null; ProbePath = $null }
+    $script:fixtures.Add($id, $state)
+    [IO.File]::WriteAllText((Join-Path $output 'fixture-owner.txt'), $id, [Text.UTF8Encoding]::new($false))
+    $handle = [pscustomobject]@{ Id = $id; OutputRoot = $output }
+    try {
+        Add-Type -AssemblyName System.Security.Cryptography.Pkcs
+        $publisher = if ($policy.Names.Count) { $policy.Names[0] } else { 'AHK Manager disposable portable CI publisher' }
+        New-FixtureCertificate $state $publisher
+        Add-FixtureTrust $state
+        $candidateBytes = Read-FixtureBytes $CandidateManifestPath 65536
+        $baselineBytes = Read-FixtureBytes $BaselineManifestPath 65536
+        $candidateHash = [Convert]::ToHexStringLower([Security.Cryptography.SHA256]::HashData($candidateBytes))
+        $baselineHash = [Convert]::ToHexStringLower([Security.Cryptography.SHA256]::HashData($baselineBytes))
+        $candidateSignature = Join-Path $output 'candidate-release.json.p7s'
+        $baselineSignature = Join-Path $output 'baseline-release.json.p7s'
+        New-FixtureSignature $state.LeafCertificate $candidateBytes $candidateSignature
+        New-FixtureSignature $state.LeafCertificate $baselineBytes $baselineSignature
+        New-FixtureProbe $state $ApplicationRoot
+        foreach ($entry in @(@{ Manifest = $CandidateManifestPath; Signature = $candidateSignature; Hash = $candidateHash }, @{ Manifest = $BaselineManifestPath; Signature = $baselineSignature; Hash = $baselineHash })) {
+            $result = Invoke-FixtureNative $state $entry.Manifest $entry.Signature @($publisher)
+            if ($result.ExitCode -ne 0 -or $result.Text -cne ('{"valid":true,"manifestSha256":"' + $entry.Hash + '"}')) {
+                $chainStatus = Get-FixtureChainStatus $state.LeafCertificate
+                throw "The production native CMS verifier refused the disposable fixture. Exit=$($result.ExitCode); response=$($result.Text); chain=$chainStatus; bridge=$($result.ErrorType)."
+            }
+        }
+        $negativePublisher = 'AHK CI mismatched publisher ' + $id
+        if ($negativePublisher -ceq $publisher) { $negativePublisher += ' other' }
+        $wrongPublisher = Invoke-FixtureNative $state $CandidateManifestPath $candidateSignature @($negativePublisher)
+        if ($wrongPublisher.ExitCode -ne 65 -or $wrongPublisher.Text -cne '{"valid":false}') { throw 'The production native CMS verifier accepted a different publisher.' }
+        $tampered = Join-Path $output 'tampered-manifest.json'
+        [IO.File]::WriteAllBytes($tampered, [byte[]]($candidateBytes + [byte]32))
+        $changed = Invoke-FixtureNative $state $tampered $candidateSignature @($publisher)
+        if ($changed.ExitCode -ne 65 -or $changed.Text -cne '{"valid":false}') { throw 'The production native CMS verifier accepted altered manifest bytes.' }
+        if ((Get-FileHash -LiteralPath $CandidateManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $candidateHash -or (Get-FileHash -LiteralPath $BaselineManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $baselineHash) { throw 'Signing fixtures changed a tested manifest.' }
+        return [pscustomobject]@{
+            Id = $id; OutputRoot = $output; CandidateSignaturePath = $candidateSignature; BaselineSignaturePath = $baselineSignature; PublisherNames = $policy.Names; ProbePublisherName = $publisher
+            Proof = [ordered]@{ fixture = $true; productionNativeCli = $true; publisherPolicyConfigured = $policy.Names.Count -gt 0; sourceCommit = $policy.SourceCommit; publisherPolicySha256 = $policy.PolicySha256; candidateManifestSha256 = $candidateHash; baselineManifestSha256 = $baselineHash; candidateVerified = $true; baselineVerified = $true; alteredManifestRefused = $true; differentPublisherRefused = $true; onlineRevocation = $true; crlDistribution = 'file'; trustScope = 'CurrentUser/Root'; privateKeysPersisted = $false }
+        }
+    }
+    catch { $failure = $_; Remove-PortableSigningFixture $handle; throw $failure }
+}
+
+function Remove-PortableSigningFixture {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Fixture)
+    Assert-FixtureRunner
+    if (-not $script:fixtures.ContainsKey($Fixture.Id)) { return }
+    $state = $script:fixtures[$Fixture.Id]
+    try {
+        if ($state.TrustAttempted) {
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new([Security.Cryptography.X509Certificates.StoreName]::Root, [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+            try {
+                $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                foreach ($certificate in $store.Certificates.Find([Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint, $state.RootThumbprint, $false)) {
+                    try {
+                        if ([Convert]::ToBase64String($certificate.RawData) -cne [Convert]::ToBase64String($state.RootDer)) { throw 'The disposable trust root identity changed before cleanup.' }
+                        $store.Remove($certificate)
+                    }
+                    finally { $certificate.Dispose() }
+                }
+                if ($store.Certificates.Find([Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint, $state.RootThumbprint, $false).Count -ne 0) { throw 'The disposable fixture trust root could not be removed.' }
+            }
+            finally { $store.Dispose() }
+        }
+        Assert-FixturePath $state.Root
+        if ([IO.File]::ReadAllText((Join-Path $state.Root 'fixture-owner.txt')) -cne $state.Id) { throw 'The owned signing fixture directory changed before cleanup.' }
+        foreach ($entry in Get-ChildItem -LiteralPath $state.Root -Force -Recurse) { if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A redirected signing fixture file was preserved during cleanup.' } }
+        [IO.Directory]::Delete($state.Root, $true)
+    }
+    finally {
+        foreach ($resource in @($state.LeafCertificate, $state.RootCertificate, $state.LeafKey, $state.RootKey)) { if ($resource) { $resource.Dispose() } }
+        $script:fixtures.Remove($state.Id)
+    }
+}
+
+Export-ModuleMember -Function New-PortableSigningFixture, Remove-PortableSigningFixture

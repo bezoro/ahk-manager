@@ -263,7 +263,7 @@ public static class InstalledUpdaterUi
         {
             var completed = new List<string>();
             foreach (var entry in accessibilityReads)
-                if (entry.Value.IsCompleted)
+                if (entry.Value.IsCompleted && entry.Key != key)
                     completed.Add(entry.Key);
             foreach (string previous in completed)
                 accessibilityReads.Remove(previous);

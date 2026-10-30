@@ -417,6 +417,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ahk-manager-ci/portable-baseline/package/*Portable-x64.zip
             ${{ runner.temp }}/ahk-manager-ci/portable-baseline/package/ahk-manager-portable-release.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-baseline/package/publisher-policy.json
           if-no-files-found: error
           retention-days: 14
 

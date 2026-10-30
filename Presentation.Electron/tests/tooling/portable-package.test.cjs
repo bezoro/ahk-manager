@@ -140,6 +140,54 @@ test('missing or empty operational backend cannot produce a portable package', (
   assert.equal(fs.existsSync(empty.outputRoot), false);
 });
 
+test('portable signing metadata uses the production publisher parser and exact policy bytes', async () => {
+  const { writePortableTestPolicy } = await import('../../scripts/portable-test-policy.mjs');
+  const value = fixture();
+  const candidate = path.join(value.root, 'candidate.yml');
+  const baseline = path.join(value.root, 'baseline.yml');
+  const output = path.join(value.root, 'publisher-policy.json');
+  const bytes = Buffer.from('provider: github\npublisherName:\n  - "Publisher: ação"\n');
+  fs.writeFileSync(candidate, bytes);
+  fs.writeFileSync(baseline, bytes);
+  const result = await writePortableTestPolicy({
+    candidate,
+    baseline,
+    output,
+    commit: value.commit,
+  });
+  assert.deepEqual(result.names, ['Publisher: ação']);
+  assert.equal(
+    result.candidatePolicySha256,
+    crypto.createHash('sha256').update(bytes).digest('hex'),
+  );
+  assert.equal(result.baselinePolicySha256, result.candidatePolicySha256);
+  assert.equal(result.sourceCommit, value.commit);
+  assert.deepEqual(JSON.parse(fs.readFileSync(output, 'utf8')), result);
+  assert.deepEqual(fs.readFileSync(candidate), bytes);
+  assert.deepEqual(fs.readFileSync(baseline), bytes);
+  await assert.rejects(
+    writePortableTestPolicy({ candidate, baseline, output, commit: value.commit }),
+    { code: 'EEXIST' },
+  );
+});
+
+test('portable signing metadata refuses policy drift and invalid production publisher names', async () => {
+  const { writePortableTestPolicy } = await import('../../scripts/portable-test-policy.mjs');
+  for (const policy of ['publisherName: Different\n', 'publisherName: []\n']) {
+    const value = fixture();
+    const candidate = path.join(value.root, 'candidate.yml');
+    const baseline = path.join(value.root, 'baseline.yml');
+    const output = path.join(value.root, 'publisher-policy.json');
+    fs.writeFileSync(candidate, 'publisherName: Expected\n');
+    fs.writeFileSync(baseline, policy);
+    await assert.rejects(
+      writePortableTestPolicy({ candidate, baseline, output, commit: value.commit }),
+      /publisher policy|signature policy/,
+    );
+    assert.equal(fs.existsSync(output), false);
+  }
+});
+
 test('hard-linked payloads cannot enter a portable package', () => {
   const value = fixture();
   fs.linkSync(

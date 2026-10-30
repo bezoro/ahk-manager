@@ -32,6 +32,8 @@ The driver launches the real portable application and checks profile import, upd
 
 External fixture files, source profiles, startup state, and unrelated process identities are checked for preservation. A scoped helper may dismiss the exact known startup error dialog of its fixture process in a refusal case. It cannot acknowledge arbitrary desktop dialogs or operate on another process.
 
+Portable signature tests create a short-lived CA and code-signing certificate inside the disposable runner. Only the public CA enters that runner's current-user trust store; private keys remain in memory. Signed fixture manifests and a valid CRL exercise the production native verifier with its normal publisher, digest, trust and revocation checks. The test retains the packaged publisher policy, seeds both cache signatures, and removes only its own certificate after the owned sessions close. Fixture certificates and signatures never enter public release artifacts, and PR builds never receive production signing keys.
+
 ## Shutdown and cleanup
 
 A shutdown request is not proof of exit. Updates require the matching operation/session receipt, observed backend exit, and normal Manager exit. A timeout is an unknown result and never authorizes force termination or replaying an operation. Delayed drain or placement completion cannot dispatch a late backend shutdown after cancellation.

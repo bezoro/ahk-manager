@@ -37,6 +37,16 @@ if ($null -eq $bytes) { throw 'The native GUI child did not produce complete evi
 $fields = [Text.Encoding]::Unicode.GetString($bytes).Split([char]0)
 if ($fields.Count -ne $expected.Count + 4 -or $fields[0] -cne 'no-console' -or $fields[1] -cne $root -or $fields[2] -cne $probe) { throw 'The portable launcher changed the working directory, target identity, or console policy.' }
 for ($index = 0; $index -lt $expected.Count; $index++) { if ($fields[$index + 3] -cne $expected[$index]) { throw "Portable argument $index changed during forwarding." } }
-$summary = [ordered]@{ passed = $true; gui = $true; consoleCreated = $false; targetVerified = $true; workingDirectoryVerified = $true; arguments = $expected.Count; launcherExitCode = 0 }
+[IO.File]::Delete((Join-Path $root 'portable.json'))
+foreach ($flag in @('--login', '--background')) {
+    $quiet = [Diagnostics.ProcessStartInfo]::new($launcher)
+    $quiet.UseShellExecute = $false
+    $quiet.WorkingDirectory = $env:TEMP
+    $quiet.ArgumentList.Add($flag)
+    $process = [Diagnostics.Process]::Start($quiet)
+    try { if (-not $process.WaitForExit(10000) -or $process.ExitCode -eq 0) { throw "A missing portable marker must fail quietly for $flag, without a confirmation dialog." } }
+    finally { $process.Dispose() }
+}
+$summary = [ordered]@{ passed = $true; gui = $true; consoleCreated = $false; targetVerified = $true; workingDirectoryVerified = $true; arguments = $expected.Count; launcherExitCode = 0; quietStartupFailureCases = 2 }
 [IO.File]::WriteAllText((Join-Path $OutputRoot 'launcher-summary.json'), ($summary | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Write-Host "Portable GUI launcher passed: exact target, root working directory, no console, and $($expected.Count) arguments."
