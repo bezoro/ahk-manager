@@ -10,9 +10,11 @@ namespace Bezoro.AhkManager.Backend;
 internal static class StartupUninstallInspection
 {
     internal static string HostPath(string backendDirectory) =>
-        ScriptPaths.LocalPath(
-            Path.GetFullPath(Path.Combine(backendDirectory, "..", "Bezoro.AhkManager.exe"))
-        );
+        RuntimeProfileLayout
+            .ForHost(
+                Path.GetFullPath(Path.Combine(backendDirectory, "..", "Bezoro.AhkManager.exe"))
+            )
+            .StartupHostExecutable;
 
     internal static int Classify(StartupTaskRegistration? task, string host, string sid)
     {

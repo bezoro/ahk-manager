@@ -30,10 +30,21 @@ internal static partial class SelfTests
             new string('a', 64),
             "1.2.1"
         );
+        CheckAdmissionDiagnostics(Check);
+        CheckStoragePathPolicy(Check);
+        CheckRetainedStorageHandles(root, Check);
+        await CheckCloudFiles(root, Check).ConfigureAwait(false);
         CheckProtocol(root, plan, Check);
         CheckReleaseVersions(root, plan, Check);
         CheckInstallerCommandLine(root, plan, Check);
         CheckSnapshotAclComparison(Check);
+        CheckPortableProtocol(root, plan, Check);
+        CheckPortablePayloadPolicy(Check);
+        CheckPortableSignatures(Check);
+        CheckPortableLayouts(root, Check);
+        CheckPortableDataMoveLeases(root, Check);
+        CheckPortableStorageLeases(root, Check);
+        await CheckPortableTransactions(root, Check);
         await CheckInstallerCache(root, plan, Check);
         await CheckTestInstallerCache(root, Check);
         await CheckApplyTransactions(root, plan, Check);

@@ -43,12 +43,7 @@ public static class ScriptPaths
     public static string Canonical(string path, bool script = true)
     {
         var full = script ? Lexical(path) : LocalPath(path);
-        for (string? current = full; current is not null; current = Path.GetDirectoryName(current))
-            if (
-                (File.Exists(current) || Directory.Exists(current))
-                && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0
-            )
-                throw new IOException("Redirected path refused.");
+        WindowsStoragePath.NoRedirects(full);
         if (!File.Exists(full))
             throw new FileNotFoundException("File absent.", full);
         StringBuilder buffer = new(32768);
@@ -61,6 +56,7 @@ public static class ScriptPaths
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete
         );
+        WindowsStoragePath.VerifyHandle(handle);
         if (!ProcessNative.GetFileInformationByHandle(handle, out var stamp) || stamp.Links != 1)
             throw new IOException("Uncertain or multiply linked file identity.");
         return full;

@@ -4,7 +4,7 @@ namespace Bezoro.AhkManager.UpdateHost;
 
 internal static class Evidence
 {
-    internal static void WriteNew(string path, object value)
+    internal static void WriteNew(string path, object value, int maximumBytes = 2 * 1024 * 1024)
     {
         UpdatePaths.NoRedirects(path);
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -13,7 +13,7 @@ internal static class Evidence
             value.GetType(),
             UpdateProtocol.Json
         );
-        if (bytes.Length > 2 * 1024 * 1024)
+        if (bytes.Length > maximumBytes)
             throw new InvalidDataException("Update evidence exceeds limit.");
         using (
             var file = new FileStream(

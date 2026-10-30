@@ -15,7 +15,8 @@ internal sealed record UpdatePlan(
     string InstallerPath,
     string InstallerSha256,
     string Version,
-    CachedInstaller? Fallback = null
+    CachedInstaller? Fallback = null,
+    string? Deployment = null
 );
 
 internal sealed record UpdateReceipt(

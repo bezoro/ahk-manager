@@ -17,6 +17,12 @@ const listen = <T>(channel: string, callback: (value: T) => void): (() => void) 
 };
 let guardProvider: (() => AdministrationUiGuard) | null = null;
 const api: AhkManagerApi = {
+  getStorageState: () => invoke('getStorageState'),
+  chooseDataLocation: () => invoke('chooseDataLocation'),
+  openDataLocation: () => invoke('openDataLocation'),
+  restoreDefaultDataLocation: () => invoke('restoreDefaultDataLocation'),
+  restartForDataMove: () => invoke('restartForDataMove'),
+  cancelDataMove: () => invoke('cancelDataMove'),
   getUpdateState: () => invoke('getUpdateState'),
   checkUpdates: () => invoke('checkUpdates'),
   installUpdate: (id) => invoke('installUpdate', id),

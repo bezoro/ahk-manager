@@ -1,3 +1,5 @@
+using Bezoro.AhkManager.Core.Infrastructure;
+
 namespace Bezoro.AhkManager.UpdateHost;
 
 // Every source file stays read-locked until the entire copy has been verified.
@@ -25,7 +27,7 @@ internal static class InstallationSnapshot
         }
     }
 
-    static Sources Pin(string root)
+    static Sources Pin(string root, int maximumEntries = MaximumEntries)
     {
         root = UpdatePaths.Local(root);
         UpdatePaths.NoRedirects(root);
@@ -50,14 +52,13 @@ internal static class InstallationSnapshot
             while (pending.Count > 0)
                 foreach (string entry in Directory.EnumerateFileSystemEntries(pending.Pop()))
                 {
-                    if (++count > MaximumEntries)
+                    if (++count > maximumEntries)
                         throw new IOException("Installation snapshot exceeds its entry limit.");
                     string relative = UpdatePaths.Relative(root, entry);
                     if (!paths.Add(relative))
                         throw new IOException("Ambiguous installation path.");
+                    WindowsStoragePath.VerifyEntry(entry);
                     var attributes = File.GetAttributes(entry);
-                    if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
-                        throw new IOException("Redirected installation entry refused.");
                     if ((attributes & FileAttributes.Directory) != 0)
                     {
                         sources.Directories.Add(new(relative, SnapshotSecurity.Read(entry, true)));
@@ -83,12 +84,16 @@ internal static class InstallationSnapshot
         }
     }
 
-    internal static async Task<SnapshotManifest> Copy(string sourceRoot, string destination)
+    internal static async Task<SnapshotManifest> Copy(
+        string sourceRoot,
+        string destination,
+        int maximumEntries = MaximumEntries
+    )
     {
         if (Directory.Exists(destination) || File.Exists(destination))
             throw new IOException("Snapshot destination must be absent.");
         UpdatePaths.NoRedirects(destination);
-        using var sources = Pin(sourceRoot);
+        using var sources = Pin(sourceRoot, maximumEntries);
         long required = sources.Files.Sum(file => file.Lease.Length) + 64L * 1024 * 1024;
         if (new DriveInfo(Path.GetPathRoot(destination)!).AvailableFreeSpace < required)
             throw new IOException("Not enough space to preserve the installation.");
@@ -151,15 +156,19 @@ internal static class InstallationSnapshot
                 .ToArray(),
             files.ToArray()
         );
-        Verify(destination, manifest);
+        Verify(destination, manifest, maximumEntries);
         VerifySecurity(sourceRoot, manifest);
         VerifyPrivate(destination, manifest);
         return manifest;
     }
 
-    internal static void Verify(string root, SnapshotManifest manifest)
+    internal static void Verify(
+        string root,
+        SnapshotManifest manifest,
+        int maximumEntries = MaximumEntries
+    )
     {
-        using var sources = Pin(root);
+        using var sources = Pin(root, maximumEntries);
         if (
             !sources
                 .Directories.Select(directory => directory.RelativePath)
@@ -222,7 +231,11 @@ internal static class InstallationSnapshot
                 throw new IOException("Installation file permissions changed.");
     }
 
-    internal static void RestoreSecurity(string staging, SnapshotManifest manifest)
+    internal static void RestoreSecurity(
+        string staging,
+        SnapshotManifest manifest,
+        int maximumEntries = MaximumEntries
+    )
     {
         UpdatePaths.NoRedirects(staging);
         if (
@@ -232,7 +245,7 @@ internal static class InstallationSnapshot
             )
         )
             throw new IOException("Installation parent permissions changed before recovery.");
-        Verify(staging, manifest);
+        Verify(staging, manifest, maximumEntries);
         VerifyPrivate(staging, manifest);
         // Protect each original DACL while the root is still private. Opening
         // the root cannot propagate its permissions into a formerly protected

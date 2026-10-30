@@ -2,7 +2,7 @@
 
 Use English for code, comments, application text, documentation, commit messages, issues, and pull requests. Preserve user-authored script contents, names, paths, historical records, and compatibility identifiers in their original form.
 
-Start with [ARCHITECTURE.md](ARCHITECTURE.md). Current product changes belong in `Core/`, `Backend/`, `UpdateHost/`, and `Presentation.Electron/`. Archived WinUI/WPF projects do not validate the Electron interface.
+Start with [ARCHITECTURE.md](ARCHITECTURE.md). Current product changes belong in `Core/`, `Backend/`, `UpdateHost/`, `PortableLauncher/`, and `Presentation.Electron/`. Archived WinUI/WPF projects do not validate the Electron interface.
 
 ## Environment
 
@@ -19,6 +19,16 @@ New-Item -ItemType Directory -Path $work | Out-Null
 ```
 
 Commands below start at the repository root. Each test/build output must be an absolute directory that does not already exist, preserving evidence from earlier runs.
+
+## When to run CI
+
+Windows CI runs automatically when changes reach `main`, including a pull request merge. Pull request commits and branch pushes do not start the suite automatically.
+
+For a substantial change that needs validation before merging, a maintainer applies the **ci:windows** label to the PR. This runs the complete Windows suite against that exact head and makes a successful same-repository build eligible for the public Test channel. The label does not start another run on later commits. Remove and reapply it when a new implementation milestone needs validation. Use the existing run's retry controls for a transient failure on the same commit.
+
+Run local checks while iterating and group fixes before requesting another Windows run. Documentation-only follow-ups do not normally need the full suite. **Run workflow** remains available for an explicit validation run. Publication still requires the approved `main` push or trusted PR preview flow described in [UPDATES.md](UPDATES.md).
+
+Apply **ci:hold** to cancel a PR validation that is blocked or no longer useful. That request starts no Windows runners. Unrelated labels neither start nor cancel the suite. Remove the hold label before deliberately requesting the next validation milestone.
 
 ## Frontend
 
@@ -116,6 +126,10 @@ Build the complete distribution with fresh paths:
 ```
 
 The build uses Electron's official runtime installer, checks types, runs Node tests, and publishes Backend and UpdateHost. Packaging creates NSIS and an exact owned-file inventory. `-DirectoryOnly` produces an unpacked app directory.
+
+Portable packaging also requires the Visual Studio x64 C++ build tools and Windows SDK. Build its launcher with `tools/Build-PortableLauncher.ps1`, then pass the unpacked application directory and launcher to `tools/Build-PortablePackage.ps1`. Use `tools/New-PortableReleaseManifest.ps1` to generate the separate release manifest. All inputs must use the same release version and source commit. The ZIP contains `App`, a root launcher and package descriptors, never `Data`. See the Windows workflow for the exact build sequence.
+
+`tools/Test-PortableLauncher.ps1` checks native argument forwarding and process behavior. `tools/Test-PortablePackage.ps1` checks archive inventory and release identity. `tools/Test-PortableUpdater.ps1` runs the real baseline/candidate update and rollback in a disposable Windows environment. Its separately built baseline is a test fixture and must not be published as a release asset. Changes to portable layout must keep the native helper, `RuntimeProfileLayout`, TypeScript deployment resolver, packaging script and their tests consistent.
 
 `tools/Test-UpdateInstallation.ps1` installs, updates, and rolls back between real packages. Use a disposable Windows environment without a prior installation/profile, as described in [SAFE-TESTS.md](SAFE-TESTS.md). CI prepares that environment. A local package build never publishes a GitHub release.
 

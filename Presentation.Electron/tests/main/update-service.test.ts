@@ -163,6 +163,51 @@ function fixture(version = '1.2.2') {
   };
 }
 
+test('portable rollback preservation runs only after explicit consent and before downloading the target', async () => {
+  const f = fixture();
+  const calls: string[] = [];
+  f.boundary.deployment = 'portable';
+  f.boundary.preserveCurrent = async (progress) => {
+    calls.push('preserve');
+    progress(100);
+    f.store.items.push(cached('1.2.2'));
+  };
+  f.hooks.download = async (_release, progress) => {
+    assert.deepEqual(calls, ['preserve']);
+    calls.push('target');
+    progress(100);
+    return '/fixture/portable.zip';
+  };
+  await f.service.initialize();
+  await f.service.check();
+  assert.deepEqual(calls, []);
+  f.hooks.confirm = async () => false;
+  await f.service.install(release().id);
+  assert.deepEqual(calls, []);
+  f.hooks.confirm = async () => true;
+  await f.service.install(release().id);
+  assert.deepEqual(calls, ['preserve', 'target']);
+  assert.equal(f.applied.length, 1);
+  assert.equal(f.service.snapshot.releases.find((item) => item.version === '1.2.2')?.cached, true);
+  const progress = f.notifications
+    .filter((item) => item.phase === 'downloading')
+    .map((item) => item.progress!);
+  assert.ok(progress.every((item, index) => index === 0 || item >= progress[index - 1]!));
+});
+
+test('failure to preserve the running portable version never downloads or applies the target', async () => {
+  const f = fixture();
+  f.boundary.preserveCurrent = async () => {
+    throw new Error('Current portable package unavailable.');
+  };
+  await f.service.check();
+  const result = await f.service.install(release().id);
+  assert.equal(result.phase, 'error');
+  assert.match(result.error!, /Current portable package unavailable/);
+  assert.equal(f.downloaded.length, 0);
+  assert.equal(f.applied.length, 0);
+});
+
 test('update checks order numeric versions and expose local rollback history without downloading or applying', async () => {
   const f = fixture();
   f.store.items = [cached('1.2.0'), cached('1.1.99'), cached('1.2.2')];

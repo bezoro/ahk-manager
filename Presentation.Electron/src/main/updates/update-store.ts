@@ -3,6 +3,18 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import {
+  type UpdateDeployment,
+  packageFileName,
+  packageProtocol,
+  portableManifestFile,
+  portableSignatureFile,
+  validUpdateDeployment,
+} from './update-deployment.js';
+import {
+  requirePortablePackageProof,
+  type PortablePackageProof,
+} from './portable-package-proof.js';
+import {
   validUpdateChannel,
   validUpdateVersion,
   type UpdateChannel,
@@ -21,7 +33,11 @@ const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.c
 
 /** Cache is outside the installation and the operational profile. No script is copied. */
 export class UpdateStore {
-  constructor(readonly root: string) {
+  constructor(
+    readonly root: string,
+    readonly deployment: UpdateDeployment = 'installed',
+  ) {
+    if (!validUpdateDeployment(deployment)) throw new Error('The update deployment is invalid.');
     if (!path.isAbsolute(root)) throw new Error('The update cache is invalid.');
   }
   async safeDirectory(directory: string, create = false): Promise<void> {
@@ -150,14 +166,30 @@ export class UpdateStore {
         const record = data as Record<string, unknown>;
         if (
           record.schemaVersion !== 1 ||
-          record.updateProtocol !== 1 ||
+          record.updateProtocol !== packageProtocol(this.deployment) ||
           record.version !== name ||
           !digest(record.sha256)
         )
           continue;
-        const installerPath = path.join(root, name, 'installer.exe');
+        if (
+          this.deployment === 'portable' &&
+          (Object.keys(record).length !== 5 ||
+            !Number.isSafeInteger(record.bytes) ||
+            typeof record.sha256 !== 'string' ||
+            !/^[a-f0-9]{64}$/.test(record.sha256))
+        )
+          continue;
+        const installerPath = path.join(root, name, packageFileName(this.deployment));
         const stat = await this.regular(installerPath);
         if (record.bytes !== undefined && record.bytes !== stat.size) continue;
+        if (this.deployment === 'portable') {
+          const proof = path.join(root, name, portableManifestFile);
+          await this.regular(proof, 65536);
+          requirePortablePackageProof(
+            new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(proof)),
+            { version: name, sha256: record.sha256.toLowerCase(), bytes: stat.size },
+          );
+        }
         result.push({
           version: name,
           installerPath,
@@ -174,7 +206,7 @@ export class UpdateStore {
     if (
       !version(installer.version) ||
       installer.installerPath !==
-        path.join(this.root, 'installers', installer.version, 'installer.exe') ||
+        path.join(this.root, 'installers', installer.version, packageFileName(this.deployment)) ||
       !digest(installer.sha256)
     )
       throw new Error('The installer is outside the version history.');
@@ -186,6 +218,86 @@ export class UpdateStore {
       throw new Error(
         'The installer integrity check failed. Check for updates to download another copy.',
       );
+    if (this.deployment === 'portable') {
+      await this.portableProof(installer);
+    }
+  }
+  async portableProof(installer: CachedInstaller): Promise<PortablePackageProof> {
+    if (
+      this.deployment !== 'portable' ||
+      !version(installer.version) ||
+      installer.installerPath !==
+        path.join(this.root, 'installers', installer.version, 'archive.zip')
+    )
+      throw new Error('The portable package is outside the version history.');
+    const proof = path.join(path.dirname(installer.installerPath), portableManifestFile);
+    await this.regular(proof, 65536);
+    return requirePortablePackageProof(
+      new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(proof)),
+      installer,
+    );
+  }
+  private async removePortableDownload(source: string): Promise<void> {
+    const directory = path.dirname(source);
+    if (
+      path.dirname(directory) !== path.join(this.root, 'downloads') ||
+      !/^portable-[A-Za-z0-9]+$/.test(path.basename(directory)) ||
+      path.basename(source) !== 'archive.zip'
+    )
+      return;
+    try {
+      await this.safeDirectory(directory);
+      const allowed = new Set(['archive.zip', portableManifestFile, portableSignatureFile]);
+      const files = await fs.readdir(directory);
+      if (files.some((name) => !allowed.has(name))) return;
+      for (const name of files) await this.regular(path.join(directory, name));
+      for (const name of files) await fs.unlink(path.join(directory, name));
+      await fs.rmdir(directory);
+    } catch {
+      /* A completed package remains valid if temporary cleanup fails. */
+    }
+  }
+  private async cachePortableProof(
+    source: string,
+    destination: string,
+    expected: { version: string; sha256: string; bytes: number },
+  ): Promise<void> {
+    const manifest = path.join(source, portableManifestFile);
+    try {
+      await this.regular(manifest, 65536);
+    } catch (error) {
+      if (missing(error)) throw new Error('The portable package release metadata is unavailable.');
+      throw error;
+    }
+    const bytes = await fs.readFile(manifest);
+    requirePortablePackageProof(new TextDecoder('utf-8', { fatal: true }).decode(bytes), expected);
+    for (const name of [portableManifestFile, portableSignatureFile]) {
+      const input = path.join(source, name);
+      try {
+        await this.regular(input, 65536);
+      } catch (error) {
+        if (missing(error) && name === portableSignatureFile) continue;
+        throw error;
+      }
+      const target = path.join(destination, name);
+      try {
+        await this.regular(target, 65536);
+      } catch (error) {
+        if (!missing(error)) throw error;
+      }
+      const temporary = path.join(destination, `proof-${randomUUID()}.tmp`);
+      await fs.copyFile(input, temporary, 1);
+      try {
+        if (name === portableManifestFile)
+          requirePortablePackageProof(
+            new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(temporary)),
+            expected,
+          );
+        await fs.rename(temporary, target);
+      } finally {
+        await fs.unlink(temporary).catch(() => {});
+      }
+    }
   }
   async cache(
     versionName: string,
@@ -196,19 +308,40 @@ export class UpdateStore {
     if (!version(versionName) || !digest(sha256)) throw new Error('The update version is invalid.');
     if ((await this.regular(source)).size !== bytes || (await this.hash(source)) !== sha256)
       throw new Error('The downloaded installer failed its integrity check.');
+    if (this.deployment === 'portable') {
+      const proof = path.join(path.dirname(source), portableManifestFile);
+      await this.regular(proof, 65536);
+      requirePortablePackageProof(
+        new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(proof)),
+        { version: versionName, sha256, bytes },
+      );
+    }
     const directory = path.join(this.root, 'installers', versionName);
     await this.safeDirectory(directory, true);
-    const installerPath = path.join(directory, 'installer.exe');
-    const existing = (await this.cached()).find(
+    const installerPath = path.join(directory, packageFileName(this.deployment));
+    let existing = (await this.cached()).find(
       (item) => item.version === versionName && item.sha256 === sha256 && item.bytes === bytes,
     );
     if (existing) {
       try {
         await this.verify(existing);
-        return existing;
       } catch {
         /* Preserve corrupt bytes below and replace through a fresh file. */
+        existing = undefined;
       }
+    }
+    if (existing) {
+      // A valid archive can still need a fresh signature after interrupted cache
+      // publication. Retain the archive while repairing its downloaded proof.
+      if (this.deployment === 'portable') {
+        await this.cachePortableProof(path.dirname(source), directory, {
+          version: versionName,
+          sha256,
+          bytes,
+        });
+        await this.removePortableDownload(source);
+      }
+      return existing;
     }
     const temporary = path.join(directory, `download-${randomUUID()}.tmp`);
     await fs.copyFile(source, temporary, 1);
@@ -216,18 +349,37 @@ export class UpdateStore {
       throw new Error('The installer changed while preparing the update.');
     try {
       await this.regular(installerPath);
-      await fs.rename(installerPath, path.join(directory, `preserved-${randomUUID()}.exe`));
+      await fs.rename(
+        installerPath,
+        path.join(
+          directory,
+          `preserved-${randomUUID()}${this.deployment === 'portable' ? '.zip' : '.exe'}`,
+        ),
+      );
     } catch (error) {
       if (!missing(error)) throw error;
     }
     await fs.rename(temporary, installerPath);
+    if (this.deployment === 'portable')
+      await this.cachePortableProof(path.dirname(source), directory, {
+        version: versionName,
+        sha256,
+        bytes,
+      });
     const receipt = path.join(directory, 'receipt.json');
     const tempReceipt = path.join(directory, `receipt-${randomUUID()}.tmp`);
     await this.writeNew(
       tempReceipt,
-      JSON.stringify({ schemaVersion: 1, updateProtocol: 1, version: versionName, sha256, bytes }),
+      JSON.stringify({
+        schemaVersion: 1,
+        updateProtocol: packageProtocol(this.deployment),
+        version: versionName,
+        sha256,
+        bytes,
+      }),
     );
     await fs.rename(tempReceipt, receipt);
+    if (this.deployment === 'portable') await this.removePortableDownload(source);
     return { version: versionName, installerPath, sha256, bytes };
   }
 }

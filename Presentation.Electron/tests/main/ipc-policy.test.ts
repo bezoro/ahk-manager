@@ -23,11 +23,16 @@ test('host transitions reject mutations while retaining state and theme reads', 
       'retryBackend',
       'installUpdate',
       'removeScript',
+      'storage:choose',
+      'storage:restore-default',
+      'storage:cancel',
+      'storage:restart',
     ]) {
       assert.throws(() => assertRequestAllowed(mutation, state), `${phase} must block ${mutation}`);
     }
     assert.doesNotThrow(() => assertRequestAllowed('getState', state));
     assert.doesNotThrow(() => assertRequestAllowed('getTheme', state));
+    assert.doesNotThrow(() => assertRequestAllowed('storage:get', state));
   }
 });
 

@@ -7,9 +7,9 @@ export interface RequestPolicy {
   administrationPending: boolean;
 }
 
-const duringShutdown = new Set(['getState', 'getTheme']);
-const duringUpdate = new Set(['getState', 'getTheme', 'getUpdateState']);
-const duringAdoption = new Set(['getState', 'getTheme', 'getActivity']);
+const duringShutdown = new Set(['getState', 'getTheme', 'storage:get']);
+const duringUpdate = new Set(['getState', 'getTheme', 'getUpdateState', 'storage:get']);
+const duringAdoption = new Set(['getState', 'getTheme', 'getActivity', 'storage:get']);
 const duringAdministration = new Set([...duringAdoption, 'requestAdministration']);
 
 /** These checks run after document authentication and before dispatching any action. */

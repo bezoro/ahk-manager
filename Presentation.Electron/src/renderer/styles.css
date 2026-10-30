@@ -1301,6 +1301,16 @@ time {
   font-size: 14px;
   margin-top: 0;
 }
+
+.preferences-dialog .button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preferences-dialog [role='status'] p {
+  overflow-wrap: anywhere;
+}
 .startup-preferences > .muted {
   margin-left: 28px;
 }

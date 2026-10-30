@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Bezoro.AhkManager.Core.Infrastructure;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
@@ -14,6 +15,12 @@ internal sealed class FileLease : IDisposable
         UpdatePaths.NoRedirects(Path);
         if ((File.GetAttributes(Path) & (FileAttributes.Directory | FileAttributes.Device)) != 0)
             throw new IOException("Regular update file required.");
+        // Inspect the entry without following a reparse point, then bind the
+        // ordinary data open to that same file. Hydrated cloud providers keep
+        // their normal data-open behavior; a concurrent link swap is refused.
+        using var metadata = WindowsStoragePath.OpenVerifiedMetadata(Path, retainName: true);
+        if (!Native.GetFileInformationByHandle(metadata, out var entryIdentity))
+            throw new IOException("Update entry identity could not be verified.");
         Stream = new(
             Path,
             FileMode.Open,
@@ -24,17 +31,30 @@ internal sealed class FileLease : IDisposable
         );
         try
         {
-            if (
-                !Native.GetFileInformationByHandle(Stream.SafeFileHandle, out var identity)
-                || identity.Links != 1
-            )
-                throw new IOException("Multiply linked update file refused.");
+            WindowsStoragePath.VerifyHandle(Stream.SafeFileHandle);
+            if (!Native.GetFileInformationByHandle(Stream.SafeFileHandle, out var identity))
+                throw new IOException("Update file identity could not be verified.");
+            VerifyIdentity(entryIdentity, identity);
         }
         catch
         {
             Stream.Dispose();
             throw;
         }
+    }
+
+    internal static void VerifyIdentity(Native.FileStamp entry, Native.FileStamp opened)
+    {
+        const uint nonFile = (uint)(FileAttributes.Directory | FileAttributes.Device);
+        if (
+            entry.Links != 1
+            || opened.Links != 1
+            || entry.Volume != opened.Volume
+            || entry.IndexHigh != opened.IndexHigh
+            || entry.IndexLow != opened.IndexLow
+            || ((entry.Attributes | opened.Attributes) & nonFile) != 0
+        )
+            throw new IOException("Changed or multiply linked update file refused.");
     }
 
     internal static FileLease Open(string path, long maximumBytes)

@@ -4,18 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [labeled]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && github.event.label.name != 'ci:windows' && github.event.label.name != 'ci:hold' && 'unrelated-label' || 'validation' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   release-identity:
     name: Conventional commits and SemVer identity
+    if: ${{ github.event_name != 'pull_request' || github.event.label.name == 'ci:windows' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -44,6 +46,10 @@ jobs:
       - name: Verify release identity policy with isolated Git repositories
         working-directory: Presentation.Electron
         run: npm run test:release
+
+      - name: Verify portable inventories and Windows path policy
+        working-directory: Presentation.Electron
+        run: node --test tests/tooling/portable-package.test.cjs
 
       - name: Validate new conventional commits
         working-directory: Presentation.Electron
@@ -205,6 +211,12 @@ jobs:
           & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --startup-inspection --root "$env:CI_OUTPUT/startup-inspection" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/startup-inspection.log"
           if ($LASTEXITCODE -ne 0) { throw 'Windows startup inspection failed.' }
 
+      - name: Verify current-user identities through isolated Task Scheduler registration
+        if: ${{ !cancelled() && steps.backend-publish.outcome == 'success' }}
+        run: |
+          & "$env:CI_OUTPUT/test-bin/Tests.Backend.exe" --startup-task-integration --root "$env:CI_OUTPUT/startup-task-integration" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/startup-task-integration.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated Task Scheduler identity checks failed.' }
+
       - name: Typecheck frontend
         if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
         working-directory: Presentation.Electron
@@ -217,6 +229,7 @@ jobs:
         run: |
           ./tools/Test-ReleaseTooling.ps1 -OutputRoot "$env:CI_OUTPUT/release-tooling-tests"
           ./tools/Test-TestReleaseTooling.ps1 -OutputRoot "$env:CI_OUTPUT/test-channel-tooling-tests"
+          ./tools/Test-PortablePackageValidation.ps1 -OutputRoot "$env:CI_OUTPUT/portable-package-validation"
 
       - name: Run Node tests with actual backend snapshot fixtures
         if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' && steps.backend-tests.outcome == 'success' }}
@@ -262,6 +275,13 @@ jobs:
           dotnet publish Backend/AhkManager.Backend.csproj -c Release -r win-x64 --self-contained true --no-restore "-p:Version=$env:AHK_RELEASE_VERSION" "-p:SourceRevisionId=$env:AHK_SOURCE_COMMIT" -o "$env:CI_OUTPUT/backend-publish"
           if ($LASTEXITCODE -ne 0) { throw 'Backend publish failed.' }
 
+      - name: Build and exercise the standalone portable GUI launcher
+        id: portable-launcher
+        if: ${{ !cancelled() && steps.frontend-build.outcome == 'success' }}
+        run: |
+          ./tools/Build-PortableLauncher.ps1 -OutputRoot "$env:CI_OUTPUT/portable-launcher" -Version $env:AHK_RELEASE_VERSION -IconPath "$env:CI_OUTPUT/frontend/app.ico"
+          ./tools/Test-PortableLauncher.ps1 -LauncherPath "$env:CI_OUTPUT/portable-launcher/Bezoro.AhkManager.exe" -OutputRoot "$env:CI_OUTPUT/portable-launcher-tests"
+
       - name: Publish the standalone update host
         id: update-host
         if: ${{ !cancelled() && steps.production-backend.outcome == 'success' }}
@@ -295,14 +315,45 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows installer build failed.' }
           Get-ChildItem -LiteralPath $env:AHK_PACKAGE_OUT -Filter '*Setup-x64.exe' | Get-FileHash -Algorithm SHA256 | Format-List | Out-File (Join-Path $env:AHK_PACKAGE_OUT 'SHA256.txt')
 
-      - name: Prepare versioned release manifest
-        if: ${{ !cancelled() && steps.installer-build.outcome == 'success' }}
+      - name: Build the versioned portable ZIP from the exact application payload
+        id: portable-build
+        if: ${{ !cancelled() && steps.installer-build.outcome == 'success' && steps.portable-launcher.outcome == 'success' }}
+        run: |
+          ./tools/Build-PortablePackage.ps1 -ApplicationRoot "$env:CI_OUTPUT/installer/win-unpacked" -LauncherPath "$env:CI_OUTPUT/portable-launcher/Bezoro.AhkManager.exe" -OutputRoot "$env:CI_OUTPUT/portable" -Version $env:AHK_RELEASE_VERSION -Commit $env:AHK_SOURCE_COMMIT
+          [IO.File]::Copy("$env:CI_OUTPUT/portable/AHK-Manager-$($env:AHK_RELEASE_VERSION)-Portable-x64.zip", "$env:CI_OUTPUT/installer/AHK-Manager-$($env:AHK_RELEASE_VERSION)-Portable-x64.zip", $false)
+
+      - name: Prepare and verify both versioned release manifests
+        if: ${{ !cancelled() && steps.installer-build.outcome == 'success' && steps.portable-build.outcome == 'success' }}
         run: |
           $installers = @(Get-ChildItem -LiteralPath "$env:CI_OUTPUT/installer" -Filter '*Setup-x64.exe')
           if ($installers.Count -ne 1) { throw 'Exactly one target installer is required.' }
           $notes = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AHK_RELEASE_NOTES_BASE64))
           ./tools/New-ReleaseManifest.ps1 -InstallerPath $installers[0].FullName -OutputPath "$env:CI_OUTPUT/installer/ahk-manager-release.json" -Version $env:AHK_RELEASE_VERSION -Commit $env:AHK_SOURCE_COMMIT -Notes $notes
           ./tools/Publish-GitHubRelease.ps1 -InstallerPath $installers[0].FullName -ManifestPath "$env:CI_OUTPUT/installer/ahk-manager-release.json" -Repository $env:GITHUB_REPOSITORY -Commit $env:AHK_SOURCE_COMMIT -ValidateOnly
+          $legacy = [Text.Json.JsonDocument]::Parse([IO.File]::ReadAllText("$env:CI_OUTPUT/installer/ahk-manager-release.json"))
+          try { $publishedAt = [DateTimeOffset]::Parse($legacy.RootElement.GetProperty('publishedAt').GetString()) }
+          finally { $legacy.Dispose() }
+          $portable = "$env:CI_OUTPUT/installer/AHK-Manager-$($env:AHK_RELEASE_VERSION)-Portable-x64.zip"
+          ./tools/New-PortableReleaseManifest.ps1 -ArchivePath $portable -OutputPath "$env:CI_OUTPUT/installer/ahk-manager-portable-release.json" -Version $env:AHK_RELEASE_VERSION -Commit $env:AHK_SOURCE_COMMIT -Notes $notes -PublishedAt $publishedAt
+          ./tools/Test-PortablePackage.ps1 -ArchivePath $portable -ManifestPath "$env:CI_OUTPUT/installer/ahk-manager-portable-release.json" -OutputRoot "$env:CI_OUTPUT/portable-evidence"
+          Get-FileHash -LiteralPath @($installers[0].FullName, $portable) -Algorithm SHA256 | Format-List | Out-File "$env:CI_OUTPUT/installer/SHA256.txt"
+
+      - name: Build a separate coherent portable baseline for update and rollback
+        id: portable-baseline
+        if: ${{ !cancelled() && steps.portable-build.outcome == 'success' }}
+        env:
+          CSC_LINK: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.WINDOWS_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.WINDOWS_CSC_KEY_PASSWORD || '' }}
+          AHK_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}
+        run: |
+          ./tools/Build-PortableTestBaseline.ps1 -FrontendRoot "$env:CI_OUTPUT/frontend" -CandidateApplicationRoot "$env:CI_OUTPUT/installer/win-unpacked" -OutputRoot "$env:CI_OUTPUT/portable-baseline" -Commit $env:AHK_SOURCE_COMMIT
+
+      - name: Verify isolated publisher trust before starting real-app runners
+        id: portable-signing
+        if: ${{ !cancelled() && steps.portable-baseline.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          ./tools/Test-PortableSigningFixture.ps1 -ApplicationRoot "$env:CI_OUTPUT/portable-baseline/application/win-unpacked" -CandidateManifestPath "$env:CI_OUTPUT/installer/ahk-manager-portable-release.json" -BaselineManifestPath "$env:CI_OUTPUT/portable-baseline/package/ahk-manager-portable-release.json" -PublisherPolicyPath "$env:CI_OUTPUT/portable-baseline/package/publisher-policy.json" -OutputRoot "$env:CI_OUTPUT/portable-signing-fixture-tests"
 
       - name: Download the pinned published 1.2.16 installer for recovery tests
         id: baseline-installer
@@ -330,6 +381,10 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/backend/**/*.json
             ${{ runner.temp }}/ahk-manager-ci/backend/*.txt
             ${{ runner.temp }}/ahk-manager-ci/startup-inspection/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/startup-task-integration/*.xml
+            ${{ runner.temp }}/ahk-manager-ci/startup-task-integration/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/startup-task-integration/*.json
+            ${{ runner.temp }}/ahk-manager-ci/startup-task-integration/*.log
             ${{ runner.temp }}/ahk-manager-ci/frontend/build-info.json
             ${{ runner.temp }}/ahk-manager-ci/update-host-tests/*.json
             ${{ runner.temp }}/ahk-manager-ci/update-network/*.json
@@ -337,6 +392,14 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/update-installation/*.log
             ${{ runner.temp }}/ahk-manager-ci/release-tooling-tests/*.json
             ${{ runner.temp }}/ahk-manager-ci/test-channel-tooling-tests/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-evidence/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-launcher-tests/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-baseline/evidence/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-signing-fixture-tests/**/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-signing-fixture-tests/**/*.txt
+            ${{ runner.temp }}/ahk-manager-ci/portable-signing-fixture-tests.stages.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-signing-fixture-tests.summary.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-package-validation/*.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -362,13 +425,165 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/installer/*Setup-x64.exe
             ${{ runner.temp }}/ahk-manager-ci/installer/SHA256.txt
             ${{ runner.temp }}/ahk-manager-ci/installer/ahk-manager-release.json
+            ${{ runner.temp }}/ahk-manager-ci/installer/*Portable-x64.zip
+            ${{ runner.temp }}/ahk-manager-ci/installer/ahk-manager-portable-release.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload the test-only portable baseline
+        if: ${{ !cancelled() && steps.portable-baseline.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: portable-regression-baseline-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ahk-manager-ci/portable-baseline/package/*Portable-x64.zip
+            ${{ runner.temp }}/ahk-manager-ci/portable-baseline/package/ahk-manager-portable-release.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-baseline/package/publisher-policy.json
+          if-no-files-found: error
+          retention-days: 14
+
+  installed-updater:
+    name: Installed updater (${{ matrix.client }}, ${{ matrix.location }})
+    needs: windows-checks
+    runs-on: windows-2025
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [published-preview, candidate]
+        location: [private, permissive-parent]
+        include:
+          - client: candidate
+            location: unregistered
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out the exact tested source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download the installer produced by this CI attempt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ github.event_name == 'pull_request' && format('windows-installer-test-{0}', github.run_attempt) || 'windows-installer' }}
+          path: installed-updater-package
+
+      - name: Download pinned published installers
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'AHK-Manager-1.3.1-test.29.1.2-Setup-x64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/bezoro/ahk-manager/releases/download/v1.3.1-test.29.1.2/AHK-Manager-1.3.1-test.29.1.2-Setup-x64.exe' -OutFile $baseline -MaximumRedirection 3
+          if ((Get-Item -LiteralPath $baseline).Length -ne 165631742 -or (Get-FileHash -LiteralPath $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -cne '232ad40675af1eeb8f9b32867482c38766b79275139f9e0784f26ad1714a913f') { throw 'The published preview does not match its pinned identity.' }
+          $stable = Join-Path $env:RUNNER_TEMP 'AHK-Manager-1.3.2-Setup-x64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/bezoro/ahk-manager/releases/download/v1.3.2/AHK-Manager-1.3.2-Setup-x64.exe' -OutFile $stable -MaximumRedirection 3
+          if ((Get-Item -LiteralPath $stable).Length -ne 165632049 -or (Get-FileHash -LiteralPath $stable -Algorithm SHA256).Hash.ToLowerInvariant() -cne 'b4e92232a7422dc77ae8f308e9f7a4556e7f78d07d7c708ba8a7d57263fbd4b4') { throw 'The published stable installer does not match its pinned identity.' }
+
+      - name: Exercise the real installed application and native update helper
+        env:
+          TEST_LOCATION: ${{ matrix.location }}
+          TEST_CLIENT: ${{ matrix.client }}
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath 'installed-updater-package' -Filter '*Setup-x64.exe')
+          if ($installers.Count -ne 1) { throw 'Exactly one current installer is required.' }
+          $parameters = @{
+            BaselineInstaller = Join-Path $env:RUNNER_TEMP 'AHK-Manager-1.3.1-test.29.1.2-Setup-x64.exe'
+            TargetInstaller = $installers[0].FullName
+            OutputRoot = Join-Path $env:RUNNER_TEMP 'installed-updater-evidence'
+            ExpectedOutcome = 'Installed'
+            TimeoutSeconds = 300
+          }
+          if ($env:TEST_CLIENT -ceq 'candidate') {
+            $parameters.BaselineInstaller = $installers[0].FullName
+            $parameters.BaselineKind = 'Candidate'
+            $parameters.BaselineManifest = Join-Path $installers[0].DirectoryName 'ahk-manager-release.json'
+            $parameters.BaselineCommit = $env:SOURCE_COMMIT
+            $parameters.TargetInstaller = Join-Path $env:RUNNER_TEMP 'AHK-Manager-1.3.2-Setup-x64.exe'
+          }
+          if ($env:TEST_LOCATION -ceq 'permissive-parent') {
+            $parameters.InstallationParent = Join-Path $env:RUNNER_TEMP 'custom-updater-parent'
+            $parameters.PermissiveParent = $true
+            $parameters.ExpectedOutcome = 'Refused'
+          }
+          if ($env:TEST_LOCATION -ceq 'unregistered') {
+            $parameters.UnregisteredCopy = $true
+            $parameters.ExpectedOutcome = 'Refused'
+          }
+          ./tools/Test-InstalledUpdater.ps1 @parameters
+
+      - name: Upload installed-app admission and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: installed-updater-${{ matrix.client }}-${{ matrix.location }}
+          path: |
+            ${{ runner.temp }}/installed-updater-evidence/**/*.json
+            ${{ runner.temp }}/installed-updater-evidence/**/*.log
+            ${{ runner.temp }}/installed-updater-evidence/**/*.txt
+            ${{ runner.temp }}/installed-updater-evidence/**/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+  portable-updater:
+    name: Portable updater (${{ matrix.location }})
+    needs: windows-checks
+    runs-on: windows-2025
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        location: [default, custom-data, foreign-root]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out the exact tested source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download the exact candidate release family
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ github.event_name == 'pull_request' && format('windows-installer-test-{0}', github.run_attempt) || 'windows-installer' }}
+          path: portable-updater-candidate
+
+      - name: Download the separately packaged test baseline
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: portable-regression-baseline-${{ github.run_attempt }}
+          path: portable-updater-baseline
+
+      - name: Exercise real portable import, update and rollback without Setup
+        env:
+          TEST_LOCATION: ${{ matrix.location }}
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $baseline = @(Get-ChildItem -LiteralPath 'portable-updater-baseline' -Filter '*Portable-x64.zip')
+          $candidate = @(Get-ChildItem -LiteralPath 'portable-updater-candidate' -Filter '*Portable-x64.zip')
+          if ($baseline.Count -ne 1 -or $candidate.Count -ne 1) { throw 'Exactly one independently packaged baseline and candidate ZIP are required.' }
+          ./tools/Test-PortableUpdater.ps1 -BaselineArchive $baseline[0].FullName -BaselineManifest (Join-Path $baseline[0].DirectoryName 'ahk-manager-portable-release.json') -CandidateArchive $candidate[0].FullName -CandidateManifest (Join-Path $candidate[0].DirectoryName 'ahk-manager-portable-release.json') -SourceCommit $env:SOURCE_COMMIT -OutputRoot (Join-Path $env:RUNNER_TEMP 'portable-updater-evidence') -Scenario $env:TEST_LOCATION
+
+      - name: Upload portable admission, preservation and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: portable-updater-${{ matrix.location }}
+          path: |
+            ${{ runner.temp }}/portable-updater-evidence/**/*.json
+            ${{ runner.temp }}/portable-updater-evidence/**/*.log
+            ${{ runner.temp }}/portable-updater-evidence/**/*.txt
+            ${{ runner.temp }}/portable-updater-evidence/**/*.png
           if-no-files-found: warn
           retention-days: 14
 
   publish-release:
     name: Publish approved main release
-    needs: windows-checks
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'bezoro/ahk-manager' && needs.windows-checks.result == 'success' }}
+    needs: [windows-checks, installed-updater, portable-updater]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'bezoro/ahk-manager' && needs.windows-checks.result == 'success' && needs.installed-updater.result == 'success' && needs.portable-updater.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -385,8 +600,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.windows-checks.outputs.release-version }}
+          AHK_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}
         run: |
-          $status = ./tools/Get-ReleasePublicationStatus.ps1 -Repository $env:GITHUB_REPOSITORY -Version $env:RELEASE_VERSION -Commit $env:GITHUB_SHA
+          $status = ./tools/Get-ReleasePublicationStatus.ps1 -Repository $env:GITHUB_REPOSITORY -Version $env:RELEASE_VERSION -Commit $env:GITHUB_SHA -RequirePortable
           $published = $status -ceq 'Published'
           Write-Host "Release v$env:RELEASE_VERSION status: $status."
           "published=$($published.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -404,6 +620,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.windows-checks.outputs.release-version }}
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          AHK_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}
         run: |
           $root = Join-Path $env:GITHUB_WORKSPACE 'release-artifacts'
-          ./tools/Publish-GitHubRelease.ps1 -InstallerPath (Join-Path $root "AHK-Manager-$($env:RELEASE_VERSION)-Setup-x64.exe") -ManifestPath (Join-Path $root 'ahk-manager-release.json') -Repository $env:GITHUB_REPOSITORY -Commit $env:GITHUB_SHA
+          $parameters = @{
+            InstallerPath = Join-Path $root "AHK-Manager-$($env:RELEASE_VERSION)-Setup-x64.exe"
+            ManifestPath = Join-Path $root 'ahk-manager-release.json'
+            PortableArchivePath = Join-Path $root "AHK-Manager-$($env:RELEASE_VERSION)-Portable-x64.zip"
+            PortableManifestPath = Join-Path $root 'ahk-manager-portable-release.json'
+            Repository = $env:GITHUB_REPOSITORY
+            Commit = $env:GITHUB_SHA
+          }
+          $signed = ./tools/Sign-PortableRelease.ps1 -ArchivePath $parameters.PortableArchivePath -ManifestPath $parameters.PortableManifestPath
+          if ($signed) { $parameters.PortableSignaturePath = Join-Path $root 'ahk-manager-portable-release.json.p7s' }
+          ./tools/Publish-GitHubRelease.ps1 @parameters

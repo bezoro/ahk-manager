@@ -220,3 +220,56 @@ export async function orderlyShutdown(boundary: ShutdownBoundary): Promise<void>
   if (boundary.backendExited()) return;
   await boundary.shutdownBackend();
 }
+
+interface ShutdownDeadlineOptions {
+  schedule?: (fn: () => void, milliseconds: number) => () => void;
+  beforeShutdown?(): Promise<void>;
+  cancelled: string;
+  timedOut: string;
+  unconfirmed: string;
+}
+
+/** A timed-out drain or placement save must never dispatch a late backend shutdown. */
+export async function shutdownWithinDeadline(
+  boundary: ShutdownBoundary,
+  milliseconds: number,
+  options: ShutdownDeadlineOptions,
+): Promise<void> {
+  let active = true;
+  const check = (): void => {
+    if (!active) throw new Error(options.cancelled);
+  };
+  try {
+    await withinDeadline(
+      () =>
+        orderlyShutdown({
+          ...boundary,
+          drain: async () => {
+            await boundary.drain();
+            check();
+          },
+          persistPlacement: async () => {
+            check();
+            await boundary.persistPlacement();
+            check();
+          },
+          shutdownBackend: async () => {
+            check();
+            await options.beforeShutdown?.();
+            check();
+            await boundary.shutdownBackend();
+          },
+        }),
+      milliseconds,
+      options.schedule,
+    );
+    if (boundary.backendPresent() && !boundary.backendExited())
+      throw new Error(options.unconfirmed);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'DeadlineExceeded')
+      throw new Error(options.timedOut);
+    throw error;
+  } finally {
+    active = false;
+  }
+}

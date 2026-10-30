@@ -6,7 +6,13 @@ using System.Text;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
-internal sealed class ParentLease : IDisposable
+internal interface IParentProcess
+{
+    bool Exited { get; }
+    int ExitCode { get; }
+}
+
+internal sealed class ParentLease : IDisposable, IParentProcess
 {
     readonly Process process;
 
@@ -63,8 +69,8 @@ internal sealed class ParentLease : IDisposable
         }
     }
 
-    internal bool Exited => process.HasExited;
-    internal int ExitCode => process.ExitCode;
+    public bool Exited => process.HasExited;
+    public int ExitCode => process.ExitCode;
 
     public void Dispose() => process.Dispose();
 }

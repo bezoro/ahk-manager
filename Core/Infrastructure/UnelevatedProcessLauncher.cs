@@ -220,13 +220,7 @@ public static class UnelevatedProcessLauncher
         if (!executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Executable required.");
         string directory = ScriptPaths.LocalPath(workingDirectory);
-        for (
-            string? current = directory;
-            current is not null;
-            current = Path.GetDirectoryName(current)
-        )
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                throw new IOException("Redirected working directory refused.");
+        WindowsStoragePath.NoRedirects(directory);
         if (!Directory.Exists(directory))
             throw new DirectoryNotFoundException();
         return LaunchVerified(executable, BuildExecutableCommand(executable, arguments), directory);

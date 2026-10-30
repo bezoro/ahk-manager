@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Bezoro.AhkManager.Core.Infrastructure;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
@@ -54,20 +55,7 @@ internal static class UpdatePaths
     internal static bool Equal(string left, string right) =>
         string.Equals(Local(left), Local(right), StringComparison.OrdinalIgnoreCase);
 
-    internal static void NoRedirects(string path)
-    {
-        for (
-            string? current = Local(path);
-            current is not null;
-            current = Path.GetDirectoryName(current)
-        )
-        {
-            if (!File.Exists(current) && !Directory.Exists(current))
-                continue;
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                throw new IOException("Redirected update path refused.");
-        }
-    }
+    internal static void NoRedirects(string path) => WindowsStoragePath.NoRedirects(Local(path));
 
     internal static string OperationDirectory(string updatesRoot, Guid operationId) =>
         Path.Combine(Local(updatesRoot), "operations", operationId.ToString("D"));
@@ -81,18 +69,38 @@ internal static class UpdatePaths
             )
         )
             throw new InvalidDataException("Plan is outside its operation directory.");
-        ValidateInstallerLocation(plan.InstallerPath, plan.Version, updatesRoot);
+        ValidateInstallerLocation(
+            plan.InstallerPath,
+            plan.Version,
+            updatesRoot,
+            UpdateProtocol.Portable(plan)
+        );
         if (plan.Fallback is { } fallback)
-            ValidateInstallerLocation(fallback.InstallerPath, fallback.Version, updatesRoot);
+            ValidateInstallerLocation(
+                fallback.InstallerPath,
+                fallback.Version,
+                updatesRoot,
+                UpdateProtocol.Portable(plan)
+            );
     }
 
-    internal static void ValidateInstallerLocation(string path, string version, string updatesRoot)
+    internal static void ValidateInstallerLocation(
+        string path,
+        string version,
+        string updatesRoot,
+        bool portable = false
+    )
     {
         if (
             !UpdateProtocol.ReleaseVersion(version)
             || !Equal(
                 path,
-                Path.Combine(Local(updatesRoot), "installers", version, "installer.exe")
+                Path.Combine(
+                    Local(updatesRoot),
+                    "installers",
+                    version,
+                    portable ? "archive.zip" : "installer.exe"
+                )
             )
         )
             throw new InvalidDataException("Installer is outside its version cache.");

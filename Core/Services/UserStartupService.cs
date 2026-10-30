@@ -25,7 +25,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
             : adapter.InspectAsync(ct);
 
     bool Owned(StartupTaskRegistration task, IUserStartupTaskAdapter tasks) =>
-        OwnsTask(task, Command, tasks.UserSid);
+        OwnsTask(task, Command, tasks.UserSid) || OwnsRelocatableTask(task, Command, tasks.UserSid);
 
     internal static bool OwnsTask(StartupTaskRegistration task, string command, string userSid)
     {
@@ -45,7 +45,56 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
             && actual[2] == expected[2];
     }
 
-    bool Desired(StartupTaskRegistration task) => task.Enabled && task.HighestPrivileges;
+    internal static bool OwnsRelocatableTask(
+        StartupTaskRegistration task,
+        string command,
+        string userSid
+    )
+    {
+        var previous = ScriptPaths.SplitCommand(task.Command);
+        var current = ScriptPaths.SplitCommand(command);
+        if (
+            previous.Length != 3
+            || current.Length != 3
+            || previous[1] != "--login"
+            || previous[2] != "--background"
+            || current[1] != "--login"
+            || current[2] != "--background"
+        )
+            return false;
+        try
+        {
+            string previousPath = ScriptPaths.LocalPath(previous[0]);
+            string currentPath = ScriptPaths.LocalPath(current[0]);
+            // The product marker, user, and task shape establish ownership. A matching
+            // executable name or a path alone never authorizes changing a task.
+            return ScriptPaths.Equal(previous[0], previousPath)
+                && ScriptPaths.Equal(current[0], currentPath)
+                && Path.GetFileName(previousPath)
+                    .Equals("Bezoro.AhkManager.exe", StringComparison.OrdinalIgnoreCase)
+                && Path.GetFileName(currentPath)
+                    .Equals("Bezoro.AhkManager.exe", StringComparison.OrdinalIgnoreCase)
+                && OwnsTask(
+                    task,
+                    ScriptPaths.QuoteArgument(previousPath) + " --login --background",
+                    userSid
+                );
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    bool Desired(StartupTaskRegistration task, IUserStartupTaskAdapter tasks) =>
+        task.Enabled && task.HighestPrivileges && OwnsTask(task, Command, tasks.UserSid);
+
+    bool OwnedEntry(string entry, StartupTaskRegistration? task, IUserStartupTaskAdapter? tasks) =>
+        entry == Command
+        || task is not null
+            && tasks is not null
+            && entry == task.Command
+            && OwnsRelocatableTask(task, Command, tasks.UserSid);
 
     public ReasonCode RegistrationStatus(bool expectedEnabled) =>
         RegistrationStatus(expectedEnabled, false);
@@ -58,7 +107,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
             var tasks = adapter as IUserStartupTaskAdapter;
             var task = tasks?.ReadTask();
             if (
-                existing is not null && existing != Command
+                existing is not null && !OwnedEntry(existing, task, tasks)
                 || task is not null && (tasks is null || !Owned(task, tasks))
             )
                 return ReasonCode.StartupEntryConflict;
@@ -69,7 +118,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
             if (elevated && tasks is null)
                 return ReasonCode.CapabilityUnverified;
             return elevated
-                ? existing is null && task is not null && Desired(task)
+                ? existing is null && task is not null && Desired(task, tasks!)
                     ? ReasonCode.None
                     : ReasonCode.StartupInactive
                 : existing == Command && task is null
@@ -107,7 +156,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                     originalEntry = adapter.ReadEntry();
                     originalTask = tasks?.ReadTask();
                     if (
-                        originalEntry is not null && originalEntry != Command
+                        originalEntry is not null && !OwnedEntry(originalEntry, originalTask, tasks)
                         || originalTask is not null
                             && (tasks is null || !Owned(originalTask, tasks))
                     )
@@ -122,7 +171,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                         ? elevated
                             ? originalEntry is null
                                 && originalTask is not null
-                                && Desired(originalTask)
+                                && Desired(originalTask, tasks!)
                             : originalEntry == Command && originalTask is null
                         : originalEntry is null && originalTask is null;
                     if (correct)
@@ -132,7 +181,8 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
 
                     // Remove the previous mode before creating the replacement. TASK_CREATE
                     // and registry compare/exchange refuse a concurrently supplied entry.
-                    if (originalEntry is not null && (!enabled || elevated))
+                    bool replaceEntry = originalEntry is not null && originalEntry != Command;
+                    if (originalEntry is not null && (!enabled || elevated || replaceEntry))
                     {
                         if (!adapter.CompareExchangeEntry(originalEntry, null))
                             return new(Outcome.Unknown, ReasonCode.StartupEntryConflict);
@@ -140,14 +190,18 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                     }
                     if (
                         originalTask is not null
-                        && (!enabled || !elevated || !Desired(originalTask))
+                        && (!enabled || !elevated || !Desired(originalTask, tasks!))
                     )
                     {
                         if (!tasks!.CompareExchangeTask(originalTask, null))
                             throw new StartupRegistrationConflictException();
                         changed = true;
                     }
-                    if (enabled && elevated && (originalTask is null || !Desired(originalTask)))
+                    if (
+                        enabled
+                        && elevated
+                        && (originalTask is null || !Desired(originalTask, tasks!))
+                    )
                     {
                         var desired = new StartupTaskRegistration(
                             Command,
@@ -162,7 +216,7 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                             throw new StartupRegistrationConflictException();
                         changed = true;
                     }
-                    else if (enabled && !elevated && originalEntry is null)
+                    else if (enabled && !elevated && (originalEntry is null || replaceEntry))
                     {
                         if (!adapter.CompareExchangeEntry(null, Command))
                             throw new StartupRegistrationConflictException();
@@ -226,6 +280,34 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                             if (currentEntry is null && currentTask is null)
                                 return tasks!.CompareExchangeTask(null, originalTask);
                         }
+                        else if (originalEntry is not null && originalTask is not null)
+                        {
+                            if (
+                                currentEntry is not null && currentEntry != originalEntry
+                                || currentTask is not null && currentTask != originalTask
+                            )
+                                return false;
+                            if (currentTask is null)
+                            {
+                                if (!tasks!.CompareExchangeTask(null, originalTask))
+                                    return false;
+                                currentTask = tasks.ReadTask();
+                                if (
+                                    currentTask is null
+                                    || !SameTaskDefinition(currentTask, originalTask)
+                                )
+                                    return false;
+                            }
+                            // Creation and observation are separate Scheduler operations. A
+                            // later task read cannot authorize deleting a concurrent replacement
+                            // if restoring the Run entry fails; leave it available for recovery.
+                            return (
+                                    currentEntry == originalEntry
+                                    || adapter.CompareExchangeEntry(null, originalEntry)
+                                )
+                                && adapter.ReadEntry() == originalEntry
+                                && tasks!.ReadTask() == currentTask;
+                        }
                         else if (originalEntry is null && originalTask is null)
                             return currentEntry is null && currentTask is null;
                         return false;
@@ -242,6 +324,11 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
     static bool RegistrationException(Exception ex) =>
         SafeJsonFiles.Known(ex)
         || ex is COMException or InvalidOperationException or System.ComponentModel.Win32Exception;
+
+    static bool SameTaskDefinition(
+        StartupTaskRegistration actual,
+        StartupTaskRegistration expected
+    ) => actual with { Fingerprint = expected.Fingerprint } == expected;
 
     sealed class StartupRegistrationConflictException : IOException;
 }

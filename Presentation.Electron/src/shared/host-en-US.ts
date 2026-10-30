@@ -28,8 +28,6 @@ export const hostText = {
   loginResultTitle: 'Check script startup',
   administrationSetupDeferred:
     'The manager will stay in standard mode for this session. You can complete setup with Reopen as administrator.',
-  startupSetupIncomplete:
-    'The startup preference was saved, but Windows has not confirmed that it was applied.',
   continuationTitle: 'Continue starting standard scripts?',
   continuationContinue: 'Continue with Windows approval',
   continuationLater: 'Not now',

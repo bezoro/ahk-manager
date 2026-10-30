@@ -14,6 +14,8 @@ import {
 import type { ManagerSettings } from '../../shared/contracts.js';
 import { text } from '../resources/en-US.js';
 import { OperationNotice, type Notice } from './OperationNotice.js';
+import { PreferencesDataLocation } from './PreferencesDataLocation.js';
+import { useDataLocation } from '../hooks/useDataLocation.js';
 
 interface Props {
   settings: ManagerSettings;
@@ -44,6 +46,13 @@ export function Preferences({
   }));
   const [argumentsText, setArgumentsText] = React.useState(settings.editorArguments.join('\n'));
   const [picking, setPicking] = React.useState(false);
+  const storage = useDataLocation(onClose);
+  const settingsChanged =
+    JSON.stringify({
+      ...draft,
+      window: settings.window,
+      editorArguments: argumentsText.split(/\r?\n/).filter(Boolean),
+    }) !== JSON.stringify(settings);
   const change = (patch: Partial<ManagerSettings>) => setDraft((value) => ({ ...value, ...patch }));
   async function choose(kind: 'interpreter' | 'editor'): Promise<void> {
     if (picking || busy) return;
@@ -73,7 +82,7 @@ export function Preferences({
           <DialogTitle>{text.preferences}</DialogTitle>
           <DialogContent>
             <OperationNotice notice={notice} onDismiss={onDismissNotice} />
-            <fieldset disabled={readonly || busy || picking}>
+            <fieldset disabled={readonly || busy || picking || storage.busy}>
               <legend className="sr-only">{text.preferences}</legend>
               <section
                 className="preference-section startup-preferences"
@@ -111,6 +120,26 @@ export function Preferences({
                   onChange={(_, data) => change({ showWindowAtLogin: data.checked === true })}
                 />
               </section>
+              {storage.state ? (
+                <>
+                  <PreferencesDataLocation
+                    state={storage.state}
+                    busy={busy || storage.busy || picking || settingsChanged}
+                    onChoose={storage.choose}
+                    onOpen={storage.open}
+                    onUseDefault={storage.useDefault}
+                    onRestart={storage.restart}
+                    onCancelMove={storage.cancelMove}
+                  />
+                  {settingsChanged && (
+                    <p className="muted">
+                      Save your preferences before changing the data location.
+                    </p>
+                  )}
+                </>
+              ) : storage.error ? (
+                <p role="alert">{storage.error}</p>
+              ) : null}
               <section className="preference-section" aria-labelledby="settings-editor-title">
                 <h3 id="settings-editor-title">{text.editor}</h3>
                 <div className="picker-row">

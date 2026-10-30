@@ -289,7 +289,10 @@ function verifyActiveProjectInputs(repositoryRoot, errors) {
       const target = path.resolve(directory, value.replaceAll('\\', path.sep));
       const allowed =
         kind === 'Compile'
-          ? isWithin(directory, target)
+          ? isWithin(directory, target) ||
+            (name === 'UpdateHost/AhkManager.UpdateHost.csproj' &&
+              value === '../Core/Infrastructure/WindowsStoragePath.cs' &&
+              target === path.join(repositoryRoot, 'Core/Infrastructure/WindowsStoragePath.cs'))
           : dependencies.some((dependency) => target === path.join(repositoryRoot, dependency));
       if (!allowed || value.includes('$('))
         errors.push(`${name}: ${kind} crosses the active project boundary: ${value}`);

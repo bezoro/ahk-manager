@@ -16,6 +16,7 @@ import { scriptFileStamp } from './script-files.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
 import {
@@ -26,6 +27,7 @@ import {
   StopExitIntent,
   SHUTDOWN_DEADLINE_MS,
   orderlyShutdown,
+  shutdownWithinDeadline,
   reportStartupWithContinuation,
   configuredLoginElevation,
 } from './lifecycle.js';
@@ -61,6 +63,21 @@ import { createWindowDiagnostics } from './desktop/window-diagnostics.js';
 import { createTrayIcon, trayMenu } from './desktop/tray.js';
 import { registerHandlers } from './ipc/register-handlers.js';
 import { createApplicationUpdates } from './updates/application-updates.js';
+import { verifyCachedPortablePackageSignature } from './updates/portable-update-signature.js';
+import { DataLocationController } from './desktop/data-location.js';
+import { initializePortableStorage } from './desktop/storage-bootstrap.js';
+import { ensurePortableSearchShortcut } from './desktop/portable-search-shortcut.js';
+import { resolveDeployment, samePath, type DeploymentLayout } from './storage/deployment.js';
+import {
+  canKeepCurrentData,
+  completePendingDataMove,
+  importLegacyUpdateChannel,
+} from './storage/data-migration.js';
+import { withDataMoveLease } from './storage/data-move-lease.js';
+import {
+  acquirePortableStorageLease,
+  type PortableStorageLease,
+} from './storage/portable-storage-lease.js';
 
 /** Composes desktop, backend and lifecycle services for one Manager process. */
 export function startManager(): void {
@@ -73,10 +90,34 @@ export function startManager(): void {
   ]);
   app.setName(t.title);
   app.setAppUserModelId('Bezoro.AhkManager.Electron');
+  const localAppData =
+    process.env.LOCALAPPDATA ?? path.join(app.getPath('home'), 'AppData', 'Local');
+  let deployment: DeploymentLayout;
+  let storageError: string | null = null;
+  let storageRestarting = false;
+  try {
+    deployment = resolveDeployment(app.getPath('exe'), localAppData);
+    initializePortableStorage(deployment);
+  } catch (error) {
+    const quiet =
+      !process.argv.includes('--foreground') &&
+      !process.argv.includes('--request-administrator') &&
+      (process.argv.includes('--login') || process.argv.includes('--background'));
+    if (quiet) {
+      app.exit(65);
+      return;
+    }
+    void app.whenReady().then(() => {
+      dialog.showErrorBox(t.title, safeError(error));
+      app.exit(65);
+    });
+    return;
+  }
   // Chromium storage never opens or copies a framework's previous operational profile.
   app.setPath(
     'userData',
-    path.join(app.getPath('appData'), 'Bezoro', 'AhkManagerElectron', 'Chromium'),
+    deployment.chromiumDirectory ??
+      path.join(app.getPath('appData'), 'Bezoro', 'AhkManagerElectron', 'Chromium'),
   );
   let window: BrowserWindow | null = null;
   let guard: DocumentGuard | null = null;
@@ -115,6 +156,10 @@ export function startManager(): void {
   let updateStore: UpdateStore | null = null;
   let updateApplying = false;
   let updateShutdownInFlight: Promise<void> | null = null;
+  let dataLocation: DataLocationController | null = null;
+  let storageLease: PortableStorageLease | null = null;
+  let storageClosing: Promise<void> | null = null;
+  let storageClosed = false;
   const documentScope = new AsyncLocalStorage<() => boolean>();
   const alive = () =>
     !quitting && (documentScope.getStore()?.() ?? (window !== null && !window.isDestroyed()));
@@ -175,9 +220,24 @@ export function startManager(): void {
     app.on('window-all-closed', () => {
       if (!quitting) void quit();
     });
-    void app
-      .whenReady()
-      .then(start)
+    app.on('will-quit', (event) => {
+      if (!storageLease || storageClosed) return;
+      event.preventDefault();
+      if (storageClosing) return;
+      storageClosing = storageLease.close().then(
+        () => {
+          storageClosed = true;
+          // Leave the cancelled native quit callback before requesting exit again.
+          setImmediate(() => app.quit());
+        },
+        () => app.exit(65),
+      );
+    });
+    const storageReady = prepareStorage();
+    void Promise.all([app.whenReady(), storageReady])
+      .then(() => {
+        if (!storageRestarting) return start();
+      })
       .catch((error) => {
         if (!lifecycle.quietStartup) dialog.showErrorBox(t.title, safeError(error));
         quitComplete = true;
@@ -186,6 +246,49 @@ export function startManager(): void {
   }
   function safeError(error: unknown): string {
     return error instanceof Error ? error.message.slice(0, 4096) : t.unknownError;
+  }
+  async function prepareStorage(): Promise<void> {
+    try {
+      const previous = deployment;
+      try {
+        deployment = await withDataMoveLease(previous, (boundary) =>
+          completePendingDataMove(previous, boundary),
+        );
+      } catch (error) {
+        const fallback = resolveDeployment(app.getPath('exe'), localAppData);
+        if (!(await canKeepCurrentData(fallback))) throw error;
+        deployment = fallback;
+        storageError = safeError(error);
+      }
+      if (!samePath(previous.dataDirectory, deployment.dataDirectory)) {
+        // Electron may have initialized Chromium while the asynchronous copy ran.
+        // A fresh process selects the committed data path before Chromium starts.
+        app.relaunch({ execPath: deployment.launchExecutable, args: ['--foreground'] });
+        storageRestarting = true;
+        quitComplete = true;
+        app.exit(0);
+        return;
+      }
+      // Check the authoritative pointer again after acquiring the selected lock.
+      const current = resolveDeployment(app.getPath('exe'), localAppData);
+      if (!samePath(current.dataDirectory, deployment.dataDirectory))
+        throw new Error('The data location changed during startup. Open Manager again.');
+      if (deployment.mode === 'portable')
+        storageLease = await acquirePortableStorageLease(deployment, (error) => {
+          // Losing namespace protection must stop writes and cannot authorize an update.
+          controller?.setConnection('failed', safeError(error));
+          quitting = true;
+          app.exit(65);
+        });
+      try {
+        await importLegacyUpdateChannel(deployment);
+      } catch (error) {
+        storageError = safeError(error);
+      }
+    } catch (error) {
+      storageError = safeError(error);
+      throw error;
+    }
   }
   function show(): void {
     if (!window || window.isDestroyed() || quitting) return;
@@ -197,7 +300,7 @@ export function startManager(): void {
       guard?.send('manager:preferences', null);
   }
   function showPreferences(): void {
-    if (administration?.active) return;
+    if (administration?.active || dataLocation?.active) return;
     lifecycle.requestPreferences();
     show();
     deliverPreferences();
@@ -223,6 +326,8 @@ export function startManager(): void {
     const configured = await createApplicationUpdates(
       {
         preflight: (operationId, phase) => {
+          if (dataLocation?.state.pendingDataDirectory)
+            throw new Error('Restart Manager to complete the data move before updating.');
           const lease = documentLease;
           return preflight.check(
             operationId,
@@ -235,6 +340,7 @@ export function startManager(): void {
               !window.isDestroyed() &&
               !quitting &&
               !updateApplying &&
+              !dataLocation?.active &&
               !updateShutdownInFlight &&
               !adoptionPending &&
               !administration?.active &&
@@ -254,9 +360,97 @@ export function startManager(): void {
         changed: (state) => guard?.send('manager:updates', state),
       },
       () => !quitting && !updateApplying,
+      {
+        deployment: deployment.mode,
+        root: deployment.updatesDirectory,
+        currentCommit: await runningCommit(),
+      },
     );
     updates = configured.service;
     updateStore = configured.store;
+  }
+  async function runningCommit(): Promise<string | undefined> {
+    const metadata = JSON.parse(
+      await fs.readFile(path.join(app.getAppPath(), 'package.json'), 'utf8'),
+    ) as { sourceCommit?: unknown };
+    return typeof metadata.sourceCommit === 'string' && /^[a-f0-9]{40}$/.test(metadata.sourceCommit)
+      ? metadata.sourceCommit
+      : undefined;
+  }
+  async function restartForDataMove(): Promise<void> {
+    const operationId = randomUUID();
+    let shutdownStarted = false;
+    const lease = documentLease;
+    const check = (phase: 'begin' | 'commit') =>
+      preflight.check(
+        operationId,
+        phase,
+        (request) => guard?.send('manager:administrationPreflight', request),
+        () =>
+          !!lease &&
+          !!guard?.current(lease) &&
+          !!window?.isFocused() &&
+          !window.isDestroyed() &&
+          !quitting &&
+          !updateApplying &&
+          !updateShutdownInFlight &&
+          !adoptionPending &&
+          !administration?.active &&
+          !stopExit.active &&
+          !updates?.busy &&
+          dataLocation?.active === true &&
+          controller?.state.busy === false,
+      );
+    try {
+      if (!(await check('begin')))
+        throw new Error(
+          'Save or discard your changes and wait for operations to finish before restarting Manager.',
+        );
+      await shutdownWithinDeadline(
+        {
+          drain: async () => {
+            await controller?.drain();
+          },
+          backendPresent: () => backend !== null,
+          backendExited: () => backend?.exited ?? true,
+          persistPlacement: async () => {
+            await controller?.savePlacement(true);
+          },
+          shutdownBackend: async () => {
+            if (!backend) return;
+            shutdownStarted = true;
+            const closing = backend.shutdown().then(() => {});
+            updateShutdownInFlight = closing;
+            try {
+              await closing;
+            } finally {
+              if (updateShutdownInFlight === closing) updateShutdownInFlight = null;
+            }
+          },
+          reportPlacementFailure: () => {},
+        },
+        SHUTDOWN_DEADLINE_MS,
+        {
+          beforeShutdown: async () => {
+            if (!(await check('commit')))
+              throw new Error('The restart was cancelled because the application state changed.');
+          },
+          cancelled: 'The data location restart was cancelled.',
+          timedOut: 'Manager shutdown was not confirmed in time. The data location was preserved.',
+          unconfirmed: 'Manager shutdown was not confirmed. The data location was preserved.',
+        },
+      );
+      app.relaunch({ execPath: deployment.launchExecutable, args: ['--foreground'] });
+      quitting = true;
+      tray?.destroy();
+      quitComplete = true;
+      app.quit();
+    } catch (error) {
+      if (shutdownStarted || backend?.exited) controller?.setConnection('failed', safeError(error));
+      show();
+      dialog.showErrorBox('Data location', safeError(error));
+      throw error;
+    }
   }
   async function applyUpdate(operationId: string, target: CachedInstaller): Promise<void> {
     if (
@@ -267,7 +461,8 @@ export function startManager(): void {
       quitting ||
       adoptionPending ||
       administration?.active ||
-      stopExit.active
+      stopExit.active ||
+      dataLocation?.active
     )
       throw new Error('Wait for manager operations to finish before updating.');
     updateApplying = true;
@@ -275,7 +470,9 @@ export function startManager(): void {
     let prepared: PreparedUpdate | null = null;
     let shutdownStarted = false;
     try {
-      await verifyCachedInstallerSignature(target.installerPath);
+      if (deployment.mode === 'portable')
+        await verifyCachedPortablePackageSignature(target.installerPath);
+      else await verifyCachedInstallerSignature(target.installerPath);
       const created = app
         .getAppMetrics()
         .find((metric) => metric.pid === process.pid)?.creationTime;
@@ -450,6 +647,47 @@ export function startManager(): void {
       },
       quitAfterAcknowledgement: () => quit(true),
     });
+    dataLocation = new DataLocationController(deployment, storageError, {
+      ready: () =>
+        !!backend?.ready &&
+        controller?.state.connection === 'ready' &&
+        !quitting &&
+        !updateApplying &&
+        !updateShutdownInFlight &&
+        !updates?.busy &&
+        !adoptionPending &&
+        !administration?.active &&
+        !stopExit.active &&
+        !controller.state.busy,
+      alive,
+      quiesce: (value) => controller?.setAdministrationPending(value),
+      drain: async () => {
+        await controller?.drain();
+      },
+      chooseDirectory: async (current) => {
+        if (!window) throw new Error('Manager is not ready.');
+        const choice = await dialog.showOpenDialog(window, {
+          title: 'Choose data folder',
+          buttonLabel: 'Use this folder',
+          defaultPath: current,
+          properties: ['openDirectory', 'createDirectory'],
+        });
+        return choice.canceled ? null : (choice.filePaths[0] ?? null);
+      },
+      preparePrivateDirectory: async (directory) => {
+        if (!backend?.ready) throw new Error(t.backendUnavailable);
+        const result = await backend.request<OperationResult>('preparePortableDataDirectory', {
+          path: directory,
+        });
+        if (result.outcome !== 'Confirmed')
+          throw new Error(result.detail ?? 'The data folder could not be prepared.');
+      },
+      openDirectory: async (directory) => {
+        const error = await shell.openPath(directory);
+        if (error) throw new Error(error);
+      },
+      restart: restartForDataMove,
+    });
     await configureUpdates();
     registerIpc();
     await window.loadURL(APP_URL);
@@ -510,22 +748,11 @@ export function startManager(): void {
       }
     }
     if (canInitialize && !setupDeferred && backend?.ready) {
-      const result = await backend.request<OperationResult>('initializeStartup', {});
-      if (result.outcome !== 'Confirmed' && window && !lifecycle.quietStartup) {
-        show();
-        await dialog.showMessageBox(window, {
-          type: 'warning',
-          title: t.loginResultTitle,
-          message: t.startupSetupIncomplete,
-          detail: result.detail ?? t.loginFailure(result.code),
-          buttons: [t.confirm],
-          defaultId: 0,
-          cancelId: 0,
-          noLink: true,
-        });
-      }
+      // Startup configuration failures are already published in state and Activity.
+      await backend.request<OperationResult>('initializeStartup', {});
     }
     await runLogin();
+    if (backend) registerPortableApplication(backend);
     if (
       lifecycle.shouldShowAtStartup(
         controller.state.snapshot?.settings,
@@ -558,7 +785,15 @@ export function startManager(): void {
     try {
       await backend.start();
       controller.setHostAuthority(backend.authorityMode);
-      if (backend.profileRoot && !lifecycle.loginRequested && !lifecycle.quietStartup) {
+      const initialized = await backend.request<OperationResult>('initializeProfile', {});
+      if (initialized.outcome !== 'Confirmed')
+        throw new Error(initialized.detail ?? 'The application profile could not be prepared.');
+      if (
+        deployment.mode !== 'portable' &&
+        backend.profileRoot &&
+        !lifecycle.loginRequested &&
+        !lifecycle.quietStartup
+      ) {
         const exists = await fs.access(path.join(backend.profileRoot, 'settings.json')).then(
           () => true,
           () => false,
@@ -605,6 +840,41 @@ export function startManager(): void {
       if (!lifecycle.quietStartup) show();
     }
   }
+  function registerPortableApplication(owner: BackendClient): void {
+    if (!app.isPackaged || process.platform !== 'win32' || deployment.mode !== 'portable') return;
+    let appDataDirectory: string;
+    try {
+      appDataDirectory = app.getPath('appData');
+    } catch {
+      return;
+    }
+    void ensurePortableSearchShortcut(deployment, {
+      platform: process.platform,
+      appDataDirectory,
+      permitted: () => {
+        const state = controller?.state;
+        return (
+          backend === owner &&
+          owner.ready &&
+          state?.connection === 'ready' &&
+          state.snapshot?.readOnly === false &&
+          state.snapshot.effectsAvailable &&
+          !state.administrationPending &&
+          !adoptionPending &&
+          !administration?.active &&
+          !updateApplying &&
+          !updateShutdownInFlight &&
+          !stopExit.active &&
+          !storageRestarting &&
+          !quitting
+        );
+      },
+      read: (file) => shell.readShortcutLink(file),
+      write: (file, operation, details) => shell.writeShortcutLink(file, operation, details),
+    })
+      .then((result) => diagnostics?.record('portable-search-shortcut', { result }))
+      .catch(() => {});
+  }
   async function reportLoginResult(result: OperationResult): Promise<void> {
     try {
       continuationOffer = backend?.ready
@@ -645,6 +915,7 @@ export function startManager(): void {
       adoptionPending = startupAdoptionBlocksInteraction(result);
       controller.setAdministrationPending(adoptionPending);
       controller.setConnection('ready');
+      if (backend) registerPortableApplication(backend);
       updateTray();
       show();
       if (window)
@@ -877,7 +1148,7 @@ export function startManager(): void {
     }
   }
   async function closeWindow(): Promise<void> {
-    if (updateApplying || updateShutdownInFlight) {
+    if (updateApplying || updateShutdownInFlight || dataLocation?.active) {
       show();
       return;
     }
@@ -907,7 +1178,7 @@ export function startManager(): void {
     } else await quit();
   }
   async function quit(administrativeAcknowledgement = false): Promise<void> {
-    if ((updateApplying || updateShutdownInFlight) && !quitComplete) {
+    if ((updateApplying || updateShutdownInFlight || dataLocation?.active) && !quitComplete) {
       show();
       return;
     }
@@ -974,9 +1245,19 @@ export function startManager(): void {
       theme,
       ipc: ipcMain,
       clipboard,
+      storage: dataLocation
+        ? {
+            get: () => dataLocation!.state,
+            choose: dataLocation.choose,
+            open: dataLocation.open,
+            restoreDefault: dataLocation.restoreDefault,
+            restart: dataLocation.restart,
+            cancel: dataLocation.cancel,
+          }
+        : undefined,
       policy: () => ({
         quitting,
-        updateApplying,
+        updateApplying: updateApplying || dataLocation?.active === true,
         adoptionPending,
         administrationPending: controller!.state.administrationPending,
       }),
@@ -985,6 +1266,7 @@ export function startManager(): void {
         if (updateShutdownInFlight) throw new Error('Wait for confirmed backend shutdown.');
         await startBackend();
         if (backend?.ready) await runLogin();
+        if (backend) registerPortableApplication(backend);
       },
       selectionChanged: (selected) => {
         diagnosticSelection = selected?.scriptId ?? null;

@@ -1,9 +1,12 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using Bezoro.AhkManager.Core.Infrastructure;
@@ -184,7 +187,10 @@ internal static class WindowsStartupTaskStore
         return xml.ToString(SaveOptions.DisableFormatting);
     }
 
-    internal static StartupTaskRegistration Parse(string xml)
+    internal static StartupTaskRegistration Parse(
+        string xml,
+        Func<string, string?>? resolveAccountSid = null
+    )
     {
         string hash = Convert
             .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(xml)))
@@ -217,12 +223,27 @@ internal static class WindowsStartupTaskStore
                 || triggers[0].Name != Ns + "LogonTrigger"
             )
                 return foreign;
-            string sid = principals[0].Element(Ns + "UserId")?.Value ?? "";
+            // Scheduler may persist the same user as a SID in the principal and
+            // an NTAccount in the trigger. Ownership follows the resolved SID;
+            // the fingerprint still binds the complete, unmodified XML.
+            string? sid = ResolveSid(
+                principals[0].Element(Ns + "UserId")?.Value,
+                resolveAccountSid ?? AccountSid
+            );
+            if (sid is null)
+                return foreign;
+            string? triggerSid = ResolveSid(
+                triggers[0].Element(Ns + "UserId")?.Value,
+                resolveAccountSid ?? AccountSid
+            );
+            if (triggerSid is null)
+                return foreign;
             string executable = actions[0].Element(Ns + "Command")?.Value ?? "";
             string arguments = actions[0].Element(Ns + "Arguments")?.Value ?? "";
             string work = actions[0].Element(Ns + "WorkingDirectory")?.Value ?? "";
             bool validPath =
                 Path.IsPathFullyQualified(executable)
+                && ScriptPaths.Equal(executable, ScriptPaths.LocalPath(executable))
                 && ScriptPaths.Equal(Path.GetDirectoryName(executable), work);
             string command = validPath
                 ? ScriptPaths.QuoteArgument(ScriptPaths.LocalPath(executable)) + " " + arguments
@@ -237,7 +258,7 @@ internal static class WindowsStartupTaskStore
                 enabled,
                 principals[0].Element(Ns + "RunLevel")?.Value == "HighestAvailable",
                 principals[0].Element(Ns + "LogonType")?.Value == "InteractiveToken",
-                triggers[0].Element(Ns + "UserId")?.Value == sid && sid.Length > 0,
+                triggerSid == sid,
                 root.Element(Ns + "RegistrationInfo")?.Element(Ns + "Source")?.Value ?? "",
                 hash
             );
@@ -247,4 +268,109 @@ internal static class WindowsStartupTaskStore
             return foreign;
         }
     }
+
+    static string? ResolveSid(string? identity, Func<string, string?> resolveAccountSid)
+    {
+        if (
+            string.IsNullOrWhiteSpace(identity)
+            || identity.Length > 512
+            || identity != identity.Trim()
+            || identity.Any(char.IsControl)
+        )
+            return null;
+        string[] parts = identity.Split('\\');
+        if (parts.Length > 2 || parts.Any(part => part.Length == 0))
+            return null;
+        try
+        {
+            string? sid = IsSidText(identity) ? identity : resolveAccountSid(identity);
+            return sid is not null && TryDecodeSid(sid, out byte[] binary)
+                ? new SecurityIdentifier(binary, 0).Value
+                : null;
+        }
+        catch (Exception error)
+            when (error
+                    is ArgumentException
+                        or IdentityNotMappedException
+                        or UnauthorizedAccessException
+                        or System.Security.SecurityException
+                        or System.ComponentModel.Win32Exception
+            )
+        {
+            return null;
+        }
+    }
+
+    static bool IsSidText(string identity) =>
+        !identity.Contains('\\')
+        && !identity.Contains('@')
+        && Regex.IsMatch(
+            identity,
+            @"\AS-[0-9]+(?:-|\z)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+        );
+
+    // Windows' string SID conversion can accept overflowing numeric fields.
+    // Decode bounded values first so canonicalization cannot change their meaning.
+    internal static bool TryDecodeSid(string? text, out byte[] binary)
+    {
+        binary = [];
+        if (string.IsNullOrEmpty(text) || text.Length > 512 || text.Any(char.IsControl))
+            return false;
+        string[] parts = text.Split('-');
+        if (
+            parts.Length is < 3 or > 18
+            || parts[0] is not ("S" or "s")
+            || !byte.TryParse(
+                parts[1],
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out byte revision
+            )
+            || revision != 1
+        )
+            return false;
+        string authorityText = parts[2];
+        ulong authority;
+        bool authorityRead = authorityText.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? ulong.TryParse(
+                authorityText.AsSpan(2),
+                NumberStyles.AllowHexSpecifier,
+                CultureInfo.InvariantCulture,
+                out authority
+            )
+            : ulong.TryParse(
+                authorityText,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out authority
+            );
+        if (!authorityRead || authority > 0xFFFFFFFFFFFF)
+            return false;
+        var subauthorities = new uint[parts.Length - 3];
+        for (int index = 0; index < subauthorities.Length; index++)
+            if (
+                !uint.TryParse(
+                    parts[index + 3],
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out subauthorities[index]
+                )
+            )
+                return false;
+        binary = new byte[8 + 4 * subauthorities.Length];
+        binary[0] = revision;
+        binary[1] = checked((byte)subauthorities.Length);
+        for (int index = 0; index < 6; index++)
+            binary[index + 2] = (byte)(authority >> ((5 - index) * 8) & 0xFF);
+        for (int index = 0; index < subauthorities.Length; index++)
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                binary.AsSpan(8 + 4 * index, 4),
+                subauthorities[index]
+            );
+        return true;
+    }
+
+    static string AccountSid(string account) =>
+        ((SecurityIdentifier)new NTAccount(account).Translate(typeof(SecurityIdentifier))).Value;
 }

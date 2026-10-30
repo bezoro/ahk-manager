@@ -11,6 +11,7 @@ import type {
 } from '../../src/shared/contracts.js';
 import { snapshot, scriptId } from './fixtures.js';
 import { emptyUpdateState, type UpdateState } from '../../src/shared/updates.js';
+import type { StorageState } from '../../src/shared/storage.js';
 import {
   requireValid,
   shape,
@@ -169,6 +170,14 @@ let state: HostState = {
   administrationPending: false,
 };
 let updates: UpdateState = { ...emptyUpdateState(), currentVersion: '1.2.1' };
+let storage: StorageState = {
+  mode: 'portable',
+  currentDataDirectory: 'C:\\Portable Manager\\Data',
+  defaultDataDirectory: 'C:\\Portable Manager\\Data',
+  pendingDataDirectory: null,
+  canChange: true,
+  error: null,
+};
 const currentTheme = (): ThemeState => ({
   dark: nativeTheme.shouldUseDarkColors,
   accent: `#${systemPreferences.getAccentColor().slice(0, 6)}`,
@@ -337,6 +346,21 @@ app
       if (method === 'getState') return state;
       if (method === 'getTheme') return currentTheme();
       if (method === 'getUpdateState') return updates;
+      if (method === 'getStorageState') return storage;
+      if (method === 'chooseDataLocation' || method === 'restoreDefaultDataLocation') {
+        storage = {
+          ...storage,
+          pendingDataDirectory:
+            method === 'chooseDataLocation' ? 'D:\\Manager Data' : storage.defaultDataDirectory,
+          canChange: false,
+        };
+        return { state: storage, restartRequired: true };
+      }
+      if (method === 'cancelDataMove') {
+        storage = { ...storage, pendingDataDirectory: null, canChange: true, error: null };
+        return storage;
+      }
+      if (method === 'openDataLocation' || method === 'restartForDataMove') return;
       if (method === 'checkUpdates') {
         updates = { ...updates, phase: 'idle', lastCheckedAt: new Date().toISOString() };
         window.webContents.send('fixture:updates', updates);
@@ -494,6 +518,12 @@ app
                   scenarios + '\nAhkRendererScenarios.previewPreferences()',
                 );
               else window.webContents.send('fixture:preferences');
+              report();
+            } else if (command.action === 'dataLocation' && scenarios) {
+              const assertions = await window.webContents.executeJavaScript(
+                scenarios + '\nAhkRendererScenarios.previewDataLocation()',
+              );
+              write('dataLocation-' + command.id + '.json', { assertions, fixture: true });
               report();
             } else if (command.action === 'close') {
               nativeTheme.themeSource = 'system';

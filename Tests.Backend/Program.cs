@@ -19,10 +19,11 @@ internal static class Program
                         or "--inventory"
                         or "--ahk-owned"
                         or "--startup-inspection"
+                        or "--startup-task-integration"
                     )
             )
                 throw new ArgumentException(
-                    "Use --backend|--core|--corrections|--inventory|--ahk-owned|--startup-inspection --root <fixture directory>."
+                    "Use --backend|--core|--corrections|--inventory|--ahk-owned|--startup-inspection|--startup-task-integration --root <fixture directory>."
                 );
             if (args[0] == "--ahk-owned" && !Path.IsPathFullyQualified(args[2]))
                 throw new ArgumentException(
@@ -43,6 +44,8 @@ internal static class Program
                 Directory.CreateDirectory(root);
                 if (args[0] == "--startup-inspection")
                     await StartupCommandChecks.ReadOnlyWindowsInspectionAsync(root);
+                else if (args[0] == "--startup-task-integration")
+                    StartupTaskSchedulerChecks.Run(root);
                 else if (args[0] == "--corrections")
                     await CorrectionChecks.RunAsync(root);
                 else if (args[0] == "--core")

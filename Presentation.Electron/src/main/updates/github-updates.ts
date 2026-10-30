@@ -1,14 +1,26 @@
 import {
+  UpdateRequestError,
+  invalidUpdateMetadata as invalidManifest,
+  parseUpdateJson as parseJson,
+} from './update-metadata.js';
+import {
   compareUpdateVersions,
   isTestUpdateVersion,
   validUpdateChannel,
   versionAllowedInChannel,
+  validUpdateVersion,
   type UpdateChannel,
 } from '../../shared/update-versions.js';
 export { validUpdateVersion } from '../../shared/update-versions.js';
+import {
+  type UpdateDeployment,
+  releaseManifestName,
+  releasePackageName,
+  packageProtocol,
+  validUpdateDeployment,
+} from './update-deployment.js';
 
 const REPOSITORY_API = 'https://api.github.com/repos/bezoro/ahk-manager';
-const MANIFEST_NAME = 'ahk-manager-release.json';
 const METADATA_LIMIT = 2 * 1024 * 1024;
 const MANIFEST_LIMIT = 64 * 1024;
 const INSTALLER_LIMIT = 1024 * 1024 * 1024;
@@ -29,6 +41,9 @@ export interface RemoteUpdateRelease {
   bytes: number;
   installerName: string;
   metadataOnly?: boolean;
+  deployment?: UpdateDeployment;
+  manifestText?: string;
+  signatureAssetId?: number;
 }
 
 export const compareVersions = compareUpdateVersions;
@@ -51,49 +66,10 @@ const isoDate = (value: unknown): value is string =>
   Number.isFinite(Date.parse(value)) &&
   new Date(value).toISOString().slice(0, 19) === value.slice(0, 19);
 
-class UpdateRequestError extends Error {}
-const invalidManifest = (): UpdateRequestError =>
-  new UpdateRequestError(
-    'The published release has invalid update metadata. No files were installed.',
-  );
-
 function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
   return (
     Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
   );
-}
-
-// JSON.parse already verifies grammar. This pass rejects duplicate object keys,
-// including escaped spellings, before accepting security-relevant metadata.
-function parseJson(text: string): unknown {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw invalidManifest();
-  }
-  const stack: Array<{ object: boolean; key: boolean; keys: Set<string> }> = [];
-  for (let index = 0; index < text.length; index++) {
-    const character = text[index];
-    if (character === '"') {
-      const start = index++;
-      for (; index < text.length; index++) {
-        if (text[index] === '\\') index++;
-        else if (text[index] === '"') break;
-      }
-      const scope = stack.at(-1);
-      if (scope?.object && scope.key) {
-        const key = JSON.parse(text.slice(start, index + 1)) as string;
-        if (scope.keys.has(key)) throw invalidManifest();
-        scope.keys.add(key);
-      }
-    } else if (character === '{' || character === '[')
-      stack.push({ object: character === '{', key: character === '{', keys: new Set() });
-    else if (character === '}' || character === ']') stack.pop();
-    else if (character === ':' && stack.at(-1)?.object) stack.at(-1)!.key = false;
-    else if (character === ',' && stack.at(-1)?.object) stack.at(-1)!.key = true;
-  }
-  return parsed;
 }
 
 interface ReleaseAsset {
@@ -109,9 +85,15 @@ interface Candidate {
   notes: string;
   manifest: ReleaseAsset;
   installer: ReleaseAsset;
+  deployment: UpdateDeployment;
+  signature: ReleaseAsset | null;
 }
 
-function candidate(value: unknown, channel: UpdateChannel): Candidate | null {
+function candidate(
+  value: unknown,
+  channel: UpdateChannel,
+  deployment: UpdateDeployment,
+): Candidate | null {
   if (!object(value) || value.draft !== false || typeof value.tag_name !== 'string') return null;
   const version = value.tag_name.startsWith('v') ? value.tag_name.slice(1) : '';
   if (
@@ -120,9 +102,11 @@ function candidate(value: unknown, channel: UpdateChannel): Candidate | null {
   )
     return null;
   if (!Array.isArray(value.assets) || value.assets.length > 100) throw invalidManifest();
-  const manifests = value.assets.filter((asset) => object(asset) && asset.name === MANIFEST_NAME);
+  const manifests = value.assets.filter(
+    (asset) => object(asset) && asset.name === releaseManifestName(deployment),
+  );
   if (!manifests.length) return null; // Releases preceding update protocol 1 stay outside this channel.
-  const installerName = `AHK-Manager-${version}-Setup-x64.exe`;
+  const installerName = releasePackageName(version, deployment);
   const installers = value.assets.filter((asset) => object(asset) && asset.name === installerName);
   if (
     manifests.length !== 1 ||
@@ -147,6 +131,13 @@ function candidate(value: unknown, channel: UpdateChannel): Candidate | null {
       throw invalidManifest();
     return { id: input.id, name: input.name, size: input.size };
   };
+  const signatures =
+    deployment === 'portable'
+      ? value.assets.filter(
+          (entry) => object(entry) && entry.name === releaseManifestName(deployment) + '.p7s',
+        )
+      : [];
+  if (signatures.length > 1) throw invalidManifest();
   return {
     id: value.id,
     version,
@@ -155,6 +146,8 @@ function candidate(value: unknown, channel: UpdateChannel): Candidate | null {
     notes: typeof value.body === 'string' ? value.body.slice(0, 8000).replaceAll('\0', '') : '',
     manifest: asset(manifests[0], MANIFEST_LIMIT),
     installer: asset(installers[0], INSTALLER_LIMIT),
+    deployment,
+    signature: signatures[0] ? asset(signatures[0], MANIFEST_LIMIT) : null,
   };
 }
 
@@ -171,10 +164,12 @@ function releaseFromMetadata(release: Candidate): RemoteUpdateRelease {
     bytes: release.installer.size,
     installerName: release.installer.name,
     metadataOnly: true,
+    ...(release.deployment === 'portable' ? { deployment: 'portable' as const } : {}),
   };
 }
 
 function releaseFromManifest(value: unknown, release: Candidate): RemoteUpdateRelease {
+  const packageKey = release.deployment === 'portable' ? 'archive' : 'installer';
   if (
     !object(value) ||
     !exactKeys(value, [
@@ -184,10 +179,10 @@ function releaseFromManifest(value: unknown, release: Candidate): RemoteUpdateRe
       'commit',
       'publishedAt',
       'notes',
-      'installer',
+      packageKey,
     ]) ||
     value.schemaVersion !== 1 ||
-    value.updateProtocol !== 1 ||
+    value.updateProtocol !== packageProtocol(release.deployment) ||
     value.version !== release.version ||
     !exactCommit(value.commit) ||
     (release.target !== value.commit &&
@@ -198,7 +193,7 @@ function releaseFromManifest(value: unknown, release: Candidate): RemoteUpdateRe
     value.notes.includes('\0')
   )
     throw invalidManifest();
-  const installer = value.installer;
+  const installer = value[packageKey];
   if (
     !object(installer) ||
     !exactKeys(installer, ['name', 'sha256', 'sha512', 'bytes']) ||
@@ -223,6 +218,12 @@ function releaseFromManifest(value: unknown, release: Candidate): RemoteUpdateRe
     sha512: installer.sha512,
     bytes: release.installer.size,
     installerName: release.installer.name,
+    ...(release.deployment === 'portable'
+      ? {
+          deployment: 'portable' as const,
+          ...(release.signature ? { signatureAssetId: release.signature.id } : {}),
+        }
+      : {}),
   };
 }
 
@@ -232,7 +233,12 @@ export class GitHubUpdateClient {
   private listed = new Map<string, Candidate>();
   private channel: UpdateChannel = 'stable';
   private generation = 0;
-  constructor(private readonly fetcher: typeof fetch = globalThis.fetch) {}
+  constructor(
+    private readonly fetcher: typeof fetch = globalThis.fetch,
+    readonly deployment: UpdateDeployment = 'installed',
+  ) {
+    if (!validUpdateDeployment(deployment)) throw new Error('The update deployment is invalid.');
+  }
 
   async releases(channel: UpdateChannel = 'stable'): Promise<RemoteUpdateRelease[]> {
     try {
@@ -258,7 +264,7 @@ export class GitHubUpdateClient {
         );
         if (!Array.isArray(rows) || rows.length > 100) throw invalidManifest();
         for (const row of rows) {
-          const item = candidate(row, channel);
+          const item = candidate(row, channel, this.deployment);
           if (!item) continue;
           const id = `github:${item.id}`;
           if (versions.has(item.version) || found.has(id)) throw invalidManifest();
@@ -281,7 +287,7 @@ export class GitHubUpdateClient {
         if (latest !== null) {
           if (!object(latest) || latest.draft !== false || latest.prerelease !== false)
             throw invalidManifest();
-          const item = candidate(latest, 'stable');
+          const item = candidate(latest, 'stable', this.deployment);
           if (item) {
             const id = `github:${item.id}`;
             const existing = found.get(id);
@@ -314,6 +320,21 @@ export class GitHubUpdateClient {
     }
   }
 
+  /** Resolve the running portable build without changing the selected channel catalog. */
+  async resolveVersion(version: string): Promise<RemoteUpdateRelease> {
+    if (!validUpdateVersion(version)) throw invalidManifest();
+    const generation = this.generation;
+    const row = await this.json(
+      `${REPOSITORY_API}/releases/tags/v${version}`,
+      METADATA_LIMIT,
+      true,
+      generation,
+    );
+    const item = candidate(row, 'test', this.deployment);
+    if (!item || item.version !== version) throw invalidManifest();
+    return { ...(await this.resolveCandidate(item, generation)), publishedAt: item.publishedAt };
+  }
+
   async resolve(id: string): Promise<RemoteUpdateRelease> {
     try {
       const generation = this.generation;
@@ -342,7 +363,7 @@ export class GitHubUpdateClient {
   }
 
   private key(item: Candidate): string {
-    return `${item.id}:${item.manifest.id}:${item.installer.id}`;
+    return `${item.id}:${item.manifest.id}:${item.installer.id}:${item.signature?.id ?? 0}`;
   }
 
   private cached(item: Candidate): RemoteUpdateRelease | undefined {
@@ -366,10 +387,24 @@ export class GitHubUpdateClient {
     this.requireGeneration(generation);
     const cached = this.cached(item);
     if (cached) return cached;
+    let manifestText: string | undefined;
     const release = releaseFromManifest(
-      await this.json(assetUrl(item.manifest.id), MANIFEST_LIMIT, false, generation),
+      await this.json(
+        assetUrl(item.manifest.id),
+        MANIFEST_LIMIT,
+        false,
+        generation,
+        false,
+        (text) => {
+          manifestText = text;
+        },
+      ),
       item,
     );
+    if (item.deployment === 'portable') {
+      if (!manifestText) throw invalidManifest();
+      release.manifestText = manifestText;
+    }
     this.manifests.set(this.key(item), release);
     if (this.manifests.size > 600) this.manifests.delete(this.manifests.keys().next().value!);
     return release;
@@ -381,6 +416,7 @@ export class GitHubUpdateClient {
     metadata: boolean,
     generation: number,
     optionalNotFound = false,
+    rawText?: (text: string) => void,
   ): Promise<unknown> {
     this.requireGeneration(generation);
     let location = new URL(url);
@@ -474,12 +510,16 @@ export class GitHubUpdateClient {
       }
       let text: string;
       try {
-        text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts));
+        const raw = Buffer.concat(parts);
+        if (this.deployment === 'portable' && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf)
+          throw invalidManifest();
+        text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
       } catch {
         throw invalidManifest();
       }
       const value = parseJson(text);
       this.requireGeneration(generation);
+      rawText?.(text);
       const etag = response.headers.get('etag');
       if (metadata && api && etag && etag.length <= 512) this.responses.set(url, { etag, value });
       return value;

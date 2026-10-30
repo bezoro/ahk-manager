@@ -32,6 +32,7 @@ import type { AdministrationPreflight } from '../elevation.js';
 import type { DocumentGuard, DocumentLease } from '../security.js';
 import type { UpdateService } from '../updates/update-service.js';
 import type { UpdateChannel } from '../../shared/updates.js';
+import type { StorageChangeResult, StorageState } from '../../shared/storage.js';
 import { assertRequestAllowed, type RequestPolicy } from './request-policy.js';
 
 export interface IpcTransport {
@@ -43,6 +44,14 @@ export interface IpcTransport {
 }
 
 export interface IpcContext {
+  storage?: {
+    get(): StorageState;
+    choose(): Promise<StorageChangeResult | null>;
+    open(): Promise<void>;
+    restoreDefault(): Promise<StorageChangeResult>;
+    restart(): Promise<void>;
+    cancel(): Promise<StorageState>;
+  };
   ipc: IpcTransport;
   clipboard: { writeText(text: string): void };
   guard: Pick<DocumentGuard, 'connect' | 'validate' | 'current'>;
@@ -85,6 +94,15 @@ export function registerHandlers(context: IpcContext): void {
   bind('getState', none, () => controller.state);
   bind('getTheme', none, context.theme);
   bind('getUpdateState', none, () => updates.snapshot);
+  if (context.storage) {
+    const storage = context.storage;
+    bind('storage:get', none, storage.get);
+    bind('storage:choose', none, storage.choose);
+    bind('storage:open', none, storage.open);
+    bind('storage:restore-default', none, storage.restoreDefault);
+    bind('storage:restart', none, storage.restart);
+    bind('storage:cancel', none, storage.cancel);
+  }
   bind('checkUpdates', none, () => updates.check());
   bind<{ id: string }>('installUpdate', shape({ id: text(100) }), (value) =>
     updates.install(value.id),

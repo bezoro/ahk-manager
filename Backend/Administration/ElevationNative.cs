@@ -77,11 +77,9 @@ internal static class ElevationNative
             current is not null;
             current = Path.GetDirectoryName(current)
         )
-            if (
-                !Directory.Exists(current)
-                || (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0
-            )
-                throw new IOException("Coordination ancestor unavailable or redirected.");
+            if (!Directory.Exists(current))
+                throw new IOException("Coordination ancestor unavailable.");
+        WindowsStoragePath.NoRedirects(path);
         nint descriptor = Descriptor(sid);
         try
         {
