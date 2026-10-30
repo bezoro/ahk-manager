@@ -40,7 +40,7 @@ try {
         finally { $stream.Dispose() }
         if ($hash -cne $file.sha256) { throw 'A packaged file differs from its recorded SHA256.' }
     }
-    foreach ($required in @('Bezoro.AhkManager.exe', 'App/Bezoro.AhkManager.exe', 'App/resources/app.asar', 'App/resources/app-update.yml', 'App/backend/update/AhkManager.UpdateHost.exe')) { if (-not $seen.Contains($required) -or $entries[$required].Length -le 0) { throw 'A critical portable runtime file is absent or empty.' } }
+    foreach ($required in @('Bezoro.AhkManager.exe', 'App/Bezoro.AhkManager.exe', 'App/resources/app.asar', 'App/resources/app-update.yml', 'App/backend/AhkManager.Backend.exe', 'App/backend/update/AhkManager.UpdateHost.exe')) { if (-not $seen.Contains($required) -or $entries[$required].Length -le 0) { throw 'A critical portable runtime file is absent or empty.' } }
     [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
     $summary = [ordered]@{ passed = $true; version = $identity.Version; commit = $identity.Commit; files = $descriptor.files.Count; entries = $entries.Count; expandedBytes = $expanded; userDataIncluded = $false; archiveSha256 = $identity.Sha256 }
     [IO.File]::WriteAllText((Join-Path $OutputRoot 'portable-package-summary.json'), ($summary | ConvertTo-Json), [Text.UTF8Encoding]::new($false))

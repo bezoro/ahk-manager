@@ -32,7 +32,10 @@ internal sealed class DirectoryLease : IDisposable
                     .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
             )
             {
-                var handle = OpenDirectory(@"\\?\" + path, 0x80, 3, 0, 3, 0x02200000, 0);
+                // FILE_LIST_DIRECTORY participates in Windows share accounting.
+                // A metadata-only FILE_READ_ATTRIBUTES handle does not prevent
+                // renaming its own directory when FILE_SHARE_DELETE is absent.
+                var handle = OpenDirectory(@"\\?\" + path, 0x81, 3, 0, 3, 0x02200000, 0);
                 if (handle.IsInvalid)
                 {
                     int error = Marshal.GetLastWin32Error();

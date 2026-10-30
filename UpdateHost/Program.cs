@@ -45,6 +45,9 @@ internal static class Program
         if (args.Length == 1 && args[0] == "--lease-portable-data-move")
             return await PortableDataMoveLease.Run().ConfigureAwait(false);
 
+        if (args.Length == 1 && args[0] == "--lease-portable-storage")
+            return await PortableStorageLease.Run().ConfigureAwait(false);
+
         string? trustedOperation = null;
         UpdatePlan? trustedPlan = null;
         OperationLog? log = null;
@@ -213,6 +216,8 @@ internal static class Program
             log.Write(result.Outcome + ": " + result.Detail);
             phase = UpdatePhase.Outcome;
             Evidence.WriteNew(Path.Combine(operation, "outcome.json"), result);
+            if (result.Outcome == "Installed" && effects is PortableApplyEffects portableEffects)
+                _ = portableEffects.CleanupCompleted();
             return result.Outcome is "Installed" or "RolledBack" ? 0
                 : result.Outcome == "Unknown" ? 75
                 : 20;

@@ -80,6 +80,7 @@ internal static class PortableInitialization
                     PortableLayout.Descriptor,
                     "portable.json",
                     "App/" + PortableLayout.Executable,
+                    "App/backend/AhkManager.Backend.exe",
                     "App/backend/update/AhkManager.UpdateHost.exe",
                 }
             )

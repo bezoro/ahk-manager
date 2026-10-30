@@ -66,6 +66,8 @@ These AppData locations belong to the installed edition. In a portable deploymen
 
 The native initializer checks the dedicated product container and selected data directory before Chromium starts. Backend initialization acquires effect ownership before importing an existing Electron profile. A data move prepares a private staging directory and intent, then copies and verifies closed operational data on the next normal restart. The pointer changes only after promotion. Source and recovery copies remain available, and an unverified source cannot authorize an empty-profile fallback.
 
+A native child retains the portable root, selected data directory and their ancestors while the Manager is running. A separate migration lease retains the source and private staging directory during copying, releasing only the staging leaf for promotion. Both helpers derive paths from the authenticated parent and configuration. They accept no path arguments. Normal Manager exit waits for the runtime lease to close; a lost lease fails closed.
+
 Moving a type to `Bezoro.AhkManager.Core.*` must not change persisted JSON. Property names, enum values, serialization settings, schema versions, and continuation hashes are compatibility contracts. Format changes need backward-reading and recovery coverage.
 
 Historical names such as the Run value `Bezoro.AhkManager.WinUI`, the `AhkManagerWinUI` profile, and mutex identities are intentional. Keep them when changing namespaces or display text. WinUI profile migration and older catalog import have separate previews and confirmation in `Backend/ProfileMigrationService.cs` and `Core/Services/LegacyImportService.cs`.
@@ -75,6 +77,8 @@ Historical names such as the Run value `Bezoro.AhkManager.WinUI`, the `AhkManage
 The main process checks a fixed public repository, validates release manifests, and uses `electron-updater` to download and verify installers. GitHub credentials are not part of the desktop updater. Updates require explicit user action, confirmed backend shutdown, and normal manager exit. UpdateHost backs up the installation and its registry entries before running NSIS, and restores them after a confirmed failure. Scripts remain running.
 
 Portable updates use a separate protocol-2 manifest and bounded ZIP downloader. `PortableLauncher/` is the native root entry point; `App` contains the replaceable application. `UpdateHost/Portable/` validates the complete package inventory, stages files on the same volume, snapshots `App`, and promotes the new application without registry registration. It also replaces the root launcher and inventory while preserving `portable.json` and the selected data directory. Confirmed failures restore application files. Unknown results preserve evidence and block replay.
+
+After a durable successful outcome, the helper removes only unchanged, verified duplicate workspaces beneath the portable root. The complete operation backup and cached packages remain in the data directory. Unexpected workspace contents or a failed cleanup preserve the remaining files; unknown and restored-failure outcomes never authorize cleanup.
 
 When publisher policy is configured, a detached CMS signature binds the exact portable release manifest and its ZIP digest. The native signature verifier checks the configured publisher, certificate chain, code-signing usage, and digest. Installer Authenticode checks remain independent. Neither edition falls back from a required signature to hash-only verification.
 

@@ -13,8 +13,24 @@ function Build-PortableWin32Executable {
     $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installation)) { throw 'The x64 MSVC toolchain is unavailable.' }
     $developerCommand = Join-Path $installation 'Common7/Tools/VsDevCmd.bat'
-    $developerEnvironment = & $env:ComSpec /d /s /c ('""{0}" -no_logo -arch=x64 -host_arch=x64 && set"' -f $developerCommand)
-    if ($LASTEXITCODE -ne 0) { throw 'The x64 native build environment could not be prepared.' }
+    if ($developerCommand -match '["%\r\n]') { throw 'The native toolchain command path is ambiguous.' }
+    $environmentStart = [Diagnostics.ProcessStartInfo]::new($env:ComSpec)
+    $environmentStart.UseShellExecute = $false
+    $environmentStart.RedirectStandardOutput = $true
+    $environmentStart.RedirectStandardError = $true
+    # cmd has its own quoting grammar. Use its raw command line, rather than
+    # PowerShell's native argument escaping, for the quoted batch-file path.
+    $environmentStart.Arguments = '/d /v:off /s /c ""{0}" -no_logo -arch=x64 -host_arch=x64 && set"' -f $developerCommand
+    $environmentProcess = [Diagnostics.Process]::Start($environmentStart)
+    try {
+        $environmentOutput = $environmentProcess.StandardOutput.ReadToEndAsync()
+        $environmentError = $environmentProcess.StandardError.ReadToEndAsync()
+        $environmentProcess.WaitForExit()
+        $developerEnvironment = $environmentOutput.GetAwaiter().GetResult() -split '\r?\n'
+        $null = $environmentError.GetAwaiter().GetResult()
+        if ($environmentProcess.ExitCode -ne 0) { throw 'The x64 native build environment could not be prepared.' }
+    }
+    finally { $environmentProcess.Dispose() }
     $compiler = @(& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC/Tools/MSVC/*/bin/Hostx64/x64/cl.exe' | Sort-Object | Select-Object -Last 1)
     if ($LASTEXITCODE -ne 0 -or $compiler.Count -ne 1) { throw 'The x64 MSVC compiler could not be resolved.' }
     $directory = [IO.Path]::GetDirectoryName($OutputPath)
@@ -40,7 +56,7 @@ function Build-PortableWin32Executable {
         try { $resourceProcess.WaitForExit(); if ($resourceProcess.ExitCode -ne 0) { throw "Portable native resource build failed: $($resourceProcess.ExitCode)." } }
         finally { $resourceProcess.Dispose() }
     }
-    foreach ($argument in @('/nologo', '/O2', '/Os', '/W4', '/WX', '/MT', '/guard:cf', '/Brepro', '/utf-8', $SourcePath, ('/Fo' + [IO.Path]::ChangeExtension($OutputPath, '.obj')))) { $start.ArgumentList.Add($argument) }
+    foreach ($argument in @('/nologo', '/O2', '/Os', '/W4', '/WX', '/MT', '/EHsc', '/guard:cf', '/Brepro', '/utf-8', $SourcePath, ('/Fo' + [IO.Path]::ChangeExtension($OutputPath, '.obj')))) { $start.ArgumentList.Add($argument) }
     if ($resourceOutput) { $start.ArgumentList.Add($resourceOutput) }
     foreach ($argument in @('/link', '/SUBSYSTEM:WINDOWS', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/CETCOMPAT', '/OPT:REF', '/OPT:ICF', '/Brepro', ('/OUT:' + $OutputPath), 'user32.lib', 'shell32.lib')) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($start)

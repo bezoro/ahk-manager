@@ -73,6 +73,10 @@ import {
   importLegacyUpdateChannel,
 } from './storage/data-migration.js';
 import { withDataMoveLease } from './storage/data-move-lease.js';
+import {
+  acquirePortableStorageLease,
+  type PortableStorageLease,
+} from './storage/portable-storage-lease.js';
 
 /** Composes desktop, backend and lifecycle services for one Manager process. */
 export function startManager(): void {
@@ -144,6 +148,9 @@ export function startManager(): void {
   let updateApplying = false;
   let updateShutdownInFlight: Promise<void> | null = null;
   let dataLocation: DataLocationController | null = null;
+  let storageLease: PortableStorageLease | null = null;
+  let storageClosing: Promise<void> | null = null;
+  let storageClosed = false;
   const documentScope = new AsyncLocalStorage<() => boolean>();
   const alive = () =>
     !quitting && (documentScope.getStore()?.() ?? (window !== null && !window.isDestroyed()));
@@ -204,6 +211,18 @@ export function startManager(): void {
     app.on('window-all-closed', () => {
       if (!quitting) void quit();
     });
+    app.on('will-quit', (event) => {
+      if (!storageLease || storageClosed) return;
+      event.preventDefault();
+      if (storageClosing) return;
+      storageClosing = storageLease.close().then(
+        () => {
+          storageClosed = true;
+          app.quit();
+        },
+        () => app.exit(65),
+      );
+    });
     const storageReady = prepareStorage();
     void Promise.all([app.whenReady(), storageReady])
       .then(() => {
@@ -244,6 +263,12 @@ export function startManager(): void {
       const current = resolveDeployment(app.getPath('exe'), localAppData);
       if (!samePath(current.dataDirectory, deployment.dataDirectory))
         throw new Error('The data location changed during startup. Open Manager again.');
+      storageLease = await acquirePortableStorageLease(deployment, (error) => {
+        // Losing namespace protection must stop writes and cannot authorize an update.
+        controller?.setConnection('failed', safeError(error));
+        quitting = true;
+        app.exit(65);
+      });
       try {
         await importLegacyUpdateChannel(deployment);
       } catch (error) {

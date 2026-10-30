@@ -40,6 +40,7 @@ internal static partial class SelfTests
         CheckPortableSignatures(Check);
         CheckPortableLayouts(root, Check);
         CheckPortableDataMoveLeases(root, Check);
+        CheckPortableStorageLeases(root, Check);
         await CheckPortableTransactions(root, Check);
         await CheckInstallerCache(root, plan, Check);
         await CheckTestInstallerCache(root, Check);

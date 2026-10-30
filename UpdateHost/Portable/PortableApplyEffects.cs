@@ -144,6 +144,102 @@ internal sealed class PortableApplyEffects(
             ?? throw new InvalidOperationException("Portable Manager launch was not confirmed.");
     }
 
+    internal bool CleanupCompleted()
+    {
+        try
+        {
+            VerifyCompletedWorkspaces();
+            // These are exclusively owned duplicates of the verified recovery
+            // snapshot. The durable outcome and recovery cache remain intact.
+            Directory.Delete(Previous, true);
+            Directory.Delete(Stage, true);
+            CleanupLog(
+                "Removed completed portable staging duplicates; recovery history was preserved."
+            );
+            return true;
+        }
+        catch (Exception error) when (UpdateProtocol.Known(error))
+        {
+            // Cleanup cannot change a durably confirmed installation outcome.
+            // Unexpected files and failed removals remain available for inspection.
+            CleanupLog("Portable staging cleanup was deferred: " + error.GetType().Name);
+            return false;
+        }
+    }
+
+    void VerifyCompletedWorkspaces()
+    {
+        using var outcomeFile = FileLease.Open(
+            Path.Combine(operationDirectory, "outcome.json"),
+            UpdateProtocol.MaximumPlanBytes
+        );
+        var outcome = UpdateProtocol.Read<UpdateOutcome>(
+            outcomeFile.Read(UpdateProtocol.MaximumPlanBytes)
+        );
+        if (
+            outcome.SchemaVersion != 1
+            || outcome.OperationId != plan.OperationId
+            || outcome.Outcome != "Installed"
+            || outcome.Version != plan.Version
+            || outcome.InstallerExitCode != 0
+            || outcome.BackupDirectory != Path.Combine(operationDirectory, "backup-installation")
+            || snapshot is null
+            || !applicationMoved
+        )
+            throw new InvalidDataException(
+                "Only a durably completed portable update can clean staging."
+            );
+        layout.Revalidate();
+        ProfileOwnership.Verify(operationDirectory);
+        string backup = Path.Combine(operationDirectory, "backup-installation");
+        InstallationSnapshot.Verify(backup, snapshot, PortablePayload.MaximumFiles * 2);
+        InstallationSnapshot.VerifyPrivate(backup, snapshot);
+        VerifyCleanupFile(
+            Path.Combine(operationDirectory, "launcher-before.exe"),
+            originalLauncherHash
+        );
+        VerifyCleanupFile(
+            Path.Combine(operationDirectory, "descriptor-before.json"),
+            originalDescriptorHash
+        );
+        InstallationSnapshot.Verify(Previous, snapshot, PortablePayload.MaximumFiles * 2);
+        InstallationSnapshot.VerifySecurity(Previous, snapshot);
+        InstallationSnapshot.VerifyPrivate(Previous, snapshot);
+        UpdatePaths.NoRedirects(Stage);
+        SnapshotSecurity.VerifyPrivate(Stage, true, true);
+        var expected = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["launcher-before-replacement.exe"] = originalLauncherHash,
+            ["descriptor-before-replacement.json"] = originalDescriptorHash,
+        };
+        string[] members = Directory.GetFileSystemEntries(Stage);
+        if (members.Length != expected.Count)
+            throw new InvalidDataException("The completed portable staging contents changed.");
+        foreach (string member in members)
+        {
+            if (!expected.TryGetValue(Path.GetFileName(member), out string? hash))
+                throw new InvalidDataException("The completed portable staging contents changed.");
+            VerifyCleanupFile(member, hash);
+        }
+    }
+
+    static void VerifyCleanupFile(string path, string hash)
+    {
+        using var file = FileLease.Open(path, PortablePayload.MaximumFileBytes);
+        SnapshotSecurity.VerifyPrivate(path, false);
+        if (file.Hash() != hash)
+            throw new InvalidDataException("Portable cleanup metadata changed.");
+    }
+
+    void CleanupLog(string message)
+    {
+        try
+        {
+            log?.Invoke(message);
+        }
+        catch (Exception error) when (UpdateProtocol.Known(error)) { }
+    }
+
     public async Task<BackupState> Restore(BackupState backup)
     {
         if (

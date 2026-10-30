@@ -98,6 +98,7 @@ function stagePortablePackage({ sourceRoot, launcherPath, outputRoot, version, c
     'App/Bezoro.AhkManager.exe',
     'App/resources/app.asar',
     'App/resources/app-update.yml',
+    'App/backend/AhkManager.Backend.exe',
     'App/backend/update/AhkManager.UpdateHost.exe',
   ])
     if (!seen.has(required.toLowerCase()))
@@ -106,6 +107,7 @@ function stagePortablePackage({ sourceRoot, launcherPath, outputRoot, version, c
     'App/Bezoro.AhkManager.exe',
     'App/resources/app.asar',
     'App/resources/app-update.yml',
+    'App/backend/AhkManager.Backend.exe',
     'App/backend/update/AhkManager.UpdateHost.exe',
   ])
     if (

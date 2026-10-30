@@ -8,6 +8,7 @@ import type { ChildProcess } from 'node:child_process';
 import { resolveDeployment } from '../../src/main/storage/deployment.js';
 import { completePendingDataMove, prepareDataMove } from '../../src/main/storage/data-migration.js';
 import { withDataMoveLease } from '../../src/main/storage/data-move-lease.js';
+import { acquirePortableStorageLease } from '../../src/main/storage/portable-storage-lease.js';
 
 async function fixture(t: TestContext) {
   const temporary = process.env.AHK_DIAGNOSTICS_TEST_ROOT;
@@ -60,7 +61,7 @@ function nativeFixture(options: { ready?: string; release?: string } = {}) {
     queueMicrotask(() => output.write((options.ready ?? '{"ready":true}') + '\n'));
     return child;
   };
-  return { child, events, start, exit };
+  return { child, events, start, exit, output };
 }
 
 test('a Data move retains the native lease until pointer commit and releases staging only for promotion', async (t) => {
@@ -183,4 +184,89 @@ test('a missing stage-release acknowledgement prevents directory promotion', asy
   );
   assert.equal(await fs.readFile(f.marker, 'utf8'), f.initial);
   await assert.rejects(fs.stat(f.target), { code: 'ENOENT' });
+});
+
+test('portable runtime storage stays retained until an idempotent EOF close confirms native exit', async (t) => {
+  const f = await fixture(t);
+  const native = nativeFixture();
+  const failures: Error[] = [];
+  const lease = await acquirePortableStorageLease(
+    f.layout,
+    (error) => failures.push(error),
+    (helper, command) => {
+      assert.equal(command, '--lease-portable-storage');
+      return native.start(helper);
+    },
+  );
+  lease.check();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  lease.check();
+  assert.equal(native.child.exitCode, null);
+  assert.deepEqual(Object.keys(lease).sort(), ['check', 'close']);
+  const closing = lease.close();
+  assert.equal(lease.close(), closing);
+  await closing;
+  assert.deepEqual(failures, []);
+  assert.deepEqual(native.events.slice(1), ['eof', 'exit:0']);
+  assert.throws(lease.check, /lease ended/);
+});
+
+test('an unexpected runtime lease loss reports once and prevents subsequent storage effects', async (t) => {
+  const f = await fixture(t);
+  const native = nativeFixture();
+  const failures: Error[] = [];
+  const lease = await acquirePortableStorageLease(
+    f.layout,
+    (error) => failures.push(error),
+    native.start,
+  );
+  native.exit(70);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0]!.message, /portable storage lease ended unexpectedly/);
+  assert.throws(lease.check, /portable storage lease ended unexpectedly/);
+  native.child.stdin!.emit('error', new Error('Duplicate pipe failure'));
+  assert.equal(failures.length, 1);
+  await assert.rejects(lease.close(), /portable storage lease ended unexpectedly/);
+});
+
+test('unsolicited runtime helper output invalidates the admitted storage lease', async (t) => {
+  const f = await fixture(t);
+  const native = nativeFixture();
+  const failures: Error[] = [];
+  const lease = await acquirePortableStorageLease(
+    f.layout,
+    (error) => failures.push(error),
+    native.start,
+  );
+  native.output.write('{"stageReleased":true}\n');
+  assert.equal(failures.length, 1);
+  assert.throws(lease.check, /response was invalid/);
+  await lease.close();
+});
+
+test('an initial runtime admission refusal rejects startup without an after-admission callback', async (t) => {
+  const f = await fixture(t);
+  const native = nativeFixture({ ready: '{"ready":false}' });
+  const failures: Error[] = [];
+  await assert.rejects(
+    acquirePortableStorageLease(f.layout, (error) => failures.push(error), native.start),
+    /response was invalid/,
+  );
+  assert.deepEqual(failures, []);
+  assert.equal(native.events.at(-1), 'exit:0');
+});
+
+test('installed runtime profiles do not start a portable namespace lease', async (t) => {
+  const f = await fixture(t);
+  const layout = {
+    ...f.layout,
+    mode: 'installed' as const,
+    portableRoot: null,
+    configurationPath: null,
+  };
+  const lease = await acquirePortableStorageLease(layout, undefined, () => {
+    throw new Error('Unexpected helper');
+  });
+  lease.check();
+  await lease.close();
 });

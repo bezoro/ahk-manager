@@ -21,6 +21,7 @@ function fixture() {
     'Bezoro.AhkManager.exe',
     'resources/app.asar',
     'resources/app-update.yml',
+    'backend/AhkManager.Backend.exe',
     'backend/update/AhkManager.UpdateHost.exe',
     'locales/en-US.pak',
   ]) {
@@ -47,7 +48,7 @@ test('portable inventory binds every copied runtime file and excludes mutable us
   assert.equal(result.updateProtocol, 2);
   assert.equal(result.version, value.version);
   assert.equal(result.commit, value.commit);
-  assert.equal(result.files.length, 7);
+  assert.equal(result.files.length, 8);
   assert.deepEqual(
     result.files.map((file) => file.path),
     result.files.map((file) => file.path).sort(),
@@ -120,6 +121,23 @@ test('staging refuses accidentally bundled user Data and oversized payload files
   fs.ftruncateSync(file, LIMITS.fileBytes + 1);
   fs.closeSync(file);
   assert.throws(() => stagePortablePackage(huge), /bounded regular/);
+});
+
+test('missing or empty operational backend cannot produce a portable package', () => {
+  const missing = fixture();
+  fs.rmSync(path.join(missing.sourceRoot, 'backend/AhkManager.Backend.exe'));
+  assert.throws(
+    () => stagePortablePackage(missing),
+    /incomplete: App\/backend\/AhkManager\.Backend\.exe/,
+  );
+  assert.equal(fs.existsSync(missing.outputRoot), false);
+  const empty = fixture();
+  fs.writeFileSync(path.join(empty.sourceRoot, 'backend/AhkManager.Backend.exe'), '');
+  assert.throws(
+    () => stagePortablePackage(empty),
+    /runtime file is empty: App\/backend\/AhkManager\.Backend\.exe/,
+  );
+  assert.equal(fs.existsSync(empty.outputRoot), false);
 });
 
 test('hard-linked payloads cannot enter a portable package', () => {

@@ -96,6 +96,7 @@ internal static class PortablePayload
     [
         PortableLayout.Executable,
         "App/" + PortableLayout.Executable,
+        "App/backend/AhkManager.Backend.exe",
         "App/backend/update/AhkManager.UpdateHost.exe",
         "App/resources/app.asar",
         "App/resources/app-update.yml",
@@ -305,6 +306,7 @@ internal static class PortablePayload
             string relative in new[]
             {
                 "App/" + PortableLayout.Executable,
+                "App/backend/AhkManager.Backend.exe",
                 "App/backend/update/AhkManager.UpdateHost.exe",
             }
         )

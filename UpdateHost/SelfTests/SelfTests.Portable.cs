@@ -147,6 +147,12 @@ internal static partial class SelfTests
                 },
                 descriptor with
                 {
+                    Files = descriptor
+                        .Files.Where(file => file.Path != "App/backend/AhkManager.Backend.exe")
+                        .ToArray(),
+                },
+                descriptor with
+                {
                     Files = descriptor.Files.Reverse().ToArray(),
                 },
                 descriptor with
@@ -598,6 +604,51 @@ internal static partial class SelfTests
         );
     }
 
+    static void CheckPortableStorageLeases(string root, Action<bool, string> check)
+    {
+        string parent = Path.Combine(root, "portable lifetime parent");
+        SnapshotSecurity.CreatePrivateDirectory(parent);
+        string data = Path.Combine(parent, "Selected Data");
+        var layout = CreatePortableFixture(
+            Path.Combine(root, "portable lifetime Manager"),
+            "1.2.0",
+            data
+        );
+        string marker = File.ReadAllText(layout.Marker);
+        using (var retained = PortableStorageLease.Acquire(layout))
+        {
+            PortableRefused(
+                () => Directory.Move(parent, parent + "-replaced"),
+                check,
+                "active portable storage retains custom data ancestors during normal application writes"
+            );
+            PortableRefused(
+                () => Directory.Move(data, data + "-replaced"),
+                check,
+                "active portable storage retains its custom data leaf against replacement"
+            );
+            PortableRefused(
+                () => Directory.Move(layout.Root, layout.Root + "-replaced"),
+                check,
+                "active portable storage retains its application container against replacement"
+            );
+            File.WriteAllText(Path.Combine(data, "active-profile.txt"), "normal profile write");
+            File.WriteAllText(layout.Marker, marker);
+            check(
+                File.ReadAllText(Path.Combine(data, "active-profile.txt"))
+                    == "normal profile write",
+                "portable lifetime retention permits ordinary profile and settings writes"
+            );
+        }
+        string moved = data + "-moved";
+        Directory.Move(data, moved);
+        Directory.Move(moved, data);
+        check(
+            Directory.Exists(data),
+            "normal portable shutdown releases the custom data namespace for deliberate relocation"
+        );
+    }
+
     static byte[] PortableArchive(string version)
     {
         using var bytes = new MemoryStream();
@@ -712,6 +763,27 @@ internal static partial class SelfTests
             );
             var backup = await effects.Backup();
             var result = await effects.Install();
+            string stage = Path.Combine(layout.Root, ".app-stage-" + id.ToString("N"));
+            string previous = Path.Combine(layout.Root, ".app-previous-" + id.ToString("N"));
+            void WriteOutcome(string outcome)
+            {
+                string outcomePath = Path.Combine(operation, "outcome.json");
+                File.Delete(outcomePath);
+                Evidence.WriteNew(
+                    outcomePath,
+                    new UpdateOutcome(
+                        1,
+                        id,
+                        outcome,
+                        "Portable cleanup policy fixture.",
+                        plan.Version,
+                        0,
+                        null,
+                        DateTimeOffset.UtcNow,
+                        backup.Directory
+                    )
+                );
+            }
             if (index == 0)
             {
                 check(
@@ -725,20 +797,76 @@ internal static partial class SelfTests
                         .Contains(externalData.Replace("\\", "\\\\"), StringComparison.Ordinal),
                     "portable update preserves custom data configuration instead of the archive template"
                 );
+                check(
+                    !effects.CleanupCompleted()
+                        && Directory.Exists(stage)
+                        && Directory.Exists(previous),
+                    "portable staging is preserved before a durable completed outcome exists"
+                );
+                WriteOutcome("Unknown");
+                check(
+                    !effects.CleanupCompleted()
+                        && Directory.Exists(stage)
+                        && Directory.Exists(previous),
+                    "unknown portable outcomes never clean staging or previous application copies"
+                );
+                WriteOutcome("Installed");
+                string foreignStage = Path.Combine(stage, "foreign.txt");
+                File.WriteAllText(foreignStage, "unexpected staging file");
+                check(
+                    !effects.CleanupCompleted()
+                        && File.ReadAllText(foreignStage) == "unexpected staging file"
+                        && Directory.Exists(previous),
+                    "portable cleanup preserves both workspaces when an unrelated staged file appears"
+                );
+                File.Delete(foreignStage);
+                string foreignPrevious = Path.Combine(previous, "foreign.txt");
+                File.WriteAllText(foreignPrevious, "unexpected previous application file");
+                check(
+                    !effects.CleanupCompleted()
+                        && File.ReadAllText(foreignPrevious)
+                            == "unexpected previous application file"
+                        && Directory.Exists(stage),
+                    "portable cleanup refuses a changed previous application before deleting either workspace"
+                );
+                File.Delete(foreignPrevious);
+                check(
+                    effects.CleanupCompleted()
+                        && !Directory.Exists(stage)
+                        && !Directory.Exists(previous),
+                    "durably installed portable updates remove only verified staging duplicates"
+                );
+                check(
+                    File.Exists(Path.Combine(backup.Directory, PortableLayout.Executable))
+                        && File.Exists(Path.Combine(operation, "launcher-before.exe"))
+                        && File.Exists(Path.Combine(operation, "descriptor-before.json"))
+                        && File.Exists(Path.Combine(operation, "outcome.json")),
+                    "portable staging cleanup preserves complete recovery snapshots metadata and durable outcome"
+                );
+                effects.VerifyInstalled("1.2.1");
             }
             else
+            {
                 check(
                     fault && result.ExitCode == 20,
                     "portable promotion failure is confirmed at each directory launcher and descriptor boundary"
                 );
-            _ = await effects.Restore(backup);
-            effects.VerifyInstalled("1.2.0");
-            check(
-                File.ReadAllBytes(layout.Launcher)
-                    .AsSpan()
-                    .SequenceEqual(PortableBytes("1.2.0", PortableLayout.Executable)),
-                "portable recovery restores the exact previous launcher with the complete application"
-            );
+                _ = await effects.Restore(backup);
+                effects.VerifyInstalled("1.2.0");
+                check(
+                    File.ReadAllBytes(layout.Launcher)
+                        .AsSpan()
+                        .SequenceEqual(PortableBytes("1.2.0", PortableLayout.Executable)),
+                    "portable recovery restores the exact previous launcher with the complete application"
+                );
+                WriteOutcome("RolledBack");
+                check(
+                    !effects.CleanupCompleted()
+                        && Directory.Exists(stage)
+                        && Directory.Exists(previous),
+                    "failed portable updates retain staging and preserved applications after automatic recovery"
+                );
+            }
             check(
                 pinnedData.Hash()
                     == PortableHash(Encoding.UTF8.GetBytes("unchanged portable user state"))

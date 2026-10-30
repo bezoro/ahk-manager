@@ -221,6 +221,7 @@ jobs:
         run: |
           ./tools/Test-ReleaseTooling.ps1 -OutputRoot "$env:CI_OUTPUT/release-tooling-tests"
           ./tools/Test-TestReleaseTooling.ps1 -OutputRoot "$env:CI_OUTPUT/test-channel-tooling-tests"
+          ./tools/Test-PortablePackageValidation.ps1 -OutputRoot "$env:CI_OUTPUT/portable-package-validation"
 
       - name: Run Node tests with actual backend snapshot fixtures
         if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' && steps.backend-tests.outcome == 'success' }}
@@ -375,6 +376,7 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/portable-evidence/*.json
             ${{ runner.temp }}/ahk-manager-ci/portable-launcher-tests/*.json
             ${{ runner.temp }}/ahk-manager-ci/portable-baseline/evidence/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-package-validation/*.json
           if-no-files-found: warn
           retention-days: 14
 

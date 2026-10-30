@@ -142,6 +142,8 @@ function Capture-Preferences {
 function Move-PortableData {
     $originalDataRoot = $dataRoot
     $originalUpdatesRoot = $updatesRoot
+    Invoke-PortableCdp $session 'Page.bringToFront' | Out-Null
+    $null = [AhkManager.TestSupport.InstalledUpdaterUi]::Focus($session.Process.Id, $session.Image, $session.Started)
     $opened = Invoke-PortableEvaluation $session '(() => { const button = Array.from(document.querySelectorAll("button")).find(value => value.textContent.trim() === "Preferences"); if (!button || button.disabled) return false; button.click(); return true; })()'
     Check $opened 'the real Preferences dialog opens for data relocation'
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -288,6 +290,13 @@ function Run-Update([string]$Phase, $Target) {
     Close-PortableSession $session
     $script:session = $null
     Close-ReopenedPortableSession -Root $portableRoot -Earliest $phaseStarted
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+        $workspaces = @(Get-ChildItem -LiteralPath $portableRoot -Directory -Force | Where-Object { $_.Name.StartsWith('.app-stage-', [StringComparison]::Ordinal) -or $_.Name.StartsWith('.app-previous-', [StringComparison]::Ordinal) })
+        if ($workspaces.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    Check ($workspaces.Count -eq 0) 'a durable successful portable install removes its verified transaction workspace so the folder can be moved normally'
 }
 
 try {
