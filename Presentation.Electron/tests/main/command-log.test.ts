@@ -26,6 +26,30 @@ function records(directory: string): Record<string, unknown>[] {
     );
 }
 
+test('shortcut retry diagnostics retain bounded attempts and OS codes without raw error text', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  const error = Object.assign(new Error('private source path and OS message'), { code: 'EPERM' });
+  await assert.rejects(
+    log.run(
+      'lifecycle',
+      'repairSearchShortcut.rename',
+      () => {
+        throw error;
+      },
+      { attempt: 1, retrying: true },
+    ),
+    (value) => value === error,
+  );
+  const complete = records(directory).find((record) => record.phase === 'error')!;
+  assert.equal(complete.command, 'repairSearchShortcut.rename');
+  assert.equal(complete.attempt, 1);
+  assert.equal(complete.retrying, true);
+  assert.equal(complete.errorCode, 'EPERM');
+  assert.doesNotMatch(JSON.stringify(records(directory)), /private source path/);
+});
+
 test('successful, declined, cancelled and failed commands retain scoped intent and outcomes without raw payloads', async (t) => {
   const directory = fixture(t);
   const log = new CommandLog(directory);

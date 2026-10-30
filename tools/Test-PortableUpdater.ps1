@@ -19,6 +19,7 @@ Import-Module (Join-Path $PSScriptRoot 'test-support/PortableSigningFixture.psm1
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/InstalledUpdaterUi.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableStartupUi.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableDataPickerUi.cs')
+Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableShortcutSharingProbe.cs')
 $readStartupDialog = [Delegate]::CreateDelegate([Func[IntPtr, int, string, DateTime, string]], [AhkManager.TestSupport.InstalledUpdaterUi], 'AccessibleDialogText')
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sid = $identity.User.Value
@@ -47,6 +48,7 @@ $searchShortcutBefore = $null
 $retiredDataHashes = @{}
 $signingFixture = $null
 $signingFixtureCleanup = 'NotCreated'
+$shortcutSharingProbe = $null
 
 function Check([bool]$Condition, [string]$Name) {
     $checks.Add([ordered]@{ name = $Name; passed = $Condition })
@@ -152,6 +154,9 @@ function Read-BackendSessionToken([int]$ManagerPid) {
     if ($match.Success) { return $match.Groups[1].Value }
     return $null
 }
+function Save-SharingProbeEvidence([int]$ManagerPid) {
+    Write-Json 'shortcut-sharing-probe.json' ([ordered]@{ fixture = $true; managerPid = $ManagerPid; diagnosticPid = $shortcutSharingProbe.ObservedPid; observed = $shortcutSharingProbe.Observed; released = $shortcutSharingProbe.Released; code = $shortcutSharingProbe.ObservedCode; attempt = $shortcutSharingProbe.ObservedAttempt; failure = $shortcutSharingProbe.Failure })
+}
 function Save-CommandEvidence([int]$ManagerPid, [AllowNull()][string]$BackendSessionToken) {
     $directory = Join-Path $dataRoot 'Logs'
     Check ((Test-Path -LiteralPath $directory -PathType Container) -and (Is-Private $directory)) 'the real application automatically creates private diagnostic logs beside its profile'
@@ -162,7 +167,7 @@ function Save-CommandEvidence([int]$ManagerPid, [AllowNull()][string]$BackendSes
     $commands = [Collections.Generic.List[object]]::new()
     $copies = [Collections.Generic.List[object]]::new()
     $sessions = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    $allowed = @('schemaVersion', 'kind', 'sessionId', 'timestamp', 'source', 'command', 'operation', 'scriptId', 'version', 'channel', 'runAtLogin', 'runAsAdministrator', 'launchManagerAtLogin', 'launchManagerAsAdministrator', 'startInTray', 'requestId', 'parentRequestId', 'phase', 'durationMs', 'result', 'outcome', 'code', 'state', 'addedCount', 'duplicateCount', 'issueCount', 'itemCount', 'correlationId', 'errorName', 'errorCode', 'backendRequestId')
+    $allowed = @('schemaVersion', 'kind', 'sessionId', 'timestamp', 'source', 'command', 'operation', 'scriptId', 'version', 'channel', 'runAtLogin', 'runAsAdministrator', 'launchManagerAtLogin', 'launchManagerAsAdministrator', 'startInTray', 'requestId', 'parentRequestId', 'phase', 'durationMs', 'result', 'outcome', 'code', 'state', 'addedCount', 'duplicateCount', 'issueCount', 'itemCount', 'correlationId', 'errorName', 'errorCode', 'backendRequestId', 'attempt', 'retrying')
     $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
     foreach ($file in $files) {
         $match = [regex]::Match($file.Name, '\Acommands-(\d{8}T\d{9}Z)-([0-9a-f-]{36})-(\d{6})\.jsonl\z')
@@ -203,6 +208,10 @@ function Save-CommandEvidence([int]$ManagerPid, [AllowNull()][string]$BackendSes
         if ($started.Count -ne 1 -or ($finished['durationMs'] -isnot [long] -and $finished['durationMs'] -isnot [int]) -or $finished['durationMs'] -lt 0) { throw 'A completed command is missing its matching start or a valid duration.' }
     }
     Check ($finishedCommands.Count -gt 0) 'actual command completions retain their matching start IDs and nonnegative durations'
+    if ($Scenario -eq 'default') {
+        $sharing = @($commands | Where-Object { $_['command'] -ceq 'repairSearchShortcut.rename' -and $_['phase'] -ceq 'error' -and $_['retrying'] -eq $true -and $_['attempt'] -ge 1 -and $_['errorCode'] -in @('EACCES', 'EPERM', 'EBUSY') })
+        Check ($sharing.Count -gt 0) 'the real relocated app records the observed sharing violation and bounded retry under its exact process session'
+    }
     Write-Json 'command-logs.json' ([ordered]@{ fixture = $true; actualApplication = $true; directory = $directory; managerPid = $ManagerPid; retainedFiles = $files.Count; sessions = $sessions.Count; currentProcessCommands = $commands.Count; completedCommands = $finishedCommands.Count; backendSessionTokenObserved = -not [string]::IsNullOrEmpty($BackendSessionToken); backendSessionTokenOmitted = $true; approvedFieldsOnly = $true; files = $copies.ToArray() })
 }
 function Seed-Package($Release, [string]$Archive, [string]$Manifest, [string]$Signature) {
@@ -617,8 +626,16 @@ try {
         if ($Scenario -eq 'default') { Move-PortableRoot }
         $finalRoot = Join-Path $OutputRoot 'final-launch'
         [IO.Directory]::CreateDirectory($finalRoot) | Out-Null
+        if ($Scenario -eq 'default') { $shortcutSharingProbe = [AhkManager.TestSupport.PortableShortcutSharingProbe]::new($searchShortcutPath, (Join-Path $dataRoot 'Logs')) }
         $session = Start-PortableSession -Root $portableRoot -EvidenceRoot $finalRoot -ViaLauncher
         Wait-Ready $session $baseline.Version
+        if ($shortcutSharingProbe) {
+            $deadline = [DateTime]::UtcNow.AddSeconds(10)
+            while (-not $shortcutSharingProbe.Observed -and -not $shortcutSharingProbe.Released -and [string]::IsNullOrEmpty($shortcutSharingProbe.Failure) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 10 }
+            Save-SharingProbeEvidence $session.Process.Id
+            Check ($shortcutSharingProbe.Observed -and $shortcutSharingProbe.Released -and $shortcutSharingProbe.ObservedPid -eq $session.Process.Id -and $shortcutSharingProbe.ObservedCode -in @('EACCES', 'EPERM', 'EBUSY')) 'an exact owned read handle forces a real rename refusal and is released on the same application process retry diagnostic'
+            $shortcutSharingProbe.Dispose(); $shortcutSharingProbe = $null
+        }
         Check-SearchShortcut 'final'
         if ($Scenario -eq 'default') { Check-RelocatedHistory }
         $deadline = [DateTime]::UtcNow.AddSeconds(45)
@@ -639,6 +656,10 @@ try {
 }
 catch { $failure = $_.Exception.Message; Write-Error -ErrorAction Continue $failure }
 finally {
+    if ($shortcutSharingProbe) {
+        try { if ($outputCreated) { Save-SharingProbeEvidence $(if ($session) { $session.Process.Id } else { 0 }) } }
+        finally { $shortcutSharingProbe.Dispose(); $shortcutSharingProbe = $null }
+    }
     if ($outputCreated -and $updatesRoot -and (Test-Path -LiteralPath (Join-Path $updatesRoot 'operations'))) {
         try {
             foreach ($operation in @(Get-ChildItem -LiteralPath (Join-Path $updatesRoot 'operations') -Directory | Select-Object -First 8)) { Save-OperationEvidence ('operation-' + $operation.Name) $operation.FullName }
