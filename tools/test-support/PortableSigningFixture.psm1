@@ -29,6 +29,11 @@ using System;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
 namespace AhkManager.TestSupport {
     public static class PortableFixtureTrust {
         public static Task Add(byte[] bytes) {
@@ -65,6 +70,81 @@ namespace AhkManager.TestSupport {
                     if (add && !observed[0].RawData.AsSpan().SequenceEqual(bytes)) throw new CryptographicException("Fixture trust identity changed.");
                 } finally { foreach (var item in observed) item.Dispose(); }
             }
+        }
+    }
+    public sealed class PortableFixtureCrlServer {
+        private readonly TcpListener listener;
+        private readonly CancellationTokenSource lifetime = new CancellationTokenSource(TimeSpan.FromMinutes(20));
+        private readonly Task worker;
+        private readonly string route;
+        private byte[] crl;
+        private int requests;
+        private int stopping;
+        private int disposed;
+        public string Url { get; private set; }
+        public int Requests { get { return Volatile.Read(ref requests); } }
+        public PortableFixtureCrlServer(string id) {
+            Guid parsed;
+            if (!Guid.TryParseExact(id, "D", out parsed) || id != parsed.ToString("D")) throw new ArgumentException("Invalid fixture identity.");
+            route = "/" + id + "/issuer.crl";
+            listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            Url = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + route;
+            worker = Task.Run(Run);
+        }
+        public void SetCrl(byte[] bytes) {
+            if (bytes == null || bytes.Length < 2 || bytes.Length > 65536 || crl != null) throw new ArgumentException("Invalid fixture CRL payload.");
+            Volatile.Write(ref crl, (byte[])bytes.Clone());
+        }
+        private async Task Run() {
+            try {
+                for (int count = 0; count < 128 && !lifetime.IsCancellationRequested; count++) {
+                    using (var client = await listener.AcceptTcpClientAsync(lifetime.Token)) {
+                        var peer = client.Client.RemoteEndPoint as IPEndPoint;
+                        if (peer == null || !IPAddress.IsLoopback(peer.Address)) continue;
+                        using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token)) {
+                            deadline.CancelAfter(TimeSpan.FromSeconds(2));
+                            try { await Serve(client.GetStream(), deadline.Token); }
+                            catch (Exception error) when (error is IOException || error is OperationCanceledException || error is SocketException) { }
+                        }
+                    }
+                }
+            } catch (Exception error) when (error is OperationCanceledException || error is SocketException || error is ObjectDisposedException) {
+            } finally { listener.Stop(); }
+        }
+        private async Task Serve(NetworkStream stream, CancellationToken cancellation) {
+            using (var header = new MemoryStream()) {
+                var buffer = new byte[512];
+                string text = "";
+                while (header.Length < 4096) {
+                    int count = await stream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, 4096 - header.Length)), cancellation);
+                    if (count == 0) return;
+                    header.Write(buffer, 0, count);
+                    text = Encoding.ASCII.GetString(header.GetBuffer(), 0, (int)header.Length);
+                    if (text.Contains("\r\n\r\n")) break;
+                }
+                if (!text.Contains("\r\n\r\n")) return;
+                int end = text.IndexOf("\r\n", StringComparison.Ordinal);
+                string first = text.Substring(0, end);
+                byte[] payload = Volatile.Read(ref crl);
+                bool valid = payload != null && (first == "GET " + route + " HTTP/1.1" || first == "GET " + route + " HTTP/1.0");
+                string response = valid ? "200 OK" : "404 Not Found";
+                if (!valid) payload = Array.Empty<byte>();
+                byte[] prefix = Encoding.ASCII.GetBytes("HTTP/1.1 " + response + "\r\nContent-Type: application/pkix-crl\r\nContent-Length: " + payload.Length + "\r\nConnection: close\r\nCache-Control: public, max-age=300\r\n\r\n");
+                await stream.WriteAsync(prefix, cancellation);
+                await stream.WriteAsync(payload, cancellation);
+                await stream.FlushAsync(cancellation);
+                if (valid) Interlocked.Increment(ref requests);
+            }
+        }
+        public bool Stop(int milliseconds) {
+            if (Interlocked.Exchange(ref stopping, 1) == 0) {
+                lifetime.Cancel();
+                listener.Stop();
+            }
+            bool complete = worker.Wait(milliseconds);
+            if (complete && Interlocked.Exchange(ref disposed, 1) == 0) lifetime.Dispose();
+            return complete;
         }
     }
 }
@@ -179,11 +259,12 @@ function New-FixtureCertificate($State, [string]$Publisher) {
     $State.RootDer = $State.RootCertificate.RawData
     $State.RootThumbprint = $State.RootCertificate.Thumbprint
     $State.CrlPath = Join-Path $State.Root 'issuer.crl'
-    $crlUri = [Uri]::new($State.CrlPath)
-    if (-not $crlUri.IsFile -or -not $crlUri.IsLoopback) { throw 'The fixture CRL must use its own local file URL.' }
+    $crlUri = [Uri]::new($State.CrlServer.Url)
+    if ($crlUri.Scheme -cne 'http' -or $crlUri.Host -cne '127.0.0.1' -or -not $crlUri.IsLoopback) { throw 'The fixture CRL must use its owned loopback HTTP endpoint.' }
     $builder = [Security.Cryptography.X509Certificates.CertificateRevocationListBuilder]::new()
-    $crl = $builder.Build($State.RootCertificate, [Numerics.BigInteger]::One, $now.AddHours(1), [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1, $now.AddMinutes(-2))
+    $crl = $builder.Build($State.RootCertificate, [Numerics.BigInteger]::One, $now.AddHours(2), [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1, $now.AddMinutes(-2))
     [IO.File]::WriteAllBytes($State.CrlPath, $crl)
+    $State.CrlServer.SetCrl($crl)
     $leafName = [Security.Cryptography.X509Certificates.X500DistinguishedNameBuilder]::new()
     $leafName.AddCommonName($Publisher)
     $leafRequest = [Security.Cryptography.X509Certificates.CertificateRequest]::new($leafName.Build(), $State.LeafKey, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
@@ -320,12 +401,16 @@ function New-PortableSigningFixture {
     if (Test-Path -LiteralPath $checkpoint) { throw 'The signing fixture checkpoint file must be fresh.' }
     New-FixtureDirectory $output
     $id = [Guid]::NewGuid().ToString('D')
-    $state = [pscustomobject]@{ Id = $id; Root = $output; RootKey = $null; LeafKey = $null; RootCertificate = $null; LeafCertificate = $null; RootDer = $null; RootThumbprint = $null; TrustAttempted = $false; TrustWorker = $null; CrlPath = $null; ProbePath = $null; CheckpointPath = $checkpoint; Stages = [Collections.Generic.List[object]]::new() }
+    $state = [pscustomobject]@{ Id = $id; Root = $output; RootKey = $null; LeafKey = $null; RootCertificate = $null; LeafCertificate = $null; RootDer = $null; RootThumbprint = $null; TrustAttempted = $false; TrustWorker = $null; CrlPath = $null; CrlServer = $null; ProbePath = $null; CheckpointPath = $checkpoint; Stages = [Collections.Generic.List[object]]::new() }
     $script:fixtures.Add($id, $state)
     [IO.File]::WriteAllText((Join-Path $output 'fixture-owner.txt'), $id, [Text.UTF8Encoding]::new($false))
     $handle = [pscustomobject]@{ Id = $id; OutputRoot = $output }
     try {
         Add-Type -AssemblyName System.Security.Cryptography.Pkcs
+        Initialize-FixtureTrustWorker
+        Write-FixtureStage $state 'starting-owned-loopback-crl-server'
+        $state.CrlServer = [AhkManager.TestSupport.PortableFixtureCrlServer]::new($id)
+        Write-FixtureStage $state 'owned-loopback-crl-server-started'
         $publisher = if ($policy.Names.Count) { $policy.Names[0] } else { 'AHK Manager disposable portable CI publisher' }
         Write-FixtureStage $state 'creating-ephemeral-ca-leaf-and-signed-crl'
         New-FixtureCertificate $state $publisher
@@ -360,10 +445,11 @@ function New-PortableSigningFixture {
         $changed = Invoke-FixtureNative $state $tampered $candidateSignature @($publisher)
         if ($changed.ExitCode -ne 65 -or $changed.Text -cne '{"valid":false}') { throw 'The production native CMS verifier accepted altered manifest bytes.' }
         if ((Get-FileHash -LiteralPath $CandidateManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $candidateHash -or (Get-FileHash -LiteralPath $BaselineManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $baselineHash) { throw 'Signing fixtures changed a tested manifest.' }
+        if ($state.CrlServer.Requests -lt 1) { throw 'The production verifier did not retrieve the fixture CRL from its owned loopback endpoint.' }
         Write-FixtureStage $state 'production-native-signature-proofs-complete'
         return [pscustomobject]@{
             Id = $id; OutputRoot = $output; CandidateSignaturePath = $candidateSignature; BaselineSignaturePath = $baselineSignature; PublisherNames = $policy.Names; ProbePublisherName = $publisher
-            Proof = [ordered]@{ fixture = $true; productionNativeCli = $true; publisherPolicyConfigured = $policy.Names.Count -gt 0; sourceCommit = $policy.SourceCommit; publisherPolicySha256 = $policy.PolicySha256; candidateManifestSha256 = $candidateHash; baselineManifestSha256 = $baselineHash; candidateVerified = $true; baselineVerified = $true; alteredManifestRefused = $true; differentPublisherRefused = $true; onlineRevocation = $true; crlDistribution = 'file'; trustScope = 'LocalMachine/Root'; trustGuard = 'github-hosted-elevated-disposable-runner'; privateKeysPersisted = $false }
+            Proof = [ordered]@{ fixture = $true; productionNativeCli = $true; publisherPolicyConfigured = $policy.Names.Count -gt 0; sourceCommit = $policy.SourceCommit; publisherPolicySha256 = $policy.PolicySha256; candidateManifestSha256 = $candidateHash; baselineManifestSha256 = $baselineHash; candidateVerified = $true; baselineVerified = $true; alteredManifestRefused = $true; differentPublisherRefused = $true; onlineRevocation = $true; crlDistribution = 'http-loopback'; crlRequests = $state.CrlServer.Requests; trustScope = 'LocalMachine/Root'; trustGuard = 'github-hosted-elevated-disposable-runner'; privateKeysPersisted = $false }
         }
     }
     catch {
@@ -384,6 +470,11 @@ function Remove-PortableSigningFixture {
         if ($state.TrustWorker -and -not $state.TrustWorker.IsCompleted) {
             Write-FixtureStage $state 'cleanup-deferred-unobserved-trust-worker'
             throw 'The disposable fixture trust worker is still active. Its state was preserved for runner disposal.'
+        }
+        if ($state.CrlServer) {
+            Write-FixtureStage $state 'stopping-owned-loopback-crl-server'
+            if (-not $state.CrlServer.Stop(5000)) { throw 'The owned fixture CRL server did not stop. Its state was preserved for runner disposal.' }
+            Write-FixtureStage $state 'owned-loopback-crl-server-stopped'
         }
         if ($state.TrustAttempted) {
             Write-FixtureStage $state 'removing-owned-public-machine-root'
