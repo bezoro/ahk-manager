@@ -28,14 +28,25 @@ try {
     Expand-TestReleaseArtifact -ArchivePath $archive -OutputRoot $root -Version $identity.Version
     $installer = Join-Path $root "AHK-Manager-$($identity.Version)-Setup-x64.exe"
     $manifest = Join-Path $root 'ahk-manager-release.json'
-    & (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') -InstallerPath $installer -ManifestPath $manifest -Repository $repository -Commit $context.Commit -ValidateOnly
-    $status = & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository $repository -Version $identity.Version -Commit $context.Commit
+    $family = @{ InstallerPath = $installer; ManifestPath = $manifest; Repository = $repository; Commit = $context.Commit }
+    if ($identity.HasPortable) {
+        $family.PortableArchivePath = Join-Path $root "AHK-Manager-$($identity.Version)-Portable-x64.zip"
+        $family.PortableManifestPath = Join-Path $root 'ahk-manager-portable-release.json'
+    }
+    & (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') @family -ValidateOnly
+    $statusOptions = @{ Repository = $repository; Version = $identity.Version; Commit = $context.Commit; Portable = $identity.HasPortable; RequirePortableSignature = ($identity.HasPortable -and -not [string]::IsNullOrWhiteSpace($env:AHK_PUBLISHER_NAME)) }
+    if ($identity.HasPortable) { $statusOptions.PortableArchivePath = $family.PortableArchivePath; $statusOptions.PortableManifestPath = $family.PortableManifestPath }
+    $status = & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') @statusOptions
     if ($status -ceq 'Published') { Write-Host "Preview v$($identity.Version) is already published; its assets were preserved."; return }
     $signed = & (Join-Path $PSScriptRoot 'Sign-TestRelease.ps1') -InstallerPath $installer
     if ($signed) {
         Remove-Item -LiteralPath $manifest
         & (Join-Path $PSScriptRoot 'New-ReleaseManifest.ps1') -InstallerPath $installer -OutputPath $manifest -Version $identity.Version -Commit $context.Commit -Notes $identity.Notes -PublishedAt ([DateTimeOffset]::Parse($identity.PublishedAt))
     }
-    & (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') -InstallerPath $installer -ManifestPath $manifest -Repository $repository -Commit $context.Commit -Channel test -TestRunId $RunId
+    if ($identity.HasPortable) {
+        $portableSigned = & (Join-Path $PSScriptRoot 'Sign-PortableRelease.ps1') -ArchivePath $family.PortableArchivePath -ManifestPath $family.PortableManifestPath
+        if ($portableSigned) { $family.PortableSignaturePath = Join-Path $root 'ahk-manager-portable-release.json.p7s' }
+    }
+    & (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') @family -Channel test -TestRunId $RunId
 }
 finally { Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue }

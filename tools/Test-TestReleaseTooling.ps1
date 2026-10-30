@@ -39,7 +39,7 @@ foreach ($case in @(
     @{ object = $pull.head; field = 'sha'; value = ('c' * 40); name = 'stale PR head' },
     @{ object = $artifact; field = 'expired'; value = $true; name = 'expired artifact' },
     @{ object = $artifact; field = 'name'; value = 'windows-installer-test-2'; name = 'another run attempt artifact' },
-    @{ object = $artifact; field = 'size_in_bytes'; value = (1GB + 1MB + 1L); name = 'oversized archive' },
+    @{ object = $artifact; field = 'size_in_bytes'; value = (2GB + 1L); name = 'oversized archive' },
     @{ object = $artifact.workflow_run; field = 'head_sha'; value = ('c' * 40); name = 'artifact from another source' },
     @{ object = $artifact; field = 'digest'; value = 'sha256:invalid'; name = 'missing artifact integrity' }
 )) {
@@ -108,7 +108,7 @@ Assert-Refused { Read-TestReleaseArtifactIdentity $zip } 'duplicate JSON identit
 
 # Exercise the actual publisher, including its last provenance check, with no
 # network fallback and no executable launched from the fixture artifact.
-$global:AhkPreviewPublisherFixture = @{ Responses = $responses; Release = $null; Tag = $null; Calls = [Collections.Generic.List[string]]::new(); Created = $null; Published = $null; ChangeHead = $false }
+$global:AhkPreviewPublisherFixture = @{ Responses = $responses; Release = $null; Tag = $null; Calls = [Collections.Generic.List[string]]::new(); Created = $null; Published = $null; ChangeHead = $false; FailAssetName = $null; MutatePathAfterSetup = $null }
 function Invoke-RestMethod {
     param($Uri, $Method = 'Get', $Headers, $ContentType, $Body, $InFile)
     $fixture = $global:AhkPreviewPublisherFixture
@@ -136,8 +136,13 @@ function Invoke-RestMethod {
     }
     if ($Method -eq 'Post' -and $Uri.StartsWith('https://uploads.github.com/')) {
         $file = Get-Item -LiteralPath $InFile
+        if ($fixture.FailAssetName -ceq $file.Name) { throw 'Injected portable asset upload interruption.' }
         $asset = [pscustomobject]@{ name = $file.Name; size = $file.Length; state = 'uploaded'; digest = ('sha256:' + (Get-FileHash -LiteralPath $InFile -Algorithm SHA256).Hash.ToLowerInvariant()) }
         $fixture.Release.assets += $asset
+        if ($null -ne $fixture.MutatePathAfterSetup -and $file.Extension -ceq '.exe') {
+            [IO.File]::WriteAllBytes($fixture.MutatePathAfterSetup, [byte[]](3, 1, 4, 1, 5, 8))
+            $fixture.MutatePathAfterSetup = $null
+        }
         return $asset
     }
     if ($Method -eq 'Get' -and $Uri.EndsWith('/releases/41')) {
@@ -152,9 +157,10 @@ function Invoke-RestMethod {
     throw 'Unexpected mock API route; no network fallback is allowed.'
 }
 $saved = @{}
-foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_EVENT_NAME', 'GITHUB_REF', 'GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_TOKEN')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_EVENT_NAME', 'GITHUB_REF', 'GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_TOKEN', 'AHK_PUBLISHER_NAME', 'CSC_LINK', 'CSC_KEY_PASSWORD')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 try {
     $env:GITHUB_ACTIONS = 'true'; $env:GITHUB_EVENT_NAME = 'workflow_run'; $env:GITHUB_REF = 'refs/heads/main'
+    $env:AHK_PUBLISHER_NAME = ''; $env:CSC_LINK = ''; $env:CSC_KEY_PASSWORD = ''
     $env:GITHUB_REPOSITORY = 'bezoro/ahk-manager'; $env:GITHUB_SHA = 'b' * 40; $env:GITHUB_TOKEN = 'fixture-only'
     $parameters = @{ InstallerPath = $installer; ManifestPath = $manifestPath; Repository = $env:GITHUB_REPOSITORY; Commit = $run.head_sha; Channel = 'test'; TestRunId = 7 }
     & (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') @parameters
@@ -171,6 +177,7 @@ try {
     $fixture.Release = $null; $fixture.Tag = $null; $fixture.Published = $null; $fixture.ChangeHead = $true
     Assert-Refused { & (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') @parameters } 'PR head changes during upload prevent the final publication'
     Assert-Preview ($null -eq $fixture.Published -and $fixture.Release.draft) 'a stale preview remains a draft and never reaches the test channel'
+    & (Join-Path $PSScriptRoot 'Test-PortableReleaseTooling.ps1') -OutputRoot (Join-Path $OutputRoot 'portable') -FixtureRoot $OutputRoot -Version $version -Commit $run.head_sha -RequestFixture $fixture -SourceManifestPath $manifestPath -InstallerPath $installer -LegacyEntries $entries
 }
 finally {
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
