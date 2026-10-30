@@ -20,9 +20,15 @@ public static class PortableDataPickerUi
     [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
     [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr window, uint message, IntPtr first, IntPtr second);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessageTimeoutW(IntPtr window, uint message, IntPtr first, string second, uint flags, uint timeout, out UIntPtr result);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")] static extern IntPtr ReadMessageTimeout(IntPtr window, uint message, IntPtr first, StringBuilder second, uint flags, uint timeout, out UIntPtr result);
 
     static string Text(IntPtr window) { var text = new StringBuilder(4096); GetWindowTextW(window, text, text.Capacity); return text.ToString(); }
     static string Class(IntPtr window) { var text = new StringBuilder(128); GetClassNameW(window, text, text.Capacity); return text.ToString(); }
+    static string ControlText(IntPtr window)
+    {
+        var text = new StringBuilder(4096);
+        return ReadMessageTimeout(window, 0x000D, new IntPtr(text.Capacity), text, 0x0002, 300, out _) == IntPtr.Zero ? "" : text.ToString();
+    }
     static bool Owned(IntPtr window, int pid, string image, DateTime started)
     {
         GetWindowThreadProcessId(window, out uint owner);
@@ -60,12 +66,12 @@ public static class PortableDataPickerUi
         EnumChildWindows(dialog, (window, _) => {
             if (!Owned(window, pid, image, started) || !IsWindowVisible(window) || !IsWindowEnabled(window)) return true;
             if (FolderNameEdit(window, dialog)) edits.Add(window);
-            if (GetDlgCtrlID(window) == 1 && Class(window) == "Button" && Text(window).Replace("&", "", StringComparison.Ordinal) == "Use this folder") buttons.Add(window);
+            if (GetDlgCtrlID(window) == 1 && Class(window) == "Button" && ControlText(window).Replace("&", "", StringComparison.Ordinal) == "Use this folder") buttons.Add(window);
             return true;
         }, IntPtr.Zero);
         if (edits.Count != 1 || buttons.Count != 1) return false;
         if (!Owned(dialog, pid, image, started) || !Owned(edits[0], pid, image, started)) return false;
-        if (SendMessageTimeoutW(edits[0], 0x000C, IntPtr.Zero, directory, 0x0002, 2000, out var result) == IntPtr.Zero || result == UIntPtr.Zero || Text(edits[0]) != directory) return false;
+        if (SendMessageTimeoutW(edits[0], 0x000C, IntPtr.Zero, directory, 0x0002, 2000, out var result) == IntPtr.Zero || result == UIntPtr.Zero || ControlText(edits[0]) != directory) return false;
         return Owned(dialog, pid, image, started) && Owned(buttons[0], pid, image, started) && PostMessageW(buttons[0], 0x00F5, IntPtr.Zero, IntPtr.Zero);
     }
 
@@ -75,7 +81,7 @@ public static class PortableDataPickerUi
         if (dialog == IntPtr.Zero) return "The exact owned Choose data folder dialog is absent or ambiguous.";
         var text = new StringBuilder();
         EnumChildWindows(dialog, (window, _) => {
-            if (Owned(window, pid, image, started)) text.AppendLine($"{GetDlgCtrlID(window)}\t{Class(window)}\tvisible={IsWindowVisible(window)}\tenabled={IsWindowEnabled(window)}\t{Text(window)}");
+            if (Owned(window, pid, image, started)) text.AppendLine($"{GetDlgCtrlID(window)}\t{Class(window)}\tvisible={IsWindowVisible(window)}\tenabled={IsWindowEnabled(window)}\t{ControlText(window)}");
             return text.Length < 32768;
         }, IntPtr.Zero);
         return text.ToString();
