@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { CommandLog } from '../../src/main/logging/command-log.js';
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron';
 import {
   registerHandlers,
@@ -123,6 +127,84 @@ function fixture() {
     },
   };
 }
+
+test('command logs cover authenticated success, validation refusal, native failure and cancellation without request contents', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-command-ipc-'));
+  const log = new CommandLog(directory);
+  t.after(() => {
+    log.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const f = fixture();
+  f.context.commandLog = log;
+  f.context.controller.setSnapshot(snapshot());
+  f.context.controller.setConnection('ready');
+  let opened = 0;
+  f.context.openLogs = async () => {
+    opened++;
+    throw Object.assign(new Error('Private native error text must not reach the log'), {
+      code: 'EACCES',
+    });
+  };
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  const clipboardSecret = 'clipboard-secret-that-must-not-reach-disk';
+  await invoke('copyText', { text: clipboardSecret });
+  await assert.rejects(invoke('openLogs', { path: clipboardSecret }), /Invalid/);
+  await assert.rejects(invoke('openLogs'), /Private native error/);
+  assert.equal(opened, 1);
+  const cancellation = await invoke('previewImport');
+  assert.equal(cancellation, null);
+  f.guard.invalidate();
+  await assert.rejects(invoke('copyText', { text: 'unauthenticated-secret' }), /Stale/);
+  assert.deepEqual(f.copied, [clipboardSecret]);
+  log.close();
+  const text = fs
+    .readdirSync(log.directory)
+    .map((file) => fs.readFileSync(path.join(log.directory, file), 'utf8'))
+    .join('');
+  const records = text
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.ok(
+    records.some((record) => record.command === 'copyText' && record.phase === 'completed'),
+  );
+  assert.ok(records.some((record) => record.command === 'openLogs' && record.phase === 'error'));
+  assert.ok(records.some((record) => record.errorCode === 'EACCES'));
+  assert.ok(
+    records.some(
+      (record) => record.command === 'dispatch.previewImport' && record.result === 'cancelled',
+    ),
+  );
+  assert.doesNotMatch(text, /clipboard-secret|unauthenticated-secret|Private native error/);
+  for (const start of records.filter((record) => record.phase === 'started'))
+    assert.equal(
+      records.filter((record) => record.requestId === start.requestId && record.phase !== 'started')
+        .length,
+      1,
+    );
+});
+
+test('opening logs uses a fixed host action during recovery, with no renderer path or shutdown bypass', async () => {
+  const f = fixture();
+  let opened = 0;
+  f.context.openLogs = async () => {
+    opened++;
+  };
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  for (const phase of ['updateApplying', 'adoptionPending', 'administrationPending'] as const) {
+    f.setPolicy({ [phase]: true });
+    await invoke('openLogs');
+    f.setPolicy({ [phase]: false });
+  }
+  assert.equal(opened, 3);
+  await assert.rejects(invoke('openLogs', { path: 'C:\\untrusted' }), /Invalid/);
+  f.setPolicy({ quitting: true });
+  await assert.rejects(invoke('openLogs'), /closing/);
+  assert.equal(opened, 3);
+});
 
 test('the registered administration request keeps zero arguments and the native UI consent path', async () => {
   const f = fixture();

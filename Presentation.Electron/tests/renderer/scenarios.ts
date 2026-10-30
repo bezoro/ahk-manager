@@ -891,6 +891,60 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     },
   );
   await check(
+    'Help opens only the fixed logs folder and reports native errors inline even when the backend is unavailable',
+    async () => {
+      await window.fixtureHarness.setState({
+        ...host,
+        connection: 'failed',
+        error: 'ISOLATED FIXTURE: backend unavailable',
+      });
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('openLogs', { pending: true });
+      button(text.help).click();
+      await until(() => !!document.querySelector('[role="dialog"]'), 'Help missing');
+      const dialog = document.querySelector('[role="dialog"]')!;
+      const openLogs = button(text.openLogs, dialog);
+      assert(!openLogs.disabled, 'Backend failure disabled diagnostic access');
+      assert(dialog.textContent?.includes(text.diagnosticLogsHint), 'Automatic logs not explained');
+      openLogs.click();
+      await untilCall('openLogs');
+      await until(() => openLogs.disabled, 'Pending logs request did not disable its button');
+      openLogs.click();
+      const calls = (await window.fixtureHarness.calls()).filter(
+        (call) => call.method === 'openLogs',
+      );
+      assert(calls.length === 1 && calls[0]!.args.length === 0, 'Logs accepted a path or repeated');
+      await window.fixtureHarness.resolveResponse('openLogs', {
+        error: 'ISOLATED FIXTURE: Explorer could not open the folder',
+      });
+      await until(
+        () => !!dialog.querySelector('[role="alert"]')?.textContent?.includes(text.openLogsFailed),
+        'Native logs error was not reported inline',
+      );
+      assert(dialog.isConnected, 'Logs error closed Help');
+      assert(
+        document.querySelectorAll('[role="dialog"]').length === 1,
+        'Opening logs added a confirmation dialog',
+      );
+      await until(() => !openLogs.disabled, 'Logs button was not restored after failure');
+      await window.fixtureHarness.setResponse('openLogs', {});
+      openLogs.click();
+      await until(
+        () => !dialog.querySelector('[role="alert"]') && !openLogs.disabled,
+        'Successful retry did not clear the inline error',
+      );
+      assert(
+        (await window.fixtureHarness.calls()).filter((call) => call.method === 'openLogs')
+          .length === 2,
+        'Explicit retry was not sent exactly once',
+      );
+      button(text.close, dialog).click();
+      await window.fixtureHarness.resetResponses();
+      await window.fixtureHarness.setState(host);
+      await tick();
+    },
+  );
+  await check(
     'footer reports actual problem count, connection and pending request without claiming all-clear',
     async () => {
       await window.fixtureHarness.setState({

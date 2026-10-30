@@ -132,15 +132,39 @@ export function ImportDialog({
 
 export function HelpDialog({
   busy,
+  onOpenLogs,
   onClose,
   onImport,
   onBackup,
 }: {
   busy: boolean;
+  onOpenLogs(): Promise<void>;
   onClose(): void;
   onImport(): void;
   onBackup(): void;
 }): React.ReactElement {
+  const [logsNotice, setLogsNotice] = React.useState<Notice | null>(null);
+  const [openingLogs, setOpeningLogs] = React.useState(false);
+  const logsRequest = React.useRef(false);
+  const openLogs = async (): Promise<void> => {
+    if (logsRequest.current) return;
+    logsRequest.current = true;
+    setOpeningLogs(true);
+    setLogsNotice(null);
+    try {
+      await onOpenLogs();
+    } catch (error) {
+      setLogsNotice({
+        title: text.error,
+        message: text.openLogsFailed,
+        detail: error instanceof Error ? error.message : String(error),
+        warning: true,
+      });
+    } finally {
+      logsRequest.current = false;
+      setOpeningLogs(false);
+    }
+  };
   return (
     <Dialog
       open
@@ -154,6 +178,12 @@ export function HelpDialog({
           <DialogContent>
             <p>{text.helpDescription}</p>
             <p>{text.safeEditHint}</p>
+            <h3>{text.diagnosticLogs}</h3>
+            <p>{text.diagnosticLogsHint}</p>
+            <OperationNotice notice={logsNotice} onDismiss={() => setLogsNotice(null)} />
+            <Button disabled={openingLogs} onClick={() => void openLogs()}>
+              {text.openLogs}
+            </Button>
             <h3>{text.shortcuts}</h3>
             <dl className="key-values">
               <dt>Ctrl + F</dt>

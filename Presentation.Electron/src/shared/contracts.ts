@@ -256,6 +256,7 @@ export interface ThemeState {
   material: 'mica' | 'solid';
 }
 export interface AhkManagerApi {
+  openLogs(): Promise<void>;
   getStorageState(): Promise<StorageState>;
   chooseDataLocation(): Promise<StorageChangeResult | null>;
   openDataLocation(): Promise<void>;

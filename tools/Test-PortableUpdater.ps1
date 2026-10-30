@@ -143,6 +143,68 @@ function Save-OperationEvidence([string]$Phase, [string]$Operation) {
         if ($file.Name -match '\A(?:plan|ready|commit|cancel|outcome|helper-refusal)\.json\z|\Ahelper\.log\z' -and $file.Length -le 8MB) { Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $destination $file.Name) }
     }
 }
+function Read-BackendSessionToken([int]$ManagerPid) {
+    # Compare the owned child's nonce in memory only; it must never enter test evidence.
+    $image = Join-Path $portableRoot 'App/backend/AhkManager.Backend.exe'
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ManagerPid AND Name='AhkManager.Backend.exe'" | Where-Object { $_.ExecutablePath -and (Same-Path $_.ExecutablePath $image) })
+    if ($children.Count -ne 1 -or -not $children[0].CommandLine -or $children[0].CommandLine.Length -gt 32768) { return $null }
+    $match = [regex]::Match($children[0].CommandLine, '(?:\A|\s)--session\s+"?([0-9a-f]{64})"?(?=\s|\z)')
+    if ($match.Success) { return $match.Groups[1].Value }
+    return $null
+}
+function Save-CommandEvidence([int]$ManagerPid, [AllowNull()][string]$BackendSessionToken) {
+    $directory = Join-Path $dataRoot 'Logs'
+    Check ((Test-Path -LiteralPath $directory -PathType Container) -and (Is-Private $directory)) 'the real application automatically creates private diagnostic logs beside its profile'
+    $files = @(Get-ChildItem -LiteralPath $directory -File -Force)
+    Check ($files.Count -gt 0 -and $files.Count -le 5 -and ($files | Measure-Object Length -Sum).Sum -le 10MB) 'the actual command log history stays within its five-file and ten-MiB retention limits'
+    $destination = Join-Path $OutputRoot 'command-logs'
+    [IO.Directory]::CreateDirectory($destination) | Out-Null
+    $commands = [Collections.Generic.List[object]]::new()
+    $copies = [Collections.Generic.List[object]]::new()
+    $sessions = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $allowed = @('schemaVersion', 'kind', 'sessionId', 'timestamp', 'source', 'command', 'operation', 'scriptId', 'version', 'channel', 'runAtLogin', 'runAsAdministrator', 'launchManagerAtLogin', 'launchManagerAsAdministrator', 'startInTray', 'requestId', 'parentRequestId', 'phase', 'durationMs', 'result', 'outcome', 'code', 'state', 'addedCount', 'duplicateCount', 'issueCount', 'itemCount', 'correlationId', 'errorName', 'errorCode', 'backendRequestId')
+    $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+    foreach ($file in $files) {
+        $match = [regex]::Match($file.Name, '\Acommands-(\d{8}T\d{9}Z)-([0-9a-f-]{36})-(\d{6})\.jsonl\z')
+        if (-not $match.Success -or $file.Length -le 0 -or $file.Length -gt 2MB -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or -not (Is-Private $file.FullName)) { throw 'A command log is not a private bounded regular file with the application-owned name.' }
+        $before = Hash $file.FullName
+        $text = [IO.File]::ReadAllText($file.FullName, $strictUtf8)
+        if (-not $text.EndsWith("`n", [StringComparison]::Ordinal)) { throw 'The normally closed application left a partial command log line.' }
+        if ($BackendSessionToken -and $text.Contains($BackendSessionToken, [StringComparison]::Ordinal)) { throw 'An authenticated backend session token leaked into command diagnostics.' }
+        $lines = $text.Split("`n", [StringSplitOptions]::RemoveEmptyEntries)
+        $header = ConvertFrom-Json -InputObject $lines[0] -AsHashtable
+        $timestamp = if ($header['timestamp'] -is [DateTime] -or $header['timestamp'] -is [DateTimeOffset]) { $header['timestamp'].ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ', [Globalization.CultureInfo]::InvariantCulture) } else { ([string]$header['timestamp']).Replace('-', '').Replace(':', '').Replace('.', '') }
+        if ($header['schemaVersion'] -ne 1 -or $header['kind'] -cne 'session' -or $header['applicationId'] -cne 'Bezoro.AhkManager.Electron' -or $header['sessionId'] -cne $match.Groups[2].Value -or $header['fileIndex'] -ne [int]$match.Groups[3].Value -or $timestamp -cne $match.Groups[1].Value -or @($header.Keys | Where-Object { $_ -notin @('schemaVersion', 'kind', 'applicationId', 'sessionId', 'timestamp', 'pid', 'fileIndex') }).Count -gt 0) { throw 'The command log header does not bind its exact application, session and file index.' }
+        [void]$sessions.Add([string]$header['sessionId'])
+        for ($index = 1; $index -lt $lines.Count; $index++) {
+            if ($strictUtf8.GetByteCount($lines[$index]) -gt 2048) { throw 'A command diagnostic record exceeds its bounded line length.' }
+            $record = ConvertFrom-Json -InputObject $lines[$index] -AsHashtable
+            if ($record -isnot [Collections.IDictionary] -or $record['schemaVersion'] -ne 1 -or $record['sessionId'] -cne $header['sessionId'] -or $record['kind'] -notin @('command', 'session-end') -or @($record.Keys | Where-Object { $_ -notin $allowed }).Count -gt 0) { throw 'A command log contains an invalid schema or an unapproved payload field.' }
+            if ($record['kind'] -ceq 'command') {
+                $requestId = [Guid]::Empty
+                if ($record['source'] -notin @('ui', 'backend', 'tray', 'lifecycle', 'updates', 'storage') -or $record['command'] -cnotmatch '\A[a-zA-Z][a-zA-Z0-9:._-]{0,63}\z' -or $record['phase'] -notin @('started', 'completed', 'error') -or -not [Guid]::TryParse([string]$record['requestId'], [ref]$requestId)) { throw 'A command record does not identify its source, action, phase and correlation ID.' }
+                if ($header['pid'] -eq $ManagerPid) { $commands.Add($record) }
+            }
+        }
+        [IO.File]::Copy($file.FullName, (Join-Path $destination $file.Name), $false)
+        if ((Hash $file.FullName) -cne $before -or (Hash (Join-Path $destination $file.Name)) -cne $before) { throw 'A command log changed while its closed-session evidence was copied.' }
+        $copies.Add([ordered]@{ file = $file.Name; bytes = $file.Length; sha256 = $before; sessionId = $header['sessionId']; pid = $header['pid'] })
+    }
+    Check ($commands.Count -gt 0) 'the retained command log session belongs to the exact real application process'
+    foreach ($command in @('initializeProfile', 'load', 'shutdown')) {
+        $finished = @($commands | Where-Object { $_['source'] -ceq 'backend' -and $_['command'] -ceq $command -and $_['phase'] -ceq 'completed' -and $_['result'] -in @('confirmed', 'completed') })
+        Check ($finished.Count -eq 1) "the real backend $command command records one successful completion"
+    }
+    $updates = @($commands | Where-Object { $_['source'] -ceq 'updates' -and $_['command'] -ceq 'check' -and $_['phase'] -ceq 'completed' })
+    Check ($updates.Count -gt 0 -and @($updates | Where-Object { $_['state'] -notin @('idle', 'error') -or ($_['state'] -ceq 'error' -and $_['result'] -cne 'failed') }).Count -eq 0) 'automatic update checks record their settled success or failure without treating a resolved error as success'
+    $finishedCommands = @($commands | Where-Object { $_['phase'] -in @('completed', 'error') })
+    foreach ($finished in $finishedCommands) {
+        $started = @($commands | Where-Object { $_['requestId'] -ceq $finished['requestId'] -and $_['phase'] -ceq 'started' -and $_['source'] -ceq $finished['source'] -and $_['command'] -ceq $finished['command'] })
+        if ($started.Count -ne 1 -or ($finished['durationMs'] -isnot [long] -and $finished['durationMs'] -isnot [int]) -or $finished['durationMs'] -lt 0) { throw 'A completed command is missing its matching start or a valid duration.' }
+    }
+    Check ($finishedCommands.Count -gt 0) 'actual command completions retain their matching start IDs and nonnegative durations'
+    Write-Json 'command-logs.json' ([ordered]@{ fixture = $true; actualApplication = $true; directory = $directory; managerPid = $ManagerPid; retainedFiles = $files.Count; sessions = $sessions.Count; currentProcessCommands = $commands.Count; completedCommands = $finishedCommands.Count; backendSessionTokenObserved = -not [string]::IsNullOrEmpty($BackendSessionToken); backendSessionTokenOmitted = $true; approvedFieldsOnly = $true; files = $copies.ToArray() })
+}
 function Seed-Package($Release, [string]$Archive, [string]$Manifest, [string]$Signature) {
     $directory = Join-Path $updatesRoot (Join-Path 'installers' $Release.Version)
     [IO.Directory]::CreateDirectory($directory) | Out-Null
@@ -236,7 +298,7 @@ function Move-PortableData {
     } while ([DateTime]::UtcNow -lt $deadline)
     Check $restart 'the actual prepared-data Restart Manager button starts a normal restart'
     Check ($session.Process.WaitForExit(30000) -and $session.Process.ExitCode -eq 0) 'the original portable Manager completes its normal backend shutdown before migration'
-    foreach ($subdirectory in @('Profile', 'Updates')) {
+    foreach ($subdirectory in @('Profile', 'Updates', 'Logs')) {
         foreach ($file in Get-ChildItem -LiteralPath (Join-Path $originalDataRoot $subdirectory) -File -Recurse) { $retiredDataHashes[$file.FullName] = Hash $file.FullName }
     }
     Close-PortableSession $session
@@ -358,7 +420,9 @@ function Move-PortableRoot {
     $configuration = Get-Content -LiteralPath (Join-Path $originalRoot 'portable.json') -Raw | ConvertFrom-Json
     Check ($configuration.dataDirectory -ceq 'Data') 'the portable configuration retains a relative Data location before the folder is moved'
     $sourceFiles = @{}
-    foreach ($file in Get-ChildItem -LiteralPath (Join-Path $dataRoot 'Profile') -File -Recurse -Force) { $sourceFiles[[IO.Path]::GetRelativePath($originalRoot, $file.FullName)] = Hash $file.FullName }
+    foreach ($subdirectory in @('Profile', 'Logs')) {
+        foreach ($file in Get-ChildItem -LiteralPath (Join-Path $dataRoot $subdirectory) -File -Recurse -Force) { $sourceFiles[[IO.Path]::GetRelativePath($originalRoot, $file.FullName)] = Hash $file.FullName }
+    }
     foreach ($release in @($baseline, $candidate)) {
         foreach ($name in @('archive.zip', 'release.json', 'release.json.p7s', 'receipt.json')) {
             $file = Join-Path $updatesRoot "installers/$($release.Version)/$name"
@@ -557,7 +621,19 @@ try {
         Wait-Ready $session $baseline.Version
         Check-SearchShortcut 'final'
         if ($Scenario -eq 'default') { Check-RelocatedHistory }
+        $deadline = [DateTime]::UtcNow.AddSeconds(45)
+        do {
+            $finalUpdate = Invoke-PortableEvaluation $session 'window.ahkManager.getUpdateState()'
+            if ($finalUpdate.phase -in @('idle', 'error')) { break }
+            Start-Sleep -Milliseconds 100
+        } while ([DateTime]::UtcNow -lt $deadline)
+        Check ($finalUpdate.phase -in @('idle', 'error')) 'the final automatic update check settles before diagnostic evidence is collected'
+        $logManagerPid = $session.Process.Id
+        $backendSessionToken = Read-BackendSessionToken $logManagerPid
+        Check (-not [string]::IsNullOrEmpty($backendSessionToken)) 'the exact owned backend session is observed in memory before verifying its exclusion from diagnostics'
         Close-PortableSession $session; $session = $null
+        Save-CommandEvidence $logManagerPid $backendSessionToken
+        $backendSessionToken = $null
         $complete = $true
     }
 }

@@ -142,7 +142,7 @@ export const text = {
   administratorColumn: 'Administrator',
   adminPreference: 'Request administrator',
   adminPreferenceHint:
-    'Preference for the next run, with manual confirmation. Unchecked requests standard privileges; it does not indicate current privileges.',
+    'Preference for the next run. Windows may request administrator approval. Unchecked requests standard privileges; it does not indicate current privileges.',
   adminLoginHint:
     'When Manager runs with standard privileges, administrator scripts are skipped at Windows sign-in. You can start them manually with Windows approval. When Manager already runs as administrator, they can start automatically.',
   startupUndefinedHint: 'This preference is not set yet. Change the checkbox to choose.',
@@ -243,6 +243,11 @@ export const text = {
     'Explicit WinUI profile migration, with validation and a backup. Windows startup preferences require separate confirmation.',
   helpDescription:
     'Manage AutoHotkey v2 scripts without editing their contents. Stop requests a normal exit, which the script can refuse. Restart launches a replacement only after observing the original exit.',
+  diagnosticLogs: 'Diagnostic logs',
+  diagnosticLogsHint:
+    'Manager automatically records commands and their results for troubleshooting. Logs are kept locally and rotated to limit disk use.',
+  openLogs: 'Open logs folder',
+  openLogsFailed: 'The logs folder could not be opened. Check the details and try again.',
   shortcuts: 'Keyboard shortcuts',
   shortcutSearch: 'Search',
   shortcutRefresh: 'Refresh observations',

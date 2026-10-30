@@ -13,6 +13,7 @@ import {
   verifyCachedPortablePackageSignature,
   verifyPortableManifestPolicy,
 } from './portable-update-signature.js';
+import type { CommandLogBoundary } from '../logging/command-log.js';
 
 type ApplicationUpdateBoundary = Pick<
   UpdateBoundary,
@@ -23,6 +24,7 @@ export interface ApplicationUpdateOptions {
   deployment?: UpdateDeployment;
   root?: string;
   currentCommit?: string;
+  commandLog?: Pick<CommandLogBoundary, 'run'>;
 }
 
 /** Builds an updater with its own network session, without granting renderer network access. */
@@ -94,11 +96,21 @@ export async function createApplicationUpdates(
     download,
     recovery: () => updateRecoveryStatus(store),
   });
-  await service.initialize();
-  void service.check();
+  const initialize = async () => {
+    await service.initialize();
+    return service.snapshot;
+  };
+  await (options.commandLog
+    ? options.commandLog.run('updates', 'initialize', initialize)
+    : initialize());
+  const check = () => {
+    const work = () => service.check();
+    return options.commandLog ? options.commandLog.run('updates', 'check', work) : work();
+  };
+  void check();
   const interval = setInterval(
     () => {
-      if (pollAllowed()) void service.check();
+      if (pollAllowed()) void check();
     },
     15 * 60 * 1000,
   );

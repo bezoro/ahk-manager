@@ -98,6 +98,7 @@ function subscribe<T>(
   return () => ipcRenderer.removeListener(channel, handler);
 }
 const api: AhkManagerApi = {
+  openLogs: () => checked('openLogs', {}, empty),
   getStorageState: () => checked('storage:get', {}, storageState),
   chooseDataLocation: () => checked('storage:choose', {}, nullable(storageChangeResult)),
   openDataLocation: () => checked('storage:open', {}, empty),

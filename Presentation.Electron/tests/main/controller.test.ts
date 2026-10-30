@@ -517,31 +517,132 @@ test('renderer paths cannot configure an executable without a native picker auth
   });
   assert.equal(requests[0]?.payload.settings.window.width, 1200);
 });
-test('startup enabling always obtains independent native consent; cancel preserves settings', async () => {
+test('manager startup settings retain their separate confirmation; cancel preserves settings', async () => {
   const { controller, requests } = setup(async () => false);
   assert.equal(
     (await controller.saveSettings({ ...snapshot().settings, launchManagerAtLogin: true })).outcome,
     'CancelledBeforeDispatch',
   );
-  assert.equal(
-    (
-      await controller.saveMetadata(
-        scriptId,
-        {
-          friendlyName: 'Teste',
-          description: '',
-          collectionId: null,
-          runAtLogin: true,
-          runAsAdministrator: false,
-          launchBlocked: false,
-          manualHotkeys: [],
-        },
-        snapshot().revision,
-      )
-    ).outcome,
-    'CancelledBeforeDispatch',
-  );
   assert.equal(requests.length, 0);
+});
+
+test('the explicit script startup preference authorizes registration without a native dialog or starting scripts', async () => {
+  for (const [previous, requested] of [
+    [false, true],
+    [null, true],
+    [true, true],
+    [true, false],
+    [false, false],
+  ] as const) {
+    const { controller, requests } = setup(async () => {
+      assert.fail('A script startup preference must not open a redundant confirmation.');
+    });
+    const state = snapshot();
+    state.scripts[0]!.runAtLogin = previous;
+    controller.setSnapshot(state);
+    const metadata = { ...metadataOf(state.scripts[0]!), runAtLogin: requested };
+    const result = await controller.saveMetadata(scriptId, metadata, state.revision);
+    assert.equal(result.outcome, 'Confirmed');
+    assert.deepEqual(requests, [
+      {
+        action: 'saveMetadata',
+        payload: {
+          scriptId,
+          metadata,
+          startupConsent: requested && previous !== true,
+        },
+      },
+    ]);
+  }
+});
+
+test('a queued script startup change cannot authorize an outdated revision or a closed document', async () => {
+  for (const invalidate of ['revision', 'document'] as const) {
+    const { controller, requests, authority, native } = setup(async () => {
+      assert.fail('No confirmation is needed for this preference.');
+    });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => (release = resolve));
+    authority.request = async <T>(action: string, payload: any): Promise<T> => {
+      requests.push({ action, payload });
+      await pending;
+      return confirmed as T;
+    };
+    const first = controller.saveCollection(null, 'Earlier change');
+    const state = snapshot();
+    const startup = controller.saveMetadata(
+      scriptId,
+      { ...metadataOf(state.scripts[0]!), runAtLogin: true },
+      state.revision,
+    );
+    const rejected = invalidate === 'document' ? assert.rejects(startup, /closed/) : null;
+    await new Promise((resolve) => setImmediate(resolve));
+    if (invalidate === 'revision') controller.setSnapshot({ ...state, revision: '4' });
+    else native.alive = () => false;
+    release();
+    await first;
+    if (rejected) await rejected;
+    else assert.equal((await startup).code, 'StaleSelection');
+    assert.deepEqual(
+      requests.map((request) => request.action),
+      ['saveCollection'],
+    );
+  }
+});
+
+test('administrator Start uses the backend plan without a Manager confirmation and preserves its result', async () => {
+  for (const outcome of ['Confirmed', 'CancelledBeforeDispatch'] as const) {
+    const { controller, requests, authority } = setup(async () => {
+      assert.fail(
+        'Starting a script must not open a Manager confirmation before Windows approval.',
+      );
+    });
+    const state = snapshot();
+    state.scripts[0]!.runAsAdministrator = true;
+    controller.setSnapshot(state);
+    const prepare = authority.request;
+    authority.request = async <T>(action: string, payload: any): Promise<T> => {
+      if (action === 'prepare') {
+        const prepared = await prepare<{ planId: string; plan: OperationPlan }>(action, payload);
+        return {
+          ...prepared,
+          plan: { ...prepared.plan, operation: 'Start', requiresConfirmation: false },
+        } as T;
+      }
+      requests.push({ action, payload });
+      return { ...confirmed, outcome } as T;
+    };
+    assert.equal((await controller.operate('Start', selection())).outcome, outcome);
+    assert.deepEqual(
+      requests.map((request) => request.action),
+      ['prepare', 'perform'],
+    );
+    assert.deepEqual(requests[1]!.payload, {
+      planId,
+      currentSelection: selection(),
+      confirmed: false,
+    });
+  }
+});
+
+test('administrator Start refuses a changed selection while the backend prepares the operation', async () => {
+  const { controller, requests, authority } = setup(async () => {
+    assert.fail('A stale Start request must not open a confirmation.');
+  });
+  const prepare = authority.request;
+  authority.request = async <T>(action: string, payload: any): Promise<T> => {
+    const prepared = await prepare<{ planId: string; plan: OperationPlan }>(action, payload);
+    controller.updateSelection(null);
+    return {
+      ...prepared,
+      plan: { ...prepared.plan, operation: 'Start', requiresConfirmation: false },
+    } as T;
+  };
+  assert.equal((await controller.operate('Start', selection())).code, 'StaleSelection');
+  assert.deepEqual(
+    requests.map((request) => request.action),
+    ['prepare'],
+  );
 });
 
 test('start in tray saves through settings without enabling login or script startup, and retains failed-save state', async () => {
