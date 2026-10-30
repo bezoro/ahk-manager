@@ -4,7 +4,7 @@ The active product is Electron with a .NET backend. Ordinary tests use temporary
 
 ## Windows CI
 
-[Windows CI](.github/workflows/windows-ci.yml) runs on `windows-2025` for pull requests, pushes to `main`, and manual dispatch. It uses the pinned .NET SDK, Node.js 24.22.0, and locked dependencies. Independent suites continue after other suites fail; any failure still fails the job.
+[Windows CI](.github/workflows/windows-ci.yml) runs on `windows-2025` automatically when changes reach `main`, including merges. A maintainer can request a PR run by applying **ci:windows**, or use manual dispatch for explicit validation. Ordinary PR commits and branch pushes do not trigger the suite. It uses the pinned .NET SDK, Node.js 24.22.0, and locked dependencies. Independent suites continue after other suites fail; any failure still fails the job.
 
 Backend, Core, correction, and startup-inspection checks publish snapshots for the integrated Node checks. Missing backend snapshots do not turn integration tests into passing skips. The official AutoHotkey v2.0.30 portable download has a pinned SHA256 and is used for interpreter discovery and metadata inspection. Ordinary CI does not execute user AHK scripts or the separate `--ahk-owned` suite.
 

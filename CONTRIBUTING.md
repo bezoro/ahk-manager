@@ -20,6 +20,14 @@ New-Item -ItemType Directory -Path $work | Out-Null
 
 Commands below start at the repository root. Each test/build output must be an absolute directory that does not already exist, preserving evidence from earlier runs.
 
+## When to run CI
+
+Windows CI runs automatically when changes reach `main`, including a pull request merge. Pull request commits and branch pushes do not start the suite automatically.
+
+For a substantial change that needs validation before merging, a maintainer applies the **ci:windows** label to the PR. This runs the complete Windows suite against that exact head and makes a successful same-repository build eligible for the public Test channel. The label does not start another run on later commits. Remove and reapply it when a new implementation milestone needs validation. Use the existing run's retry controls for a transient failure on the same commit.
+
+Run local checks while iterating and group fixes before requesting another Windows run. Documentation-only follow-ups do not normally need the full suite. **Run workflow** remains available for an explicit validation run. Publication still requires the approved `main` push or trusted PR preview flow described in [UPDATES.md](UPDATES.md).
+
 ## Frontend
 
 ```powershell
