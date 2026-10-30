@@ -52,6 +52,16 @@ Before a confirmed update, the Manager preserves the current portable package wh
 
 Do not delete `Updates/operations` while an update has an unresolved result. An unconfirmed operation blocks another application attempt rather than guessing whether it succeeded. See [UPDATES.md](UPDATES.md) for integrity and recovery details.
 
+## Diagnostic logs
+
+Command logging is enabled automatically. Open **Help > Open logs folder** to inspect `Data/Logs`, including when the backend is unavailable. A custom data location keeps its logs in that location's `Logs` directory. The existing **Activity** page continues to show script and settings results.
+
+The JSON Lines files record command starts and completions, UTC timestamps, durations, result and reason codes, and selected preference flags. Session and request IDs relate an interface command to its backend calls. Cancelled, refused, partial and unknown results remain distinct from success. Startup, tray actions, background update checks and shutdown are included after the data folder is prepared. A start without a completion can indicate that the process exited before reporting its result.
+
+Logs rotate automatically, retaining up to five verified files of 2 MiB each. Unknown files in `Logs` are preserved. Logging errors never repeat or block an application command; an unavailable log folder is reported inline when opened from Help. Logs do not contain raw request bodies, authentication tokens, clipboard text, script contents or exception messages. Keep the corresponding Activity history and `Updates/operations` evidence when investigating a script or update failure.
+
+Close Manager normally before copying or moving its data. Logs move with the selected data folder; the previous folder remains a backup after changing the data location.
+
 ## Supported locations
 
 Use a local NTFS volume for both the application and its data. ReFS, exFAT and FAT are not supported. An unsupported filesystem has a separate startup message; permission failures and incomplete packages do not appear as filesystem errors. On first launch, the Manager restricts access to its own dedicated portable folder when it can prove the package and current-user ownership. It never changes permissions on the containing repository or drive. A folder containing unrelated files is refused instead of having its permissions rewritten.

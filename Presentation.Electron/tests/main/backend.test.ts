@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { CommandLog, type CommandLogBoundary } from '../../src/main/logging/command-log.js';
 import { snapshot as validateSnapshot } from '../../src/shared/validation.js';
 import { BackendClient, MAX_FRAME, UnknownAfterDispatchError } from '../../src/main/backend.js';
 import { snapshot, withHeaderDescription, planId } from './fixtures.js';
@@ -62,6 +65,7 @@ function setup(
     failedSpawn?: boolean;
     adoption?: string;
     reply?: (action: string, payload: unknown) => unknown;
+    commandLog?: Pick<CommandLogBoundary, 'run'>;
   } = {},
 ) {
   const calls: any[] = [];
@@ -160,10 +164,64 @@ function setup(
     session: nonce,
     createChild: spawn,
     timeoutMs: 1000,
+    commandLog: options.commandLog,
     ...(options.adoption ? { startupAdoption: options.adoption } : {}),
   });
   return { client, child, calls, envelope };
 }
+
+test('backend traces correlate with their UI command and retain protocol error codes without session credentials', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-command-backend-'));
+  const log = new CommandLog(directory);
+  t.after(() => {
+    log.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const f = setup({ commandLog: log, ignore: 'refresh' });
+  await f.client.start();
+  assert.deepEqual(
+    await log.run('ui', 'getSnapshot', () => f.client.request('snapshot', {})),
+    snapshot(),
+  );
+  const failed = assert.rejects(f.client.request('refresh', {}), {
+    name: 'BackendProtocolError',
+    code: 'InternalFailure',
+  });
+  const request = f.calls.at(-1)!;
+  f.child.stdout.write(
+    JSON.stringify({
+      ...f.envelope('refresh', request.id, null),
+      code: 'InternalFailure',
+      error: 'private-protocol-error-secret',
+    }) + '\n',
+  );
+  await failed;
+  assert.equal(f.calls.filter((call) => call.action === 'refresh').length, 1);
+  await f.client.shutdown();
+  log.close();
+  const text = fs
+    .readdirSync(log.directory)
+    .map((file) => fs.readFileSync(path.join(log.directory, file), 'utf8'))
+    .join('');
+  const records = text
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  const ui = records.find(
+    (record) => record.command === 'getSnapshot' && record.phase === 'started',
+  );
+  const backend = records.find(
+    (record) => record.command === 'snapshot' && record.phase === 'started',
+  );
+  assert.equal(backend.parentRequestId, ui.requestId);
+  assert.ok(
+    records.some(
+      (record) => record.command === 'refresh' && record.errorCode === 'InternalFailure',
+    ),
+  );
+  assert.doesNotMatch(text, new RegExp(nonce));
+  assert.doesNotMatch(text, /private-protocol-error-secret|parentCreated|hostExecutable|payload/);
+});
 test('trusted child proof and hello retain exact FILETIME and revision strings', async () => {
   const { client, calls } = setup();
   await client.start();

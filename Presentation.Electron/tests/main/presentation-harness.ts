@@ -360,7 +360,8 @@ app
         storage = { ...storage, pendingDataDirectory: null, canChange: true, error: null };
         return storage;
       }
-      if (method === 'openDataLocation' || method === 'restartForDataMove') return;
+      if (method === 'openLogs' || method === 'openDataLocation' || method === 'restartForDataMove')
+        return;
       if (method === 'checkUpdates') {
         updates = { ...updates, phase: 'idle', lastCheckedAt: new Date().toISOString() };
         window.webContents.send('fixture:updates', updates);

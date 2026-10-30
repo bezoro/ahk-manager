@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import { commandDetails, type CommandLogBoundary } from './logging/command-log.js';
 import { hostText as t } from '../shared/host-en-US.js';
 import { recyclePlan, recycleAuthorization } from '../shared/validation.js';
 import { TextDecoder } from 'node:util';
@@ -140,6 +141,16 @@ export class UnknownAfterDispatchError extends Error {
     readonly requestId: string,
   ) {
     super(t.dispatchedUnknown(action, requestId));
+    this.name = 'UnknownAfterDispatchError';
+  }
+}
+export class BackendProtocolError extends Error {
+  constructor(
+    readonly code: string,
+    detail: string | null,
+  ) {
+    super(`Backend: ${code}${detail ? ` (${detail})` : ''}`);
+    this.name = 'BackendProtocolError';
   }
 }
 interface Pending {
@@ -155,6 +166,7 @@ export interface BackendOptions {
   timeoutMs?: number;
   session?: string;
   startupAdoption?: string;
+  commandLog?: Pick<CommandLogBoundary, 'run'>;
 }
 export class BackendClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -294,6 +306,12 @@ export class BackendClient extends EventEmitter {
     payload: unknown,
     timeoutMs = this.options.timeoutMs ?? 30000,
   ): Promise<T> {
+    const dispatch = () => this.dispatch<T>(action, payload, timeoutMs);
+    return this.options.commandLog
+      ? this.options.commandLog.run('backend', action, dispatch, commandDetails(payload))
+      : dispatch();
+  }
+  private dispatch<T>(action: string, payload: unknown, timeoutMs: number): Promise<T> {
     if (this.failure || !this.child || this.exited)
       return Promise.reject(this.failure ?? new Error('Backend unavailable'));
     if (!Object.hasOwn(results, action)) return Promise.reject(new Error('Unknown backend action'));
@@ -418,11 +436,7 @@ export class BackendClient extends EventEmitter {
     if (frame.code !== 'Ok') {
       this.pending.delete(frame.id);
       clearTimeout(pending.timer);
-      pending.reject(
-        new Error(
-          `Backend: ${String(frame.code)}${frame.error ? ` (${String(frame.error)})` : ''}`,
-        ),
-      );
+      pending.reject(new BackendProtocolError(frame.code as string, frame.error as string | null));
       return;
     }
     const value = requireValid(frame.payload, results[pending.action]!, 'backend response');

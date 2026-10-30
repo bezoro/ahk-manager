@@ -574,6 +574,7 @@ jobs:
           name: portable-updater-${{ matrix.location }}
           path: |
             ${{ runner.temp }}/portable-updater-evidence/**/*.json
+            ${{ runner.temp }}/portable-updater-evidence/**/*.jsonl
             ${{ runner.temp }}/portable-updater-evidence/**/*.log
             ${{ runner.temp }}/portable-updater-evidence/**/*.txt
             ${{ runner.temp }}/portable-updater-evidence/**/*.png

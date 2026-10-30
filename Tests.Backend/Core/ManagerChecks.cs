@@ -290,6 +290,99 @@ public static partial class CoreSuite
         }
     }
 
+    static async Task AdministratorStartConsentAsync(string interpreter)
+    {
+        string root = Path.Combine(FixtureRoot, "administrator-start-consent");
+        Directory.CreateDirectory(root);
+        string script = Path.Combine(root, "administrator.ahk");
+        await File.WriteAllTextAsync(script, "#Requires AutoHotkey v2.0\n");
+        var owner = new FakeOwner(root);
+        var processes = new FakeProcesses(owner);
+        await using var manager = new ManagerService(
+            Path.Combine(root, "data"),
+            owner,
+            processes,
+            new UserStartupService(new FakeStartup(), Path.Combine(root, "Manager.exe"))
+        );
+        await manager.LoadAsync();
+        Guid id = (await manager.AddFilesAsync([script])).Added.Single();
+        await manager.SaveMetadataAsync(id, new("Administrator", "", null, false, true, false, []));
+
+        var start = await manager.PrepareAsync(Select(manager, id), ScriptOperation.Start);
+        Check(
+            start.Allowed && !start.RequiresConfirmation && processes.Starts == 0,
+            "explicit administrator Start prepares without an extra Manager confirmation"
+        );
+        var changedSelection = start.Selection with
+        {
+            Query = start.Selection.Query with { Version = start.Selection.Query.Version + 1 },
+        };
+        Check(
+            (await manager.PerformAsync(start, changedSelection, false)).Code
+                == ReasonCode.StaleSelection
+                && processes.Starts == 0,
+            "administrator Start still rejects a changed selection before dispatch"
+        );
+
+        start = await manager.PrepareAsync(Select(manager, id), ScriptOperation.Start);
+        owner.Held = false;
+        Check(
+            (await manager.PerformAsync(start, start.Selection, false)).Code
+                == ReasonCode.EffectOwnerUnavailable
+                && processes.Starts == 0,
+            "administrator Start still requires current effect ownership at dispatch"
+        );
+        owner.Held = true;
+        await manager.RefreshAsync();
+
+        start = await manager.PrepareAsync(Select(manager, id), ScriptOperation.Start);
+        Check(
+            (await manager.PerformAsync(start, start.Selection, false)).Succeeded
+                && processes.Starts == 1
+                && processes.LastElevated
+                && !processes.IsAdministrator
+                && ScriptPaths.Equal(
+                    processes.Current.Processes.Single().Identity.ExecutablePath,
+                    interpreter
+                ),
+            "administrator Start forwards elevation to the Windows launch boundary without Manager confirmation"
+        );
+        Check(
+            (await manager.PerformAsync(start, start.Selection, false)).Code
+                == ReasonCode.StaleSelection
+                && processes.Starts == 1,
+            "administrator Start authorization remains single-use"
+        );
+        Check(
+            (await manager.PrepareAsync(Select(manager, id), ScriptOperation.Start)).Reason
+                == ReasonCode.AlreadyRunning
+                && processes.Starts == 1,
+            "administrator Start still refuses a duplicate running instance"
+        );
+
+        processes.Administrator = true;
+        await manager.RefreshAsync();
+        var stop = await manager.PrepareAsync(Select(manager, id), ScriptOperation.Stop);
+        Check(
+            stop.Allowed
+                && stop.RequiresConfirmation
+                && (await manager.PerformAsync(stop, stop.Selection, false)).Outcome
+                    == Outcome.CancelledBeforeDispatch
+                && processes.Controls == 0,
+            "Stop still requires confirmation before controlling the script"
+        );
+        var restart = await manager.PrepareAsync(Select(manager, id), ScriptOperation.Restart);
+        Check(
+            restart.Allowed
+                && restart.RequiresConfirmation
+                && (await manager.PerformAsync(restart, restart.Selection, false)).Outcome
+                    == Outcome.CancelledBeforeDispatch
+                && processes.Controls == 0
+                && processes.Starts == 1,
+            "Restart still requires confirmation before stopping or replacing the script"
+        );
+    }
+
     static async Task RunManagerAsync()
     {
         var interpreters = await new AutoHotkeyDiscovery().DiscoverAsync();
@@ -299,6 +392,7 @@ public static partial class CoreSuite
         );
         string interpreter = interpreters[0].Path;
         InterpreterFixture = interpreter;
+        await AdministratorStartConsentAsync(interpreter);
         await RunPassiveRecoveryChecksAsync(Path.Combine(FixtureRoot, "passive-recovery"), Check);
         await RunOrphanPendingChecksAsync(Path.Combine(FixtureRoot, "orphan-pending"), Check);
         await LoginDiagnosticsAsync();

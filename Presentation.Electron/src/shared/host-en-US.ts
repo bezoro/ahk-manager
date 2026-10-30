@@ -138,9 +138,6 @@ export const hostText = {
   removeTitle: 'Remove from the list?',
   removeDetail: (name: string, file: string) =>
     `${name}\n${file}\n\nThe file and running process will be preserved.`,
-  scriptStartupTitle: 'Run this script after login?',
-  scriptStartupDetail: (name: string, file: string) =>
-    `${name}\n${file}\n\nAHK Manager will apply the preference when you sign in to Windows.`,
   removeCollectionTitle: 'Remove collection?',
   removeCollectionDetail: (name: string) => `${name}\n\nScripts and files will be preserved.`,
   operationTitle: 'Confirm operation',

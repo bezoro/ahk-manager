@@ -34,6 +34,7 @@ import type { UpdateService } from '../updates/update-service.js';
 import type { UpdateChannel } from '../../shared/updates.js';
 import type { StorageChangeResult, StorageState } from '../../shared/storage.js';
 import { assertRequestAllowed, type RequestPolicy } from './request-policy.js';
+import { commandDetails, type CommandLogBoundary } from '../logging/command-log.js';
 
 export interface IpcTransport {
   handle(
@@ -44,6 +45,8 @@ export interface IpcTransport {
 }
 
 export interface IpcContext {
+  commandLog?: Pick<CommandLogBoundary, 'run'>;
+  openLogs?(): Promise<void>;
   storage?: {
     get(): StorageState;
     choose(): Promise<StorageChangeResult | null>;
@@ -70,7 +73,10 @@ export interface IpcContext {
 /** The renderer reaches application services only through authenticated, validated handlers. */
 export function registerHandlers(context: IpcContext): void {
   const { guard, controller, updates, preflight, ipc: ipcMain, clipboard } = context;
-  ipcMain.handle('manager:connect', (event) => guard.connect(event));
+  ipcMain.handle('manager:connect', (event) => {
+    const connect = () => guard.connect(event);
+    return context.commandLog ? context.commandLog.run('ui', 'connect', connect) : connect();
+  });
   const none = shape({});
 
   function bind<T = Record<string, never>>(
@@ -79,21 +85,32 @@ export function registerHandlers(context: IpcContext): void {
     handler: (body: T) => unknown,
   ): void {
     ipcMain.handle(`manager:${name}`, async (event, envelope: unknown) => {
-      const validated = guard.validate(event, envelope);
-      const body = requireValid<T>(validated.body, validate, `${name} request`);
-      assertRequestAllowed(name, context.policy());
-      const value = await context.documentScope.run(
-        () => guard.current(validated.lease),
-        () => handler(body),
-      );
-      if (!guard.current(validated.lease)) throw new Error(t.documentChanged);
-      return value;
+      const dispatch = async () => {
+        const validated = guard.validate(event, envelope);
+        const body = requireValid<T>(validated.body, validate, `${name} request`);
+        assertRequestAllowed(name, context.policy());
+        const invoke = () =>
+          context.documentScope.run(
+            () => guard.current(validated.lease),
+            () => handler(body),
+          );
+        const value = context.commandLog
+          ? await context.commandLog.run('ui', 'dispatch.' + name, invoke, commandDetails(body))
+          : await invoke();
+        if (!guard.current(validated.lease)) throw new Error(t.documentChanged);
+        return value;
+      };
+      return context.commandLog ? context.commandLog.run('ui', name, dispatch) : dispatch();
     });
   }
 
   bind('getState', none, () => controller.state);
   bind('getTheme', none, context.theme);
   bind('getUpdateState', none, () => updates.snapshot);
+  bind('openLogs', none, async () => {
+    if (!context.openLogs) throw new Error('Diagnostic logs are unavailable.');
+    await context.openLogs();
+  });
   if (context.storage) {
     const storage = context.storage;
     bind('storage:get', none, storage.get);
@@ -172,55 +189,54 @@ export function registerHandlers(context: IpcContext): void {
     clipboard.writeText(value.text),
   );
 
-  ipcMain.on('manager:updateSelection', (event, envelope: unknown) => {
-    try {
-      const { body } = guard.validate(event, envelope);
-      const selected = body === null ? null : assertSelection(body);
-      controller.updateSelection(selected);
-      context.selectionChanged(selected);
-    } catch {
-      /* Invalid notifications cannot alter host authority. */
-    }
+  function notify(name: string, handler: (event: IpcMainEvent, envelope: unknown) => void): void {
+    ipcMain.on(`manager:${name}`, (event, envelope: unknown) => {
+      const dispatch = () => handler(event, envelope);
+      if (context.commandLog) {
+        void context.commandLog.run('ui', name, dispatch).catch(() => {});
+      } else {
+        try {
+          dispatch();
+        } catch {
+          /* Invalid notifications cannot alter host authority. */
+        }
+      }
+    });
+  }
+
+  notify('updateSelection', (event, envelope) => {
+    const { body } = guard.validate(event, envelope);
+    const selected = body === null ? null : assertSelection(body);
+    controller.updateSelection(selected);
+    context.selectionChanged(selected);
   });
-  ipcMain.on('manager:documentReady', (event, envelope: unknown) => {
-    try {
-      const { lease, body } = guard.validate(event, envelope);
-      requireValid(body, none, 'document ready');
-      context.documentReady(lease);
-    } catch {
-      /* Readiness never bypasses document authentication. */
-    }
+  notify('documentReady', (event, envelope) => {
+    const { lease, body } = guard.validate(event, envelope);
+    requireValid(body, none, 'document ready');
+    context.documentReady(lease);
   });
-  ipcMain.on('manager:administrationProvider', (event, envelope: unknown) => {
-    try {
-      const { body } = guard.validate(event, envelope);
-      const value = requireValid<{ registered: boolean }>(
-        body,
-        shape({ registered: bool }),
-        'administration provider',
-      );
-      preflight.register(value.registered);
-    } catch {
-      /* An invalid provider cannot enable preflight. */
-    }
+  notify('administrationProvider', (event, envelope) => {
+    const { body } = guard.validate(event, envelope);
+    const value = requireValid<{ registered: boolean }>(
+      body,
+      shape({ registered: bool }),
+      'administration provider',
+    );
+    preflight.register(value.registered);
   });
-  ipcMain.on('manager:administrationPreflightReply', (event, envelope: unknown) => {
-    try {
-      const { body } = guard.validate(event, envelope);
-      const value = requireValid<{
-        request: { operationId: string; phase: 'begin' | 'commit'; nonce: string };
-        value: AdministrationUiGuard | null;
-      }>(
-        body,
-        shape({
-          request: shape({ operationId: guid, phase: oneOf('begin', 'commit'), nonce: guid }),
-          value: nullable(shape({ dirtyDrafts: bool, dialogOpen: bool, pendingWork: bool })),
-        }),
-        'administration preflight',
-      );
-      preflight.reply(value.request, value.value);
-    } catch {
-      /* Obsolete or malformed replies cannot authorize a commit. */
-    }
+  notify('administrationPreflightReply', (event, envelope) => {
+    const { body } = guard.validate(event, envelope);
+    const value = requireValid<{
+      request: { operationId: string; phase: 'begin' | 'commit'; nonce: string };
+      value: AdministrationUiGuard | null;
+    }>(
+      body,
+      shape({
+        request: shape({ operationId: guid, phase: oneOf('begin', 'commit'), nonce: guid }),
+        value: nullable(shape({ dirtyDrafts: bool, dialogOpen: bool, pendingWork: bool })),
+      }),
+      'administration preflight',
+    );
+    preflight.reply(value.request, value.value);
   });
 }

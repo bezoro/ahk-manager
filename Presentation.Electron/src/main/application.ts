@@ -75,6 +75,12 @@ import {
 } from './storage/data-migration.js';
 import { withDataMoveLease } from './storage/data-move-lease.js';
 import {
+  CommandLog,
+  type CommandLogBoundary,
+  type CommandDetails,
+  type CommandSource,
+} from './logging/command-log.js';
+import {
   acquirePortableStorageLease,
   type PortableStorageLease,
 } from './storage/portable-storage-lease.js';
@@ -160,6 +166,8 @@ export function startManager(): void {
   let storageLease: PortableStorageLease | null = null;
   let storageClosing: Promise<void> | null = null;
   let storageClosed = false;
+  let commandLog: CommandLog | null = null;
+  const commandTrace: Pick<CommandLogBoundary, 'run'> = { run: trace };
   const documentScope = new AsyncLocalStorage<() => boolean>();
   const alive = () =>
     !quitting && (documentScope.getStore()?.() ?? (window !== null && !window.isDestroyed()));
@@ -170,46 +178,55 @@ export function startManager(): void {
   );
   const theme = (): ThemeState => desktopTheme.state;
   const updateTheme = desktopTheme.update;
-  const { files: pick, confirm } = createNativeDialogs(() => window, alive);
+  const nativeDialogs = createNativeDialogs(() => window, alive);
+  const pick: typeof nativeDialogs.files = (kind) =>
+    trace('ui', 'pick.' + kind, () => nativeDialogs.files(kind));
+  const confirm: typeof nativeDialogs.confirm = (title, detail) =>
+    trace('ui', 'confirm', () => nativeDialogs.confirm(title, detail));
   const single = app.requestSingleInstanceLock();
   if (!single) app.quit();
   else {
     app.on('second-instance', (_event, argv) => {
-      if (
-        adoptionPending ||
-        argv.some(
-          (value) => value === '--startup-adoption' || value.startsWith('--startup-adoption='),
-        )
-      ) {
-        if (!argv.includes('--login') && !argv.includes('--background')) {
+      void trace('lifecycle', 'secondInstance', () => {
+        if (
+          adoptionPending ||
+          argv.some(
+            (value) => value === '--startup-adoption' || value.startsWith('--startup-adoption='),
+          )
+        ) {
+          if (!argv.includes('--login') && !argv.includes('--background')) {
+            lifecycle.requestExplicitActivation();
+            show();
+          }
+          return;
+        }
+        if (initialAdoption.descriptor !== null && argv.includes('--login')) {
+          return;
+        }
+        const administrative = administrationCli(argv);
+        if (administrative !== 'none') {
+          lifecycle.requestExplicitActivation();
+          show();
+          if (administrative === 'invalid')
+            dialog.showErrorBox(t.title, t.administrationCliInvalid);
+          else if (ready) void requestAdministration(true);
+          else administrativeCliPending = true;
+          return;
+        }
+        if (argv.includes('--login')) {
+          lifecycle.requestLogin();
+          if (ready) void runLogin();
+        } else {
           lifecycle.requestExplicitActivation();
           show();
         }
-        return;
-      }
-      if (initialAdoption.descriptor !== null && argv.includes('--login')) {
-        return;
-      }
-      const administrative = administrationCli(argv);
-      if (administrative !== 'none') {
-        lifecycle.requestExplicitActivation();
-        show();
-        if (administrative === 'invalid') dialog.showErrorBox(t.title, t.administrationCliInvalid);
-        else if (ready) void requestAdministration(true);
-        else administrativeCliPending = true;
-        return;
-      }
-      if (argv.includes('--login')) {
-        lifecycle.requestLogin();
-        if (ready) void runLogin();
-      } else {
-        lifecycle.requestExplicitActivation();
-        show();
-      }
+      });
     });
     app.on('activate', () => {
-      lifecycle.requestExplicitActivation();
-      show();
+      void trace('lifecycle', 'activate', () => {
+        lifecycle.requestExplicitActivation();
+        show();
+      });
     });
     app.on('before-quit', (event) => {
       if (!quitComplete) {
@@ -221,6 +238,7 @@ export function startManager(): void {
       if (!quitting) void quit();
     });
     app.on('will-quit', (event) => {
+      commandLog?.close();
       if (!storageLease || storageClosed) return;
       event.preventDefault();
       if (storageClosing) return;
@@ -246,6 +264,19 @@ export function startManager(): void {
   }
   function safeError(error: unknown): string {
     return error instanceof Error ? error.message.slice(0, 4096) : t.unknownError;
+  }
+  async function trace<T>(
+    source: CommandSource,
+    command: string,
+    work: () => T | Promise<T>,
+    details?: CommandDetails,
+  ): Promise<T> {
+    return commandLog ? commandLog.run(source, command, work, details) : work();
+  }
+  function recordFailure(command: string, error: unknown): void {
+    void trace('lifecycle', command, () => {
+      throw error;
+    }).catch(() => {});
   }
   async function prepareStorage(): Promise<void> {
     try {
@@ -285,6 +316,10 @@ export function startManager(): void {
       } catch (error) {
         storageError = safeError(error);
       }
+      // Logs belong beside Profile, so creating them cannot invalidate a fresh profile import.
+      // A pending data move is completed above before any log files are opened or written.
+      if (deployment.mode === 'portable') commandLog = new CommandLog(deployment.dataDirectory);
+      process.on('uncaughtExceptionMonitor', (error) => recordFailure('uncaughtException', error));
     } catch (error) {
       storageError = safeError(error);
       throw error;
@@ -364,6 +399,7 @@ export function startManager(): void {
         deployment: deployment.mode,
         root: deployment.updatesDirectory,
         currentCommit: await runningCommit(),
+        commandLog: commandTrace,
       },
     );
     updates = configured.service;
@@ -537,7 +573,10 @@ export function startManager(): void {
       throw error;
     }
   }
-  async function start(): Promise<void> {
+  function start(): Promise<void> {
+    return trace('lifecycle', 'start', startApplication, { version: app.getVersion() });
+  }
+  async function startApplication(): Promise<void> {
     if (initialAdoption.invalid) throw new Error(t.adoptionInvalid);
     if (process.platform !== 'win32' || !app.isPackaged) throw new Error(t.windowsPackagedRequired);
     await serveAssets();
@@ -580,7 +619,7 @@ export function startManager(): void {
     window.on('close', (event) => {
       if (quitComplete) return;
       event.preventDefault();
-      void closeWindow();
+      void trace('lifecycle', 'closeWindow', closeWindow);
     });
     nativeTheme.on('updated', updateTheme);
     systemPreferences.on('accent-color-changed', updateTheme);
@@ -773,6 +812,7 @@ export function startManager(): void {
     backend = new BackendClient({
       executable: packagedBackend(path.dirname(process.execPath)),
       hostExecutable: process.execPath,
+      commandLog: commandTrace,
       ...(initialAdoption.descriptor ? { startupAdoption: initialAdoption.descriptor } : {}),
     });
     if (adoptionPending) controller.setAdministrationPending(true);
@@ -783,7 +823,7 @@ export function startManager(): void {
       if (!quitting) controller?.setConnection('failed', error.message);
     });
     try {
-      await backend.start();
+      await trace('backend', 'start', () => backend!.start());
       controller.setHostAuthority(backend.authorityMode);
       const initialized = await backend.request<OperationResult>('initializeProfile', {});
       if (initialized.outcome !== 'Confirmed')
@@ -813,6 +853,9 @@ export function startManager(): void {
         }
       }
       controller.setSnapshot(await backend.request<ManagerSnapshot>('load', {}));
+      // Installed profiles may still show the migration picker before load. Do not create
+      // their log folder while an empty destination is required for that migration.
+      commandLog ??= new CommandLog(deployment.dataDirectory);
       controller.setConnection('ready');
       if (initialAdoption.descriptor) {
         const result = await backend.request<OperationResult>(
@@ -836,6 +879,7 @@ export function startManager(): void {
           });
       }
     } catch (error) {
+      recordFailure('startBackend', error);
       controller.setConnection('failed', safeError(error));
       if (!lifecycle.quietStartup) show();
     }
@@ -848,30 +892,32 @@ export function startManager(): void {
     } catch {
       return;
     }
-    void ensurePortableSearchShortcut(deployment, {
-      platform: process.platform,
-      appDataDirectory,
-      permitted: () => {
-        const state = controller?.state;
-        return (
-          backend === owner &&
-          owner.ready &&
-          state?.connection === 'ready' &&
-          state.snapshot?.readOnly === false &&
-          state.snapshot.effectsAvailable &&
-          !state.administrationPending &&
-          !adoptionPending &&
-          !administration?.active &&
-          !updateApplying &&
-          !updateShutdownInFlight &&
-          !stopExit.active &&
-          !storageRestarting &&
-          !quitting
-        );
-      },
-      read: (file) => shell.readShortcutLink(file),
-      write: (file, operation, details) => shell.writeShortcutLink(file, operation, details),
-    })
+    void trace('lifecycle', 'repairSearchShortcut', () =>
+      ensurePortableSearchShortcut(deployment, {
+        platform: process.platform,
+        appDataDirectory,
+        permitted: () => {
+          const state = controller?.state;
+          return (
+            backend === owner &&
+            owner.ready &&
+            state?.connection === 'ready' &&
+            state.snapshot?.readOnly === false &&
+            state.snapshot.effectsAvailable &&
+            !state.administrationPending &&
+            !adoptionPending &&
+            !administration?.active &&
+            !updateApplying &&
+            !updateShutdownInFlight &&
+            !stopExit.active &&
+            !storageRestarting &&
+            !quitting
+          );
+        },
+        read: (file) => shell.readShortcutLink(file),
+        write: (file, operation, details) => shell.writeShortcutLink(file, operation, details),
+      }),
+    )
       .then((result) => diagnostics?.record('portable-search-shortcut', { result }))
       .catch(() => {});
   }
@@ -998,6 +1044,7 @@ export function startManager(): void {
     try {
       await reportLoginResult(await controller.runLogin());
     } catch (error) {
+      recordFailure('runLogin', error);
       controller.setConnection('failed', safeError(error));
       if (!lifecycle.quietStartup) {
         show();
@@ -1047,8 +1094,10 @@ export function startManager(): void {
   function createTray(): void {
     try {
       tray = createTrayIcon(() => {
-        lifecycle.requestExplicitActivation();
-        show();
+        void trace('tray', 'activate', () => {
+          lifecycle.requestExplicitActivation();
+          show();
+        });
       });
       trayRegistered = tray !== null;
       updateTray();
@@ -1078,37 +1127,36 @@ export function startManager(): void {
             progress: stopExitProgress,
           },
           {
-            checkAdoption: () => {
-              void checkStartupAdoption();
-            },
-            continueStartup: () => {
-              void requestStartupContinuation();
-            },
-            activate: () => {
+            checkAdoption: trayAction('checkAdoption', checkStartupAdoption),
+            continueStartup: trayAction('continueStartup', requestStartupContinuation),
+            activate: trayAction('activate', () => {
               lifecycle.requestExplicitActivation();
               show();
-            },
-            toggleWindow: () => {
+            }),
+            toggleWindow: trayAction('toggleWindow', () => {
               lifecycle.requestExplicitActivation();
               if (window?.isVisible()) window.hide();
               else show();
               updateTray();
-            },
-            preferences: showPreferences,
-            quit: () => {
-              void quit();
-            },
-            stopScriptsAndQuit: () => {
-              void stopScriptsAndQuit();
-            },
-            cancelStopExit: () => {
+            }),
+            preferences: trayAction('preferences', showPreferences),
+            quit: trayAction('quit', quit),
+            stopScriptsAndQuit: trayAction('stopScriptsAndQuit', stopScriptsAndQuit),
+            cancelStopExit: trayAction('cancelStopExit', () => {
               stopExit.cancel();
               updateTray();
-            },
+            }),
           },
         ),
       ),
     );
+  }
+  function trayAction(command: string, action: () => unknown): () => void {
+    return () => {
+      void trace('tray', command, action).catch((error) => {
+        if (!quitting) dialog.showErrorBox(t.title, safeError(error));
+      });
+    };
   }
   async function stopScriptsAndQuit(): Promise<void> {
     if (adoptionPending || administration?.active || quitting || !controller || !stopExit.begin())
@@ -1141,6 +1189,7 @@ export function startManager(): void {
           noLink: true,
         });
     } catch (error) {
+      recordFailure('stopScriptsAndQuit', error);
       stopExit.complete(false);
       updateTray();
       show();
@@ -1211,15 +1260,17 @@ export function startManager(): void {
         reportPlacementFailure: (error) => controller?.setConnection('closing', safeError(error)),
       });
     try {
-      await Promise.race([
-        orderly(),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () => reject(new Error(t.shutdownDeadline(backend?.pid ?? null))),
-            SHUTDOWN_DEADLINE_MS,
-          );
-        }),
-      ]);
+      await trace('lifecycle', 'shutdown', () =>
+        Promise.race([
+          orderly(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(t.shutdownDeadline(backend?.pid ?? null))),
+              SHUTDOWN_DEADLINE_MS,
+            );
+          }),
+        ]),
+      );
       tray?.destroy();
       quitComplete = true;
       app.quit();
@@ -1245,6 +1296,13 @@ export function startManager(): void {
       theme,
       ipc: ipcMain,
       clipboard,
+      commandLog: commandTrace,
+      openLogs: async () => {
+        if (!commandLog?.status().available)
+          throw new Error('Diagnostic logging is unavailable. Check access to the data folder.');
+        const error = await shell.openPath(commandLog.directory);
+        if (error) throw new Error(error);
+      },
       storage: dataLocation
         ? {
             get: () => dataLocation!.state,

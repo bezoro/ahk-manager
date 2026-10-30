@@ -134,8 +134,7 @@ public sealed partial class ManagerService
                     selection.Query.Version,
                     identity,
                     reason == ReasonCode.None,
-                    operation is ScriptOperation.Stop or ScriptOperation.Restart
-                        || script?.RunAsAdministrator == true && operation == ScriptOperation.Start,
+                    operation is ScriptOperation.Stop or ScriptOperation.Restart,
                     reason,
                     selection
                 );

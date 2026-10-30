@@ -167,14 +167,8 @@ export class ManagerController {
       if (!this.matches(revision)) return stale();
       const script = this.state.snapshot!.scripts.find((s) => s.id === scriptId);
       if (!script) return stale();
-      let startupConsent = false;
-      if (metadata.runAtLogin === true && script.runAtLogin !== true) {
-        startupConsent = await this.native.confirm(
-          t.scriptStartupTitle,
-          t.scriptStartupDetail(script.friendlyName, script.path),
-        );
-        if (!startupConsent) return cancelled();
-      }
+      // Explicitly enabling this preference authorizes its startup registration.
+      const startupConsent = metadata.runAtLogin === true && script.runAtLogin !== true;
       if (!this.native.alive() || !this.matches(revision)) return stale();
       return this.authority.request('saveMetadata', { scriptId, metadata, startupConsent });
     });
