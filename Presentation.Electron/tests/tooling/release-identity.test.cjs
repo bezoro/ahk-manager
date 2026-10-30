@@ -118,7 +118,7 @@ for (const { type } of commitTypes) {
     assert.equal(release.commitCount, 1);
     assert.equal(release.alreadyTagged, false);
     assert.match(release.notes, /improve fixture behavior/);
-    const lint = lintRange(fixture.cwd, { from: fixture.base, to: release.commit });
+    const lint = await lintRange(fixture.cwd, { from: fixture.base, to: release.commit });
     assert.equal(lint.status, 0, lint.stdout + lint.stderr);
   });
 }
@@ -135,7 +135,7 @@ for (const message of [
     assert.equal(release.version, '2.0.0');
     assert.equal(release.releaseType, 'major');
     assert.match(release.notes, /old profile/);
-    const lint = lintRange(fixture.cwd, { from: fixture.base, to: release.commit });
+    const lint = await lintRange(fixture.cwd, { from: fixture.base, to: release.commit });
     assert.equal(lint.status, 0, lint.stdout + lint.stderr);
   });
 }
@@ -202,7 +202,7 @@ test('an annotated tag on the requested commit is reused without moving its refe
   assert.equal(git(fixture.cwd, ['rev-parse', 'refs/tags/v1.2.17']), tagObject);
 });
 
-test('new PR range excludes old baseline and target-branch changes after divergence', (t) => {
+test('new PR range excludes old baseline and target-branch changes after divergence', async (t) => {
   const fixture = repository(t);
   git(fixture.cwd, ['checkout', '--quiet', '-b', 'feature']);
   const head = fixture.commit('feat: expose release history');
@@ -212,22 +212,85 @@ test('new PR range excludes old baseline and target-branch changes after diverge
     pull_request: { base: { sha: base }, head: { sha: head } },
   });
   assert.deepEqual(range, { from: fixture.base, to: head });
-  const lint = lintRange(fixture.cwd, range);
+  const lint = await lintRange(fixture.cwd, range);
   assert.equal(lint.status, 0, lint.stdout + lint.stderr);
 });
 
-test('push checks only its new commits; invalid subjects fail and generated merge subjects retain default ignores', (t) => {
+test('push checks only its new commits; invalid subjects fail and generated merge subjects retain default ignores', async (t) => {
   const fixture = repository(t);
   const invalid = fixture.commit('Improve code without a conventional type');
   let range = commitRange(fixture.cwd, { before: fixture.base }, invalid);
-  assert.notEqual(lintRange(fixture.cwd, range).status, 0);
+  assert.notEqual((await lintRange(fixture.cwd, range)).status, 0);
   const merge = fixture.commit(
     'Merge pull request #42 from fixture/topic\n\nfix: improve release identity',
   );
   range = commitRange(fixture.cwd, { before: invalid }, merge);
-  const lint = lintRange(fixture.cwd, range);
+  const lint = await lintRange(fixture.cwd, range);
   assert.equal(lint.status, 0, lint.stdout + lint.stderr);
 });
+
+test('custom merge metadata is excluded while the merged work commit is checked', async (t) => {
+  const fixture = repository(t);
+  git(fixture.cwd, ['checkout', '--quiet', '-b', 'feature']);
+  const subject = 'feat: publish portable distributions';
+  const work = fixture.commit(subject);
+  git(fixture.cwd, ['checkout', '--quiet', 'main']);
+  const metadata = 'Reviewed merge metadata can describe the integrated change. '.repeat(3);
+  git(fixture.cwd, [
+    'merge',
+    '--quiet',
+    '--no-ff',
+    'feature',
+    '-m',
+    `feat(portable): integrate the reviewed branch\n\n${metadata}`,
+  ]);
+  const head = git(fixture.cwd, ['rev-parse', 'HEAD']);
+  assert.equal(git(fixture.cwd, ['rev-parse', `${head}^2`]), work);
+  const lint = await lintRange(
+    fixture.cwd,
+    commitRange(fixture.cwd, { before: fixture.base }, head),
+  );
+  assert.equal(lint.status, 0, lint.stdout + lint.stderr);
+  assert.ok(lint.stdout.includes(subject));
+  assert.doesNotMatch(lint.stdout, /integrate the reviewed branch|Reviewed merge metadata/);
+});
+
+for (const { label, message, rule } of [
+  {
+    label: 'a nonconventional subject',
+    message: 'Improve release workflow without a conventional type',
+    rule: 'type-empty',
+  },
+  {
+    label: 'leading header whitespace',
+    message: ' fix: preserve the original malformed header',
+    rule: 'type-empty',
+  },
+  {
+    label: 'an oversized body line',
+    message: `fix: preserve strict work commit validation\n\n${'Long work commit body. '.repeat(6)}`,
+    rule: 'body-max-line-length',
+  },
+]) {
+  test(`merged work commits still reject ${label}`, async (t) => {
+    const fixture = repository(t);
+    git(fixture.cwd, ['checkout', '--quiet', '-b', 'feature']);
+    fixture.commit(message);
+    git(fixture.cwd, ['checkout', '--quiet', 'main']);
+    git(fixture.cwd, [
+      'merge',
+      '--quiet',
+      '--no-ff',
+      'feature',
+      '-m',
+      'feat: integrate the reviewed branch',
+    ]);
+    const lint = await lintRange(fixture.cwd, commitRange(fixture.cwd, { before: fixture.base }));
+    assert.notEqual(lint.status, 0);
+    assert.ok(lint.stdout.includes(message.split('\n')[0]), lint.stdout + lint.stderr);
+    assert.ok(lint.stdout.includes(rule), lint.stdout + lint.stderr);
+  });
+}
 
 test('manifest notes are plain text with readable code/link labels and preserve the 4000 UTF-16 limit', async (t) => {
   const fixture = repository(t);
