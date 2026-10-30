@@ -914,6 +914,16 @@ export function startManager(): void {
         },
         read: (file) => shell.readShortcutLink(file),
         write: (file, operation, details) => shell.writeShortcutLink(file, operation, details),
+        diagnostic: ({ phase, code, attempt, retrying }) => {
+          void trace(
+            'lifecycle',
+            'repairSearchShortcut.' + phase,
+            () => {
+              throw Object.assign(new Error('Search shortcut operation failed.'), { code });
+            },
+            { attempt, retrying },
+          ).catch(() => {});
+        },
       }),
     )
       .then((result) => diagnostics?.record('portable-search-shortcut', { result }))

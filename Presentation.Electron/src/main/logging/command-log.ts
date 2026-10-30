@@ -91,6 +91,8 @@ export interface CommandDetails {
   launchManagerAtLogin?: boolean;
   launchManagerAsAdministrator?: boolean;
   startInTray?: boolean;
+  attempt?: number;
+  retrying?: boolean;
 }
 export interface CommandLogStatus {
   available: boolean;
@@ -154,6 +156,9 @@ function detailsOf(details: CommandDetails | undefined): Fields {
   if (publicVersion(details?.version)) result.version = details.version;
   if (details?.channel === 'stable' || details?.channel === 'test')
     result.channel = details.channel;
+  if (Number.isInteger(details?.attempt) && details!.attempt! >= 0 && details!.attempt! <= 32)
+    result.attempt = details!.attempt!;
+  if (typeof details?.retrying === 'boolean') result.retrying = details.retrying;
   for (const key of [
     'runAtLogin',
     'runAsAdministrator',
@@ -470,6 +475,8 @@ export class CommandLog implements CommandLogBoundary {
         'launchManagerAtLogin',
         'launchManagerAsAdministrator',
         'startInTray',
+        'attempt',
+        'retrying',
         'requestId',
         'parentRequestId',
         'phase',

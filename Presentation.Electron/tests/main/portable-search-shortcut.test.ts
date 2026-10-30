@@ -7,6 +7,7 @@ import type { ShortcutDetails } from 'electron';
 import {
   ensurePortableSearchShortcut,
   type PortableShortcutBoundary,
+  type PortableShortcutDiagnostic,
 } from '../../src/main/desktop/portable-search-shortcut.js';
 import { resolveDeployment } from '../../src/main/storage/deployment.js';
 
@@ -36,6 +37,7 @@ async function fixture(t: TestContext) {
   const programs = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs');
   const shortcut = path.join(programs, 'AHK Manager Portable.lnk');
   const writes: Array<{ file: string; details: ShortcutDetails }> = [];
+  const diagnostics: PortableShortcutDiagnostic[] = [];
   let permitted = true;
   // JSON files model the shell adapter. All namespace publication, identity
   // checks, relocation, hardlinks and cleanup use the real fixture filesystem.
@@ -51,6 +53,7 @@ async function fixture(t: TestContext) {
       sync.writeFileSync(file, JSON.stringify(details));
       return true;
     },
+    diagnostic: (event) => diagnostics.push(event),
   };
   return {
     temporary,
@@ -60,6 +63,7 @@ async function fixture(t: TestContext) {
     programs,
     shortcut,
     writes,
+    diagnostics,
     boundary,
     setPermitted: (value: boolean) => {
       permitted = value;
@@ -293,4 +297,187 @@ test('a shortcut gaining a second hardlink during shell inspection remains forei
   assert.deepEqual(await fs.readFile(other), original);
   assert.equal((await fs.lstat(f.shortcut)).nlink, 2);
   assert.equal(f.writes.length, 1);
+});
+
+test('transient sharing failures retry the same owned rename without repeating the shell write', async (t) => {
+  for (const code of ['EACCES', 'EPERM', 'EBUSY']) {
+    const f = await fixture(t);
+    await ensurePortableSearchShortcut(f.layout, f.boundary);
+    const relocated = await f.move();
+    const rename = fs.rename;
+    const destinations: string[] = [];
+    let attempts = 0;
+    const mocked = t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+      if (args[0] === f.shortcut) {
+        attempts++;
+        destinations.push(String(args[1]));
+        if (attempts < 3) throw Object.assign(new Error('Inert sharing fixture.'), { code });
+      }
+      return rename(...args);
+    });
+    assert.equal(await ensurePortableSearchShortcut(relocated, f.boundary), 'updated');
+    mocked.mock.restore();
+    assert.equal(attempts, 3);
+    assert.equal(new Set(destinations).size, 1);
+    assert.equal(f.writes.length, 2, 'relocation must write exactly one staged shell link');
+    assert.equal(f.boundary.read(f.shortcut).target, relocated.launchExecutable);
+    assert.deepEqual(await fs.readdir(f.programs), ['AHK Manager Portable.lnk']);
+    assert.deepEqual(f.diagnostics, [
+      { phase: 'rename', code, attempt: 1, retrying: true },
+      { phase: 'rename', code, attempt: 2, retrying: true },
+    ]);
+  }
+});
+
+test('persistent sharing failures stop after six attempts and preserve the original link', async (t) => {
+  const f = await fixture(t);
+  await ensurePortableSearchShortcut(f.layout, f.boundary);
+  const original = await fs.readFile(f.shortcut);
+  const relocated = await f.move();
+  const rename = fs.rename;
+  let attempts = 0;
+  t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+    if (args[0] === f.shortcut) {
+      attempts++;
+      throw Object.assign(new Error('Inert persistent sharing fixture.'), { code: 'EPERM' });
+    }
+    return rename(...args);
+  });
+  assert.equal(await ensurePortableSearchShortcut(relocated, f.boundary), 'failed');
+  assert.equal(attempts, 6);
+  assert.equal(f.writes.length, 2);
+  assert.deepEqual(await fs.readFile(f.shortcut), original);
+  assert.deepEqual(await fs.readdir(f.programs), ['AHK Manager Portable.lnk']);
+  assert.equal(f.diagnostics.length, 6);
+  assert.deepEqual(f.diagnostics.at(-1), {
+    phase: 'rename',
+    code: 'EPERM',
+    attempt: 6,
+    retrying: false,
+  });
+});
+
+test('rename retries stop when authority changes and retain all original shortcut bytes', async (t) => {
+  const f = await fixture(t);
+  await ensurePortableSearchShortcut(f.layout, f.boundary);
+  const original = await fs.readFile(f.shortcut);
+  const relocated = await f.move();
+  const rename = fs.rename;
+  let attempts = 0;
+  t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+    if (args[0] === f.shortcut) {
+      attempts++;
+      f.setPermitted(false);
+      throw Object.assign(new Error('Inert sharing fixture.'), { code: 'EBUSY' });
+    }
+    return rename(...args);
+  });
+  assert.equal(await ensurePortableSearchShortcut(relocated, f.boundary), 'not-applicable');
+  assert.equal(attempts, 1);
+  assert.equal(f.writes.length, 2);
+  assert.deepEqual(await fs.readFile(f.shortcut), original);
+  assert.deepEqual(await fs.readdir(f.programs), ['AHK Manager Portable.lnk']);
+  assert.deepEqual(f.diagnostics.at(-1), {
+    phase: 'rename',
+    code: 'EffectOwnerUnavailable',
+    attempt: 2,
+    retrying: false,
+  });
+});
+
+test('retry revalidation rejects same-size source changes even when the write timestamp was restored', async (t) => {
+  const f = await fixture(t);
+  await ensurePortableSearchShortcut(f.layout, f.boundary);
+  const original = (await fs.readFile(f.shortcut, 'utf8')) + '  ';
+  const changed = original.slice(0, -2) + '\t\n';
+  const fixedTime = new Date('2026-01-01T00:00:00.000Z');
+  await fs.writeFile(f.shortcut, original);
+  await fs.utimes(f.shortcut, fixedTime, fixedTime);
+  const relocated = await f.move();
+  const rename = fs.rename;
+  let attempts = 0;
+  t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+    if (args[0] === f.shortcut) {
+      attempts++;
+      await fs.writeFile(f.shortcut, changed);
+      await fs.utimes(f.shortcut, fixedTime, fixedTime);
+      throw Object.assign(new Error('Inert sharing fixture.'), { code: 'EPERM' });
+    }
+    return rename(...args);
+  });
+  assert.equal(Buffer.byteLength(original), Buffer.byteLength(changed));
+  assert.equal(await ensurePortableSearchShortcut(relocated, f.boundary), 'preserved');
+  assert.equal(attempts, 1);
+  assert.equal(f.writes.length, 2);
+  assert.equal(await fs.readFile(f.shortcut, 'utf8'), changed);
+  assert.deepEqual(await fs.readdir(f.programs), ['AHK Manager Portable.lnk']);
+  assert.deepEqual(f.diagnostics.at(-1), {
+    phase: 'rename',
+    code: 'IdentityChanged',
+    attempt: 2,
+    retrying: false,
+  });
+});
+
+test('a backup path occupied during contention remains untouched and prevents another rename', async (t) => {
+  const f = await fixture(t);
+  await ensurePortableSearchShortcut(f.layout, f.boundary);
+  const original = await fs.readFile(f.shortcut);
+  const relocated = await f.move();
+  const rename = fs.rename;
+  let attempts = 0;
+  let backup: string | null = null;
+  const foreign = 'Foreign backup destination must never be replaced.';
+  t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+    if (args[0] === f.shortcut) {
+      attempts++;
+      backup = String(args[1]);
+      await fs.writeFile(backup, foreign, { flag: 'wx' });
+      throw Object.assign(new Error('Inert sharing fixture.'), { code: 'EACCES' });
+    }
+    return rename(...args);
+  });
+  assert.equal(await ensurePortableSearchShortcut(relocated, f.boundary), 'preserved');
+  assert.equal(attempts, 1);
+  assert.equal(f.writes.length, 2);
+  assert.ok(backup);
+  assert.equal(await fs.readFile(backup, 'utf8'), foreign);
+  assert.deepEqual(await fs.readFile(f.shortcut), original);
+  assert.equal((await fs.readdir(f.programs)).length, 2);
+  assert.deepEqual(f.diagnostics.at(-1), {
+    phase: 'rename',
+    code: 'EEXIST',
+    attempt: 2,
+    retrying: false,
+  });
+});
+
+test('non-sharing errors are not retried and diagnostic callbacks cannot interfere with recovery', async (t) => {
+  const f = await fixture(t);
+  await ensurePortableSearchShortcut(f.layout, f.boundary);
+  const original = await fs.readFile(f.shortcut);
+  const relocated = await f.move();
+  const rename = fs.rename;
+  let attempts = 0;
+  f.boundary.diagnostic = (event) => {
+    f.diagnostics.push(event);
+    throw new Error('Inert diagnostic callback failure.');
+  };
+  t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+    if (args[0] === f.shortcut) {
+      attempts++;
+      throw Object.assign(new Error('Inert failure with private paths/tokens.'), {
+        code: 'ENOSPC',
+      });
+    }
+    return rename(...args);
+  });
+  assert.equal(await ensurePortableSearchShortcut(relocated, f.boundary), 'failed');
+  assert.equal(attempts, 1);
+  assert.equal(f.writes.length, 2);
+  assert.deepEqual(await fs.readFile(f.shortcut), original);
+  assert.deepEqual(await fs.readdir(f.programs), ['AHK Manager Portable.lnk']);
+  assert.deepEqual(f.diagnostics, [
+    { phase: 'rename', code: 'ENOSPC', attempt: 1, retrying: false },
+  ]);
 });
