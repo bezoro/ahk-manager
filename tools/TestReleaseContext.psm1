@@ -35,7 +35,7 @@ function Get-TestReleaseContext {
     if ($artifacts.total_count -gt 100) { throw 'The preview artifact listing exceeds its bound.' }
     $artifactName = "windows-installer-test-$($run.run_attempt)"
     $installers = @($artifacts.artifacts | Where-Object { $_.name -ceq $artifactName })
-    if ($installers.Count -ne 1 -or $installers[0].expired -ne $false -or $installers[0].id -le 0 -or $installers[0].size_in_bytes -le 0 -or $installers[0].size_in_bytes -gt (1GB + 1MB)) { Stop-IneligibleTestRun 'Exactly one current, bounded Windows installer artifact is required.' }
+    if ($installers.Count -ne 1 -or $installers[0].expired -ne $false -or $installers[0].id -le 0 -or $installers[0].size_in_bytes -le 0 -or $installers[0].size_in_bytes -gt 2GB) { Stop-IneligibleTestRun 'Exactly one current, bounded Windows installer artifact is required.' }
     $artifact = $installers[0]
     if ($artifact.workflow_run.id -ne $RunId -or $artifact.workflow_run.head_sha -cne $run.head_sha -or $artifact.workflow_run.head_repository_id -ne $run.repository.id -or $artifact.digest -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'Artifact provenance does not match the tested source.' }
     return [pscustomobject]@{

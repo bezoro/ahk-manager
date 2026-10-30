@@ -6,18 +6,23 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$Commit,
     [switch]$ValidateOnly,
     [ValidateSet('stable', 'test')][string]$Channel = 'stable',
-    [long]$TestRunId = 0
+    [long]$TestRunId = 0,
+    [string]$PortableArchivePath,
+    [string]$PortableManifestPath,
+    [string]$PortableSignaturePath
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Release-Limits.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'Release-GitTags.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
+Import-Module (Join-Path $PSScriptRoot 'PortableRelease.psm1')
 if (-not [IO.Path]::IsPathFullyQualified($InstallerPath) -or -not [IO.Path]::IsPathFullyQualified($ManifestPath)) { throw 'Release paths must be absolute.' }
 if ([IO.Path]::GetFileName($ManifestPath) -cne 'ahk-manager-release.json') { throw 'Unexpected release manifest name.' }
 $manifestFile = Get-Item -LiteralPath $ManifestPath
 if ($manifestFile.Length -gt 65536) { throw 'Release manifest exceeds the limit.' }
-$document = [Text.Json.JsonDocument]::Parse([IO.File]::ReadAllText($ManifestPath))
+$manifestBytes = [IO.File]::ReadAllBytes($ManifestPath)
+$document = [Text.Json.JsonDocument]::Parse([Text.UTF8Encoding]::new($false, $true).GetString($manifestBytes))
 try {
     $root = $document.RootElement
     $fileInfo = $root.GetProperty('installer')
@@ -50,12 +55,50 @@ if ($installer.PSIsContainer -or $installer.Name -cne $manifest.installer.name -
 $sha256 = (Get-FileHash -LiteralPath $InstallerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $sha512 = [Convert]::ToBase64String([Convert]::FromHexString((Get-FileHash -LiteralPath $InstallerPath -Algorithm SHA512).Hash))
 if ($manifest.installer.sha256 -cne $sha256 -or $manifest.installer.sha512 -cne $sha512) { throw 'Release installer hash mismatch.' }
+$releaseFiles = @($installer, $manifestFile)
+$portableSignatureFile = $null
+$hasPortable = -not [string]::IsNullOrWhiteSpace($PortableArchivePath) -or -not [string]::IsNullOrWhiteSpace($PortableManifestPath)
+if ($hasPortable) {
+    if ([string]::IsNullOrWhiteSpace($PortableArchivePath) -or [string]::IsNullOrWhiteSpace($PortableManifestPath)) { throw 'A portable release requires both its archive and manifest.' }
+    $portableIdentity = Read-PortableReleaseManifest -ManifestPath $PortableManifestPath -ArchivePath $PortableArchivePath -ExpectedVersion $manifest.version -ExpectedCommit $manifest.commit -ExpectedPublishedAt $manifest.publishedAt -ExpectedNotes $manifest.notes
+    $releaseFiles += Get-Item -LiteralPath $PortableArchivePath
+    $releaseFiles += Get-Item -LiteralPath $PortableManifestPath
+}
+elseif (-not [string]::IsNullOrWhiteSpace($PortableSignaturePath)) { throw 'A portable signature requires its complete portable release family.' }
 if ($ValidateOnly) { Write-Host "Release $($manifest.version) validated; no network or publication performed."; return }
+if ($hasPortable) {
+    if (-not [string]::IsNullOrWhiteSpace($env:AHK_PUBLISHER_NAME)) {
+        if ([string]::IsNullOrWhiteSpace($PortableSignaturePath)) { throw 'The configured publisher requires a detached portable manifest signature.' }
+        $portableSignatureFile = Get-Item -LiteralPath $PortableSignaturePath
+        $portableSignatureIdentity = Assert-PortableManifestSignature -ManifestPath $PortableManifestPath -SignaturePath $PortableSignaturePath -Publisher $env:AHK_PUBLISHER_NAME -PassThru
+        if ($portableSignatureIdentity.ManifestSha256 -cne $portableIdentity.ManifestSha256) { throw 'The signed portable metadata changed after package validation.' }
+        $releaseFiles += $portableSignatureFile
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($PortableSignaturePath)) { throw 'Portable signatures require an explicit expected publisher policy.' }
+}
 
 if ($releaseChannel -cne $Channel -or $env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_REF -ne 'refs/heads/main' -or $env:GITHUB_REPOSITORY -cne $Repository) { throw 'Publication requires the approved channel and main-branch GitHub Actions job.' }
 if ($Channel -ceq 'stable' -and ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_SHA -cne $Commit)) { throw 'Stable publication requires an approved main-branch push.' }
 if ($Channel -ceq 'test' -and ($env:GITHUB_EVENT_NAME -ne 'workflow_run' -or $TestRunId -le 0)) { throw 'Test publication requires a trusted workflow_run publisher.' }
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'The release job token is missing.' }
+# Preserve the exact validated bytes across slow uploads and provenance queries.
+# Recomputing an expected digest after an upload could accept a concurrent change.
+$releaseFacts = @{}
+foreach ($file in $releaseFiles) {
+    $file.Refresh()
+    $digest = 'sha256:' + (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $expected = $digest
+    if ($file.FullName -ceq $installer.FullName) { $expected = 'sha256:' + $sha256 }
+    elseif ($file.FullName -ceq $manifestFile.FullName) { $expected = 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($manifestBytes)).ToLowerInvariant() }
+    elseif ($hasPortable -and $file.FullName -ceq $portableIdentity.ArchivePath) { $expected = 'sha256:' + $portableIdentity.Sha256 }
+    elseif ($hasPortable -and $file.FullName -ceq $portableIdentity.ManifestPath) { $expected = 'sha256:' + $portableIdentity.ManifestSha256 }
+    elseif ($null -ne $portableSignatureFile -and $file.FullName -ceq $portableSignatureFile.FullName) {
+        $expected = 'sha256:' + $portableSignatureIdentity.SignatureSha256
+        if ($file.Length -ne $portableSignatureIdentity.Bytes) { throw 'The portable signature changed after verification.' }
+    }
+    if ($digest -cne $expected) { throw 'A release file changed after validation; nothing was uploaded.' }
+    $releaseFacts[$file.Name] = [pscustomobject]@{ Bytes = $file.Length; Digest = $digest }
+}
 $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'Bezoro-AhkManager-Release' }
 $invoke = Get-Command Invoke-RestMethod
 $request = {
@@ -97,10 +140,10 @@ else {
     $release = Invoke-RestMethod -Method Post -Uri $base -Headers $headers -ContentType 'application/json' -Body $body
 }
 
-foreach ($file in @($installer, $manifestFile)) {
+foreach ($file in $releaseFiles) {
     $existing = @($release.assets | Where-Object name -CEQ $file.Name)
     if ($existing.Count -gt 0) {
-        $digest = 'sha256:' + (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $digest = $releaseFacts[$file.Name].Digest
         if ($existing.Count -ne 1 -or $existing[0].size -ne $file.Length -or $existing[0].state -cne 'uploaded' -or $null -eq $existing[0].PSObject.Properties['digest'] -or $existing[0].digest -cne $digest) { throw "Existing asset $($file.Name) differs from this build. Immutable release assets are never overwritten." }
         continue
     }
@@ -115,9 +158,11 @@ if ($null -eq $actual -or $actual -cne $Commit) { throw 'The release tag changed
 if ($alreadyPublished) { Write-Host "Release $tag is already published with identical assets; no changes were made."; return }
 $release = Invoke-RestMethod -Uri "$base/$($release.id)" -Headers $headers
 if ($release.tag_name -cne $tag -or $release.target_commitish -cne $Commit -or $release.prerelease -isnot [bool] -or $release.prerelease -ne $isPrerelease) { throw 'The release identity or channel changed before publication.' }
-foreach ($file in @($installer, $manifestFile)) {
+foreach ($file in $releaseFiles) {
     $assets = @($release.assets | Where-Object { $_.name -ceq $file.Name -and $_.state -ceq 'uploaded' })
-    $digest = 'sha256:' + (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $digest = $releaseFacts[$file.Name].Digest
+    $file.Refresh()
+    if ($file.Length -ne $releaseFacts[$file.Name].Bytes -or ('sha256:' + (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()) -cne $digest) { throw 'A release file changed during publication; the release remains a draft.' }
     if ($assets.Count -ne 1 -or $assets[0].size -ne $file.Length -or $null -eq $assets[0].PSObject.Properties['digest'] -or $assets[0].digest -cne $digest) { throw 'An uploaded asset changed before publication; the release remains a draft.' }
 }
 if (-not $release.draft) { Write-Host "Release $tag was published concurrently; verified assets were preserved without further changes."; return }
@@ -130,4 +175,4 @@ if ($Channel -ceq 'test') {
 $latest = if ($isPrerelease) { 'false' } else { 'legacy' }
 $published = Invoke-RestMethod -Method Patch -Uri "$base/$($release.id)" -Headers $headers -ContentType 'application/json' -Body (@{ draft = $false; prerelease = $isPrerelease; make_latest = $latest } | ConvertTo-Json)
 if ($published.draft) { throw 'GitHub did not confirm release publication.' }
-Write-Host "Published $($published.html_url) with its manifest and installer."
+Write-Host "Published $($published.html_url) with its verified release assets."
