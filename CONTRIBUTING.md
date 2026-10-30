@@ -68,7 +68,7 @@ build: update the Windows packaging tools
 
 Accepted types are `feat`, `fix`, `perf`, `refactor`, `docs`, `ci`, `build`, `style`, `test`, `chore`, and `revert`. Explain decisions in the body when the subject is insufficient. Breaking changes use `!` or a `BREAKING CHANGE:` footer describing compatibility and migration.
 
-CI checks only new PR/push commits. Stable versions follow Semantic Versioning: `feat` increments minor, breaking changes increment major, and other types increment patch. The highest required increment wins. In `Presentation.Electron`:
+CI checks new non-merge commits in each PR or push, including work introduced through merged branches. Merge commit metadata is excluded from commit-message linting, whether GitHub generates the subject or a maintainer supplies it. Stable versions follow Semantic Versioning: `feat` increments minor, breaking changes increment major, and other types increment patch. The highest required increment wins. In `Presentation.Electron`:
 
 ```powershell
 npm.cmd run commits:check
