@@ -51,7 +51,7 @@ public static class PortableStartupUi
             EnumChildWindows(window, (child, state) => {
                 if (Owned(child, pid, image, started) && Class(child) == "Button") {
                     observed.Add($"id={GetDlgCtrlID(child)},visible={IsWindowVisible(child)},enabled={IsWindowEnabled(child)}");
-                    if (IsWindowVisible(child) && IsWindowEnabled(child) && GetDlgCtrlID(child) == 1 && Text(child).Replace("&", "", StringComparison.Ordinal).Trim() == "OK") buttons.Add(child);
+                    if (IsWindowVisible(child) && IsWindowEnabled(child) && GetDlgCtrlID(child) is 0 or 1 && Text(child).Replace("&", "", StringComparison.Ordinal).Trim() == "OK") buttons.Add(child);
                 }
                 return buttons.Count <= 1;
             }, IntPtr.Zero);

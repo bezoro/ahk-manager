@@ -6,6 +6,8 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Win32.SafeHandles;
+using FileTime = System.Runtime.InteropServices.ComTypes.FILETIME;
 
 namespace AhkManager.TestSupport;
 
@@ -112,6 +114,23 @@ public static class InstalledUpdaterUi
 
     [DllImport("kernel32.dll")]
     static extern uint GetCurrentThreadId();
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool QueryFullProcessImageNameW(
+        SafeProcessHandle process,
+        uint flags,
+        StringBuilder image,
+        ref uint length
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetProcessTimes(
+        SafeProcessHandle process,
+        out FileTime created,
+        out FileTime exited,
+        out FileTime kernel,
+        out FileTime user
+    );
 
     [DllImport("user32.dll")]
     static extern bool ShowWindowAsync(IntPtr window, int command);
@@ -302,15 +321,45 @@ public static class InstalledUpdaterUi
         }
     }
 
+    public static DateTime CreationTime(Process process)
+    {
+        if (!GetProcessTimes(process.SafeHandle, out var created, out _, out _, out _))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return DateTime.FromFileTimeUtc(
+            ((long)created.dwHighDateTime << 32) | (uint)created.dwLowDateTime
+        );
+    }
+
+    static string ImagePath(Process process)
+    {
+        var image = new StringBuilder(32768);
+        uint length = (uint)image.Capacity;
+        if (!QueryFullProcessImageNameW(process.SafeHandle, 0, image, ref length))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return image.ToString();
+    }
+
+    public static string[] IdentityDetails(Process process)
+    {
+        var details = new List<string>();
+        try { details.Add("pid=" + process.Id); details.Add("exited=" + process.HasExited); }
+        catch (Exception error) { details.Add("process=" + error.GetType().Name); }
+        try { details.Add("created=" + CreationTime(process).ToString("O")); }
+        catch (Exception error) { details.Add("creation=" + error.GetType().Name + ":" + error.HResult); }
+        try { details.Add("image=" + ImagePath(process)); }
+        catch (Exception error) { details.Add("image=" + error.GetType().Name + ":" + error.HResult); }
+        return details.ToArray();
+    }
+
     public static bool Matches(int pid, string executable, DateTime started)
     {
         try
         {
             using var process = Process.GetProcessById(pid);
             return !process.HasExited
-                && process.StartTime.ToUniversalTime() == started
+                && CreationTime(process) == started
                 && string.Equals(
-                    process.MainModule?.FileName,
+                    ImagePath(process),
                     executable,
                     StringComparison.OrdinalIgnoreCase
                 );

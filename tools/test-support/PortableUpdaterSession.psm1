@@ -67,12 +67,20 @@ function Start-PortableSession {
         } while (-not $process -and [DateTime]::UtcNow -lt $deadline)
         if (-not $process) { throw 'The root launcher did not create its exact portable application session.' }
     }
-    $created = $process.StartTime.ToUniversalTime()
-    $matches = [AhkManager.TestSupport.InstalledUpdaterUi]::Matches($process.Id, $application, $created)
+    $null = $process.SafeHandle
+    $created = [AhkManager.TestSupport.InstalledUpdaterUi]::CreationTime($process)
+    $identityDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    $identityAttempts = 0
+    do {
+        $identityAttempts++
+        $matches = [AhkManager.TestSupport.InstalledUpdaterUi]::Matches($process.Id, $application, $created)
+        if ($matches -or $process.HasExited) { break }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $identityDeadline)
     # Kernel process creation timestamps can precede precise UtcNow by a clock
     # tick. Identity still requires this retained PID, exact image and creation.
     $inCreationWindow = $created -ge $startedBefore.AddSeconds(-1) -and $created -le [DateTime]::UtcNow.AddSeconds(1)
-    $identity = [ordered]@{ fixture = $true; pid = $process.Id; image = $application; launchRequestedAtUtc = $startedBefore.ToString('O'); processCreatedAtUtc = $created.ToString('O'); creationDeltaMilliseconds = ($created - $startedBefore).TotalMilliseconds; exactIdentityMatches = $matches; withinCreationWindow = $inCreationWindow }
+    $identity = [ordered]@{ fixture = $true; pid = $process.Id; image = $application; launchRequestedAtUtc = $startedBefore.ToString('O'); processCreatedAtUtc = $created.ToString('O'); creationDeltaMilliseconds = ($created - $startedBefore).TotalMilliseconds; exactIdentityMatches = $matches; withinCreationWindow = $inCreationWindow; identityAttempts = $identityAttempts; kernelIdentity = [AhkManager.TestSupport.InstalledUpdaterUi]::IdentityDetails($process) }
     [IO.File]::WriteAllText((Join-Path $EvidenceRoot 'session-identity.json'), ($identity | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     if (-not $inCreationWindow -or -not $matches) { throw 'The portable application session identity changed.' }
     $session = [pscustomobject]@{ Process = $process; Started = $created; Image = $application; Socket = $null; Sequence = 0; Capture = $null; Port = $port }
