@@ -173,6 +173,91 @@ test('trusted child proof and hello retain exact FILETIME and revision strings',
   await client.shutdown();
   assert.equal(client.exited, true);
 });
+test('authenticated profile initialization and portable data preparation dispatch their exact requests and validate results', async () => {
+  const confirmed = {
+    outcome: 'Confirmed',
+    code: 'None',
+    detail: null,
+    correlationId: null,
+    succeeded: true,
+  };
+  const selectedPath =
+    'D:\\Manager Data\\.New Data.ahk-manager-move-11111111-1111-1111-1111-111111111111';
+  const f = setup({
+    reply: (action) =>
+      action === 'initializeProfile' || action === 'preparePortableDataDirectory'
+        ? confirmed
+        : undefined,
+  });
+  await f.client.start();
+  assert.deepEqual(await f.client.request('initializeProfile', {}), confirmed);
+  await f.client.request('load', {});
+  assert.deepEqual(
+    await f.client.request('preparePortableDataDirectory', { path: selectedPath }),
+    confirmed,
+  );
+  assert.deepEqual(
+    f.calls.map(({ action, payload, session }) => ({ action, payload, session })),
+    [
+      {
+        action: 'hello',
+        payload: { parentPid: process.pid, parentCreated: '134000000000000001' },
+        session: nonce,
+      },
+      { action: 'initializeProfile', payload: {}, session: nonce },
+      { action: 'load', payload: {}, session: nonce },
+      { action: 'preparePortableDataDirectory', payload: { path: selectedPath }, session: nonce },
+    ],
+  );
+  assert.equal(f.client.ready, true);
+  await f.client.shutdown();
+});
+test('profile and portable data operation refusals remain validated results without closing the authenticated session', async () => {
+  for (const action of ['initializeProfile', 'preparePortableDataDirectory']) {
+    const refused = {
+      outcome: 'Failed',
+      code: action === 'initializeProfile' ? 'ImportInvalid' : 'InvalidPath',
+      detail: 'The original data has been preserved.',
+      correlationId: null,
+      succeeded: false,
+    };
+    const f = setup({ reply: (requested) => (requested === action ? refused : undefined) });
+    await f.client.start();
+    assert.deepEqual(
+      await f.client.request(action, action === 'initializeProfile' ? {} : { path: 'D:\\Data' }),
+      refused,
+    );
+    assert.equal(f.client.ready, true);
+    await f.client.request('refresh', {});
+    await f.client.shutdown();
+  }
+});
+test('malformed profile and portable data responses fail the broker session without replaying either operation', async () => {
+  for (const action of ['initializeProfile', 'preparePortableDataDirectory']) {
+    for (const invalid of [{ outcome: 'Forged' }, { detail: 42 }, { unexpected: true }]) {
+      const f = setup({
+        reply: (requested) =>
+          requested === action
+            ? {
+                outcome: 'Confirmed',
+                code: 'None',
+                detail: null,
+                correlationId: null,
+                succeeded: true,
+                ...invalid,
+              }
+            : undefined,
+      });
+      await f.client.start();
+      const payload = action === 'initializeProfile' ? {} : { path: 'D:\\Data' };
+      await assert.rejects(f.client.request(action, payload), UnknownAfterDispatchError);
+      assert.equal(f.client.ready, false);
+      await assert.rejects(f.client.request(action, payload));
+      assert.equal(f.calls.filter((call) => call.action === action).length, 1);
+      f.child.emit('exit', 1, null);
+    }
+  }
+});
 test('adoption descriptor is passed only as blocked startup data and late adoption results are validated without replay', async () => {
   const descriptor = `11111111-1111-1111-1111-111111111111|${'a'.repeat(64)}|10|100|${'b'.repeat(64)}`;
   const f = setup({

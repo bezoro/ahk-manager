@@ -86,6 +86,8 @@ const results: Record<string, Validator> = {
   adoptStartupContinuation: operationResult,
   startupAdoptionStatus: operationResult,
   hello: shape({ protocolVersion: (v) => v === 1, profileRoot: text(), hostExecutable: text() }),
+  initializeProfile: operationResult,
+  preparePortableDataDirectory: operationResult,
   load: snapshot,
   snapshot,
   refresh: snapshot,

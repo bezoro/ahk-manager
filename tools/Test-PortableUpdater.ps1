@@ -18,6 +18,10 @@ Import-Module (Join-Path $PSScriptRoot 'test-support/PortableUpdaterSession.psm1
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/InstalledUpdaterUi.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableStartupUi.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableDataPickerUi.cs')
+$readStartupDialog = [Func[IntPtr, int, string, DateTime, string]] {
+    param([IntPtr]$WindowHandle, [int]$ProcessId, [string]$ImagePath, [DateTime]$StartedAt)
+    return [AhkManager.TestSupport.InstalledUpdaterUi]::AccessibleDialogText($WindowHandle, $ProcessId, $ImagePath, $StartedAt)
+}
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sid = $identity.User.Value
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -333,7 +337,7 @@ try {
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         $dismissed = $false
         do {
-            if ([AhkManager.TestSupport.PortableStartupUi]::DismissRefusal($session.Process.Id, $session.Image, $session.Started)) { $dismissed = $true; break }
+            if ([AhkManager.TestSupport.PortableStartupUi]::DismissRefusal($session.Process.Id, $session.Image, $session.Started, $readStartupDialog)) { $dismissed = $true; break }
             Start-Sleep -Milliseconds 100
         } while (-not $session.Process.HasExited -and [DateTime]::UtcNow -lt $deadline)
         Write-Json 'foreign-root-windows.json' ([AhkManager.TestSupport.InstalledUpdaterUi]::Describe($session.Process.Id, $session.Image, $session.Started))

@@ -321,6 +321,18 @@ public static class InstalledUpdaterUi
         }
     }
 
+    public static string AccessibleDialogText(
+        IntPtr window,
+        int pid,
+        string executable,
+        DateTime started
+    ) =>
+        Owned(window, pid, executable, started)
+        && IsWindowVisible(window)
+        && ClassName(window) == "#32770"
+            ? AccessibleText(window, pid, executable, started)
+            : "";
+
     static bool Owned(IntPtr window, int pid, string executable, DateTime started)
     {
         GetWindowThreadProcessId(window, out uint owner);
