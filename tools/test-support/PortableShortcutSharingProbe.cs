@@ -14,6 +14,7 @@ public sealed class PortableShortcutSharingProbe : IDisposable
 {
     const long MaximumFileBytes = 2 * 1024 * 1024;
     const long MaximumReadBytes = 64 * 1024 * 1024;
+    const long MaximumWatchMilliseconds = 120000;
     readonly object gate = new();
     readonly CancellationTokenSource cancellation = new();
     readonly Dictionary<string, long> lengths = new(StringComparer.OrdinalIgnoreCase);
@@ -119,7 +120,11 @@ public sealed class PortableShortcutSharingProbe : IDisposable
     {
         try
         {
-            while (!cancellation.IsCancellationRequested && elapsed.ElapsedMilliseconds < 10000)
+            // Include launcher/browser startup; release still happens on the first retry.
+            while (
+                !cancellation.IsCancellationRequested
+                && elapsed.ElapsedMilliseconds < MaximumWatchMilliseconds
+            )
             {
                 var files = Directory.GetFiles(
                     logDirectory,
