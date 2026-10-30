@@ -1,4 +1,5 @@
 import type { UpdateChannel, UpdateState } from './updates.js';
+import type { StorageChangeResult, StorageState } from './storage.js';
 /** Lossless decimal strings are used for every .NET Int64 field. */
 export type Decimal = string;
 export type AuthorityMode = 'Normal' | 'Administrator';
@@ -255,6 +256,12 @@ export interface ThemeState {
   material: 'mica' | 'solid';
 }
 export interface AhkManagerApi {
+  getStorageState(): Promise<StorageState>;
+  chooseDataLocation(): Promise<StorageChangeResult | null>;
+  openDataLocation(): Promise<void>;
+  restoreDefaultDataLocation(): Promise<StorageChangeResult>;
+  restartForDataMove(): Promise<void>;
+  cancelDataMove(): Promise<StorageState>;
   getUpdateState(): Promise<UpdateState>;
   checkUpdates(): Promise<UpdateState>;
   installUpdate(id: string): Promise<UpdateState>;

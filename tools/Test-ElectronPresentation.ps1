@@ -198,6 +198,12 @@ try {
     Start-Sleep -Milliseconds 300
     Save-Capture 'dark-preferences'
 
+    foreach ($theme in @('light', 'dark')) {
+        Set-Presentation $theme
+        Invoke-Assertions 'dataLocation' 'dataLocation'
+        Save-Capture "$theme-data-location"
+    }
+
 
     # Update history is independent of the production backend. Exercise the
     # normal page and cached rollback recovery in both themes and smaller views.

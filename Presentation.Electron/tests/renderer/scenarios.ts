@@ -747,6 +747,89 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
   );
   results.push(...(await runStartInTrayScenario()));
   await check(
+    'portable data choices prepare a restart without renderer-supplied paths or lost preferences',
+    async () => {
+      await window.fixtureHarness.resetResponses();
+      await window.fixtureHarness.setState(host);
+      await tick();
+      await window.fixtureHarness.openPreferences();
+      await until(
+        () => !!document.querySelector('input[aria-label="Current data folder"]'),
+        'Data location did not load',
+      );
+      const previous = input('Current data folder').value;
+      await window.fixtureHarness.clearCalls();
+      button('Change location…').click();
+      await until(
+        () =>
+          !!document
+            .querySelector('[aria-labelledby="settings-data-location-title"] [role="status"]')
+            ?.textContent?.includes('D:\\Manager Data'),
+        'The data move was not prepared',
+      );
+      assert(
+        input('Current data folder').value === previous,
+        'Preparing a move changed the active folder',
+      );
+      const calls = await window.fixtureHarness.calls();
+      assert(
+        calls.some((call) => call.method === 'chooseDataLocation' && call.args.length === 0),
+        'The renderer supplied a data path',
+      );
+      button('Cancel move').click();
+      await until(
+        () =>
+          !document
+            .querySelector('[aria-labelledby="settings-data-location-title"] [role="status"]')
+            ?.textContent?.includes('Prepared data location'),
+        'The prepared move did not cancel',
+      );
+      const checkbox = document.getElementById('settings-start-in-tray') as HTMLInputElement;
+      checkbox.click();
+      await tick();
+      assert(button('Change location…').disabled, 'An unsaved preference allowed a data restart');
+      checkbox.click();
+      await tick();
+      await window.fixtureHarness.setResponse('chooseDataLocation', {
+        error: 'Choose an empty data folder.',
+      });
+      button('Change location…').click();
+      await until(
+        () =>
+          !!document
+            .querySelector('[aria-labelledby="settings-data-location-title"] [role="alert"]')
+            ?.textContent?.includes('Choose an empty data folder.'),
+        'Data preparation errors were hidden',
+      );
+      assert(
+        input('Current data folder').value === previous,
+        'A failed move changed the active folder',
+      );
+      await window.fixtureHarness.resetResponses();
+      button('Change location…').click();
+      await until(
+        () =>
+          !!document
+            .querySelector('[aria-labelledby="settings-data-location-title"] [role="status"]')
+            ?.textContent?.includes('Prepared data location'),
+        'The second move was not prepared',
+      );
+      button('Restart Manager').click();
+      await until(
+        () => !document.querySelector('[role="dialog"]'),
+        'Restart did not close preferences',
+      );
+      await tick();
+      assert(
+        (await window.fixtureHarness.calls()).some(
+          (call) => call.method === 'restartForDataMove' && call.args.length === 0,
+        ),
+        'Restart was not explicitly requested',
+      );
+      await window.ahkManager.cancelDataMove();
+    },
+  );
+  await check(
     'activity retains two-script association and local friendly-name search',
     async () => {
       await window.fixtureHarness.setState({
@@ -2528,6 +2611,42 @@ export async function previewPreferences(): Promise<AssertionRecord[]> {
   return [
     {
       name: 'preferences preview shows startup defaults and automatic VS Code editor',
+      passed: true,
+    },
+  ];
+}
+
+export async function previewDataLocation(): Promise<AssertionRecord[]> {
+  const previous = document.querySelector('[role="dialog"]');
+  if (previous) button(text.cancel, previous).click();
+  await window.fixtureHarness.resetResponses();
+  await window.fixtureHarness.setState(state());
+  await tick();
+  await window.fixtureHarness.setResponse('getStorageState', {
+    value: {
+      mode: 'portable',
+      currentDataDirectory: 'C:\\Portable Manager\\Data',
+      defaultDataDirectory: 'C:\\Portable Manager\\Data',
+      pendingDataDirectory: 'D:\\Personal files\\AutoHotkey Manager\\Data',
+      canChange: false,
+      error: null,
+    },
+  });
+  await window.fixtureHarness.openPreferences();
+  await until(
+    () =>
+      !!document
+        .querySelector('[aria-labelledby="settings-data-location-title"] [role="status"]')
+        ?.textContent?.includes('Prepared data location'),
+    'Prepared data preview did not load',
+  );
+  document
+    .querySelector('[aria-labelledby="settings-data-location-title"]')
+    ?.scrollIntoView({ block: 'center' });
+  await tick();
+  return [
+    {
+      name: 'portable data preview shows active and prepared locations with explicit restart and cancel',
       passed: true,
     },
   ];

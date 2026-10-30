@@ -81,18 +81,38 @@ internal static class UpdatePaths
             )
         )
             throw new InvalidDataException("Plan is outside its operation directory.");
-        ValidateInstallerLocation(plan.InstallerPath, plan.Version, updatesRoot);
+        ValidateInstallerLocation(
+            plan.InstallerPath,
+            plan.Version,
+            updatesRoot,
+            UpdateProtocol.Portable(plan)
+        );
         if (plan.Fallback is { } fallback)
-            ValidateInstallerLocation(fallback.InstallerPath, fallback.Version, updatesRoot);
+            ValidateInstallerLocation(
+                fallback.InstallerPath,
+                fallback.Version,
+                updatesRoot,
+                UpdateProtocol.Portable(plan)
+            );
     }
 
-    internal static void ValidateInstallerLocation(string path, string version, string updatesRoot)
+    internal static void ValidateInstallerLocation(
+        string path,
+        string version,
+        string updatesRoot,
+        bool portable = false
+    )
     {
         if (
             !UpdateProtocol.ReleaseVersion(version)
             || !Equal(
                 path,
-                Path.Combine(Local(updatesRoot), "installers", version, "installer.exe")
+                Path.Combine(
+                    Local(updatesRoot),
+                    "installers",
+                    version,
+                    portable ? "archive.zip" : "installer.exe"
+                )
             )
         )
             throw new InvalidDataException("Installer is outside its version cache.");

@@ -2,7 +2,7 @@
 
 Use English for code, comments, application text, documentation, commit messages, issues, and pull requests. Preserve user-authored script contents, names, paths, historical records, and compatibility identifiers in their original form.
 
-Start with [ARCHITECTURE.md](ARCHITECTURE.md). Current product changes belong in `Core/`, `Backend/`, `UpdateHost/`, and `Presentation.Electron/`. Archived WinUI/WPF projects do not validate the Electron interface.
+Start with [ARCHITECTURE.md](ARCHITECTURE.md). Current product changes belong in `Core/`, `Backend/`, `UpdateHost/`, `PortableLauncher/`, and `Presentation.Electron/`. Archived WinUI/WPF projects do not validate the Electron interface.
 
 ## Environment
 
@@ -116,6 +116,10 @@ Build the complete distribution with fresh paths:
 ```
 
 The build uses Electron's official runtime installer, checks types, runs Node tests, and publishes Backend and UpdateHost. Packaging creates NSIS and an exact owned-file inventory. `-DirectoryOnly` produces an unpacked app directory.
+
+Portable packaging also requires the Visual Studio x64 C++ build tools and Windows SDK. Build its launcher with `tools/Build-PortableLauncher.ps1`, then pass the unpacked application directory and launcher to `tools/Build-PortablePackage.ps1`. Use `tools/New-PortableReleaseManifest.ps1` to generate the separate release manifest. All inputs must use the same release version and source commit. The ZIP contains `App`, a root launcher and package descriptors, never `Data`. See the Windows workflow for the exact build sequence.
+
+`tools/Test-PortableLauncher.ps1` checks native argument forwarding and process behavior. `tools/Test-PortablePackage.ps1` checks archive inventory and release identity. `tools/Test-PortableUpdater.ps1` runs the real baseline/candidate update and rollback in a disposable Windows environment. Its separately built baseline is a test fixture and must not be published as a release asset. Changes to portable layout must keep the native helper, `RuntimeProfileLayout`, TypeScript deployment resolver, packaging script and their tests consistent.
 
 `tools/Test-UpdateInstallation.ps1` installs, updates, and rolls back between real packages. Use a disposable Windows environment without a prior installation/profile, as described in [SAFE-TESTS.md](SAFE-TESTS.md). CI prepares that environment. A local package build never publishes a GitHub release.
 

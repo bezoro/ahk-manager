@@ -156,7 +156,8 @@ export async function prepareUpdate(
   await store.safeDirectory(path.dirname(directory), true);
   await fs.mkdir(directory, { mode: 0o700 });
   const plan = {
-    schemaVersion: 1,
+    schemaVersion: store.deployment === 'portable' ? 2 : 1,
+    ...(store.deployment === 'portable' ? { deployment: 'portable' } : {}),
     operationId,
     parentPid: process.pid,
     parentStartedAtUtc,

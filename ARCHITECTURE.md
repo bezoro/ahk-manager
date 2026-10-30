@@ -10,6 +10,7 @@ flowchart LR
   Backend --> Core[Core]
   Main -->|Plan and receipts| UpdateHost[.NET update host]
   UpdateHost --> NSIS[NSIS installer]
+  UpdateHost --> Portable[Verified portable ZIP]
 ```
 
 ## Active projects
@@ -26,7 +27,7 @@ flowchart LR
 | `Tests.Backend`                              | Backend and Core checks, with shared adapters under `Fixtures/`                                                      |
 | `Presentation.Electron/tests`                | Node tests and the presentation harness                                                                              |
 
-Within `Presentation.Electron`, `src/main/desktop/` owns theme, tray, dialogs, and window diagnostics. `src/main/ipc/` registers authenticated handlers and applies request policy. `src/main/updates/` owns release discovery, transport, download, cache, shutdown confirmation, and handoff. `application-updates.ts` composes the updater. `src/main/index.ts` starts `application.ts`, the application coordinator. `src/main/controller/` separates selection, identity, policies, and stop-and-exit coordination.
+Within `Presentation.Electron`, `src/main/desktop/` owns theme, tray, dialogs, and window diagnostics. `src/main/ipc/` registers authenticated handlers and applies request policy. `src/main/updates/` owns release discovery, transport, download, cache, shutdown confirmation, and handoff. `application-updates.ts` composes the updater. `src/main/storage/` resolves the deployment and manages portable data moves. `src/main/index.ts` starts `application.ts`, the application coordinator. `src/main/controller/` separates selection, identity, policies, and stop-and-exit coordination.
 
 `Bezoro.AhkManager.sln` contains Core, Backend, UpdateHost, and Tests.Backend. Active .NET projects target `net10.0-windows`; published executables are self-contained for `win-x64`.
 
@@ -61,6 +62,10 @@ Privilege transfer uses process proofs, receipts, and an authenticated handoff. 
 
 `Core/Models/StateDocuments.cs` defines versioned documents; `ManagerJson.cs` registers serialization. `Core/Services/ContinuationJson.cs` handles continuation records. `Backend/ProtocolJsonContext.cs` registers Electron/backend wire types. JSON reflection is disabled in Core and Backend; add changed types to the appropriate context.
 
+These AppData locations belong to the installed edition. In a portable deployment, `Core/Infrastructure/RuntimeProfileLayout.cs` and `main/storage/deployment.ts` derive the portable root from the actual Electron host under `App`. The selected data folder contains `Profile`, `Chromium`, and `Updates`. The root `portable.json` is bounded, has an exact schema, and survives application replacement. Renderer requests cannot supply a data path; only the main process's native picker can select one.
+
+The native initializer checks the dedicated product container and selected data directory before Chromium starts. Backend initialization acquires effect ownership before importing an existing Electron profile. A data move prepares a private staging directory and intent, then copies and verifies closed operational data on the next normal restart. The pointer changes only after promotion. Source and recovery copies remain available, and an unverified source cannot authorize an empty-profile fallback.
+
 Moving a type to `Bezoro.AhkManager.Core.*` must not change persisted JSON. Property names, enum values, serialization settings, schema versions, and continuation hashes are compatibility contracts. Format changes need backward-reading and recovery coverage.
 
 Historical names such as the Run value `Bezoro.AhkManager.WinUI`, the `AhkManagerWinUI` profile, and mutex identities are intentional. Keep them when changing namespaces or display text. WinUI profile migration and older catalog import have separate previews and confirmation in `Backend/ProfileMigrationService.cs` and `Core/Services/LegacyImportService.cs`.
@@ -69,11 +74,15 @@ Historical names such as the Run value `Bezoro.AhkManager.WinUI`, the `AhkManage
 
 The main process checks a fixed public repository, validates release manifests, and uses `electron-updater` to download and verify installers. GitHub credentials are not part of the desktop updater. Updates require explicit user action, confirmed backend shutdown, and normal manager exit. UpdateHost backs up the installation and its registry entries before running NSIS, and restores them after a confirmed failure. Scripts remain running.
 
+Portable updates use a separate protocol-2 manifest and bounded ZIP downloader. `PortableLauncher/` is the native root entry point; `App` contains the replaceable application. `UpdateHost/Portable/` validates the complete package inventory, stages files on the same volume, snapshots `App`, and promotes the new application without registry registration. It also replaces the root launcher and inventory while preserving `portable.json` and the selected data directory. Confirmed failures restore application files. Unknown results preserve evidence and block replay.
+
+When publisher policy is configured, a detached CMS signature binds the exact portable release manifest and its ZIP digest. The native signature verifier checks the configured publisher, certificate chain, code-signing usage, and digest. Installer Authenticode checks remain independent. Neither edition falls back from a required signature to hash-only verification.
+
 Electron's Chromium network API and Node's fetch API handle manual redirects differently. Updater transport must expose redirects to the bounded, allowlisted release client instead of automatically following arbitrary destinations. This boundary needs tests using the real Electron runtime, in addition to protocol unit tests.
 
 `UpdateHost/Runtime/` owns the apply sequence and effects; `Storage/` verifies packages, profiles, registry entries, and snapshots; `Protocol/` defines plans and results. Isolated checks live under `SelfTests/`.
 
-`Presentation.Electron/scripts/owned-files.cjs` generates the inventory and hashes of installed files. `installer.nsh` uses that inventory and the update protocol to validate installation/removal. `tools/Build-Electron.ps1` and `tools/Package-Electron.ps1` produce the distribution. Windows CI validates projects, captures the interface, and exercises real installer update/rollback. See [UPDATES.md](UPDATES.md) for publication details.
+`Presentation.Electron/scripts/owned-files.cjs` generates the inventory and hashes of installed files. `installer.nsh` uses that inventory and the update protocol to validate installation/removal. `tools/Build-Electron.ps1` and `tools/Package-Electron.ps1` produce the installed distribution. `Build-PortableLauncher.ps1`, `Build-PortablePackage.ps1`, and `New-PortableReleaseManifest.ps1` produce the portable family from the same application version and commit. Windows CI validates projects, captures the interface, and exercises real installed and portable update/rollback. See [UPDATES.md](UPDATES.md) for publication details.
 
 ## Historical code
 

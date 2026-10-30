@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Bezoro.AhkManager.Core.Infrastructure;
 
 namespace Bezoro.AhkManager.Backend;
 
@@ -37,11 +38,9 @@ internal static class Program
             if (startupDescriptor is not null)
                 _ = StartupAdoptionDescriptor.Parse(startupDescriptor);
             using var parent = new ParentGuard(pid, AppContext.BaseDirectory);
-            string profile = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Bezoro",
-                "AhkManagerElectron"
-            );
+            string profile = RuntimeProfileLayout
+                .ForHost(parent.Proof.ParentExecutable)
+                .ProfileRoot;
             var host = new StdioHost(
                 Console.OpenStandardInput(),
                 Console.OpenStandardOutput(),
@@ -62,6 +61,7 @@ internal static class Program
         catch (Exception ex)
             when (ex
                     is IOException
+                        or InvalidDataException
                         or ArgumentException
                         or UnauthorizedAccessException
                         or System.ComponentModel.Win32Exception

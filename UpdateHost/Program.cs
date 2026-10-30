@@ -6,6 +6,8 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--self-test-portable-policy")
+            return SelfTests.RunPortablePolicy();
         if (args.Length == 3 && args[0] == "--self-test" && args[1] == "--root")
         {
             try
@@ -18,6 +20,30 @@ internal static class Program
                 return 65;
             }
         }
+
+        if (args.Length == 1 && args[0] == "--initialize-portable")
+        {
+            try
+            {
+                if (!OperatingSystem.IsWindows())
+                    throw new InvalidOperationException(
+                        "Portable initialization requires Windows."
+                    );
+                _ = PortableInitialization.Run();
+                return 0;
+            }
+            catch (Exception ex) when (UpdateProtocol.Known(ex))
+            {
+                AdmissionDiagnostics.Write(UpdatePhase.InstallationOwnership, ex);
+                return 65;
+            }
+        }
+
+        if (args.Length == 1 && args[0] == "--verify-portable-manifest")
+            return PortableSignatureVerification.Run();
+
+        if (args.Length == 1 && args[0] == "--lease-portable-data-move")
+            return await PortableDataMoveLease.Run().ConfigureAwait(false);
 
         string? trustedOperation = null;
         UpdatePlan? trustedPlan = null;
@@ -36,7 +62,14 @@ internal static class Program
                 throw new InvalidDataException(
                     "Use --plan <absolute path> --sha256 <plan checksum>."
                 );
-            string root = UpdatePaths.UpdatesRoot;
+            var portable = PortableLayout.FromParent();
+            // App itself must be renameable during promotion, but retain the
+            // dedicated container and every ancestor through the whole apply.
+            // A permissive repository parent cannot swap the validated namespace.
+            using var portableDirectories = portable is null
+                ? null
+                : new DirectoryLease([portable.Root, portable.Data, portable.Updates]);
+            string root = portable?.Updates ?? UpdatePaths.UpdatesRoot;
             phase = UpdatePhase.HostLocation;
             string ownPath =
                 Environment.ProcessPath
@@ -62,6 +95,17 @@ internal static class Program
             );
             phase = UpdatePhase.PlanValidation;
             UpdateProtocol.Validate(plan);
+            if (UpdateProtocol.Portable(plan) != (portable is not null))
+                throw new InvalidDataException(
+                    "The update deployment does not match the authenticated Manager."
+                );
+            if (
+                portable is not null
+                && !UpdatePaths.Equal(plan.InstallDirectory, portable.Application)
+            )
+                throw new InvalidDataException(
+                    "The portable update targets another application directory."
+                );
             phase = UpdatePhase.PlanLocation;
             UpdatePaths.ValidatePlanLocation(args[1], plan, root);
             plan = plan with
@@ -105,14 +149,10 @@ internal static class Program
                 )
             )
                 throw new InvalidDataException("Installation and update cache overlap.");
-            // Portable copies have no managed installation registration to authorize an update.
             phase = UpdatePhase.Registration;
-            var registry = InstallationRegistration.Capture(plan.InstallDirectory);
-            if (
-                plan.Fallback is { } old
-                && !UpdateProtocol.SameVersion(old.Version, registry.Version)
-            )
-                throw new InvalidDataException("Fallback does not identify the installed version.");
+            var registry = portable is null
+                ? InstallationRegistration.Capture(plan.InstallDirectory)
+                : null;
             phase = UpdatePhase.InstallationOwnership;
             ProfileOwnership.Verify(plan.InstallDirectory);
             phase = UpdatePhase.InstallationParentOwnership;
@@ -122,29 +162,43 @@ internal static class Program
                 plan.InstallerPath,
                 plan.Version,
                 plan.InstallerSha256,
-                root
+                root,
+                portable is not null
             );
+            if (portable is not null)
+                _ = PortablePayload.ValidateArchive(package, plan.Version);
             phase = UpdatePhase.FallbackPackage;
             using var fallback = plan.Fallback is { } previous
                 ? new PackageLease(
                     previous.InstallerPath,
                     previous.Version,
                     previous.InstallerSha256,
-                    root
+                    root,
+                    portable is not null
                 )
                 : null;
             phase = UpdatePhase.ParentIdentity;
             using var parent = new ParentLease(plan);
-            var effects = new NativeApplyEffects(
-                plan,
-                operation,
-                parent,
-                package,
-                registry,
-                log.Write
-            );
+            using var original = portable is null ? null : new PortableInventory(portable.Root);
+            string installedVersion = registry?.Version ?? original!.Descriptor.Version;
+            if (
+                plan.Fallback is { } old
+                && !UpdateProtocol.SameVersion(old.Version, installedVersion)
+            )
+                throw new InvalidDataException("Fallback does not identify the installed version.");
+            IApplyEffects effects = portable is null
+                ? new NativeApplyEffects(plan, operation, parent, package, registry!, log.Write)
+                : new PortableApplyEffects(
+                    plan,
+                    operation,
+                    parent,
+                    package,
+                    portable,
+                    original!,
+                    log.Write
+                );
             phase = UpdatePhase.InstalledImage;
-            effects.VerifyInstalled(registry.Version);
+            effects.VerifyInstalled(installedVersion);
             phase = UpdatePhase.Cancellation;
             effects.CheckCancellation();
             phase = UpdatePhase.Readiness;

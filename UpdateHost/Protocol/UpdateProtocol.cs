@@ -90,9 +90,9 @@ internal static class UpdateProtocol
             && SameVersion(expected[..suffix], productVersion);
     }
 
-    internal static T Read<T>(byte[] bytes)
+    internal static T Read<T>(byte[] bytes, int maximumBytes = MaximumPlanBytes)
     {
-        if (bytes.Length is < 2 or > MaximumPlanBytes)
+        if (bytes.Length < 2 || bytes.Length > maximumBytes)
             throw new InvalidDataException("Update document exceeds its size limit.");
         using var parsed = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 24 });
         RejectDuplicates(parsed.RootElement);
@@ -120,7 +120,10 @@ internal static class UpdateProtocol
     internal static void Validate(UpdatePlan plan)
     {
         if (
-            plan.SchemaVersion != 1
+            !(
+                plan.SchemaVersion == 1 && plan.Deployment is null
+                || plan.SchemaVersion == 2 && plan.Deployment == "portable"
+            )
             || plan.OperationId == Guid.Empty
             || plan.ParentPid <= 0
             || plan.ParentStartedAtUtc.Offset != TimeSpan.Zero
@@ -142,6 +145,9 @@ internal static class UpdateProtocol
             _ = UpdatePaths.Local(fallback.InstallerPath);
         }
     }
+
+    internal static bool Portable(UpdatePlan plan) =>
+        plan.SchemaVersion == 2 && plan.Deployment == "portable";
 
     internal static void ValidateCommit(UpdatePlan plan, UpdateCommit commit)
     {

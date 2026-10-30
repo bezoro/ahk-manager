@@ -24,6 +24,7 @@ import {
   type Validator,
 } from '../shared/validation.js';
 import { updateState } from '../shared/update-validation.js';
+import { storageChangeResult, storageState } from '../shared/storage-validation.js';
 
 const hostState = shape({
   snapshot: nullable(snapshot),
@@ -97,6 +98,12 @@ function subscribe<T>(
   return () => ipcRenderer.removeListener(channel, handler);
 }
 const api: AhkManagerApi = {
+  getStorageState: () => checked('storage:get', {}, storageState),
+  chooseDataLocation: () => checked('storage:choose', {}, nullable(storageChangeResult)),
+  openDataLocation: () => checked('storage:open', {}, empty),
+  restoreDefaultDataLocation: () => checked('storage:restore-default', {}, storageChangeResult),
+  restartForDataMove: () => checked('storage:restart', {}, empty),
+  cancelDataMove: () => checked('storage:cancel', {}, storageState),
   getUpdateState: () => checked('getUpdateState', {}, updateState),
   checkUpdates: () => checked('checkUpdates', {}, updateState),
   installUpdate: (id) => checked('installUpdate', { id }, updateState),

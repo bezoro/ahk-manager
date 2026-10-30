@@ -165,6 +165,50 @@ test('the registered administration request keeps zero arguments and the native 
   assert.equal(result.outcome, 'CancelledBeforeDispatch');
 });
 
+test('data location actions accept no renderer paths and obey authenticated transition guards', async () => {
+  const f = fixture();
+  let choices = 0;
+  const state = {
+    mode: 'portable' as const,
+    currentDataDirectory: 'C:\\Manager\\Data',
+    defaultDataDirectory: 'C:\\Manager\\Data',
+    pendingDataDirectory: null,
+    canChange: true,
+    error: null,
+  };
+  f.context.storage = {
+    get: () => state,
+    choose: async () => {
+      choices++;
+      return null;
+    },
+    open: async () => {},
+    restoreDefault: async () => ({ state, restartRequired: false }),
+    restart: async () => {},
+    cancel: async () => state,
+  };
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  await assert.rejects(invoke('storage:choose', { path: 'C:\\Another user' }), /Invalid/i);
+  assert.equal(choices, 0);
+  for (const transition of [
+    'quitting',
+    'updateApplying',
+    'adoptionPending',
+    'administrationPending',
+  ] as const) {
+    f.setPolicy({ [transition]: true });
+    await assert.rejects(invoke('storage:choose'));
+    assert.deepEqual(await invoke('storage:get'), state);
+    f.setPolicy({ [transition]: false });
+  }
+  await invoke('storage:choose');
+  assert.equal(choices, 1);
+  f.guard.invalidate();
+  await assert.rejects(invoke('storage:choose'), /Stale/i);
+  assert.equal(choices, 1);
+});
+
 test('registered handlers enforce every transition policy before dispatching a mutation', async () => {
   for (const phase of [
     'quitting',

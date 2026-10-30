@@ -1,4 +1,4 @@
-import { orderlyShutdown, withinDeadline, type ShutdownBoundary } from '../lifecycle.js';
+import { shutdownWithinDeadline, type ShutdownBoundary } from '../lifecycle.js';
 
 /** A timed-out drain or placement save must never dispatch a late backend shutdown. */
 export async function shutdownForUpdate(
@@ -6,41 +6,12 @@ export async function shutdownForUpdate(
   milliseconds: number,
   schedule?: (fn: () => void, milliseconds: number) => () => void,
 ): Promise<void> {
-  let active = true;
-  const check = (): void => {
-    if (!active) throw new Error('Update preparation was cancelled.');
-  };
-  try {
-    await withinDeadline(
-      () =>
-        orderlyShutdown({
-          ...boundary,
-          drain: async () => {
-            await boundary.drain();
-            check();
-          },
-          persistPlacement: async () => {
-            check();
-            await boundary.persistPlacement();
-            check();
-          },
-          shutdownBackend: async () => {
-            check();
-            await boundary.shutdownBackend();
-          },
-        }),
-      milliseconds,
-      schedule,
-    );
-    if (boundary.backendPresent() && !boundary.backendExited())
-      throw new Error('The backend did not confirm shutdown.');
-  } catch (error) {
-    if (error instanceof Error && error.message === 'DeadlineExceeded')
-      throw new Error('The backend did not confirm shutdown in time. The update was cancelled.');
-    throw error;
-  } finally {
-    active = false;
-  }
+  await shutdownWithinDeadline(boundary, milliseconds, {
+    schedule,
+    cancelled: 'Update preparation was cancelled.',
+    timedOut: 'The backend did not confirm shutdown in time. The update was cancelled.',
+    unconfirmed: 'The backend did not confirm shutdown.',
+  });
 }
 
 /** The commit callback is unreachable until the bounded shutdown is confirmed. */

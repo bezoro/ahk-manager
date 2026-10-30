@@ -7,22 +7,27 @@ namespace Bezoro.AhkManager.Backend;
 
 internal static class ElevationReceiptStore
 {
-    internal static string ProfileRoot =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Bezoro",
-            "AhkManagerElectron"
-        );
-    internal static string ChromiumRoot =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "Bezoro",
-            "AhkManagerElectron",
-            "Chromium"
-        );
+    static readonly Lazy<RuntimeProfileLayout> Layout = new(() =>
+        RuntimeProfileLayout.ForHost(
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Bezoro.AhkManager.exe"))
+        )
+    );
+    internal static string ProfileRoot => Layout.Value.ProfileRoot;
+    internal static string ChromiumRoot => Layout.Value.ChromiumRoot;
 
     internal static bool ProfileRootsMatch(string operational, string chromium) =>
         ScriptPaths.Equal(operational, ProfileRoot) && ScriptPaths.Equal(chromium, ChromiumRoot);
+
+    internal static bool ProfileRootsMatch(
+        string operational,
+        string chromium,
+        string hostExecutable
+    )
+    {
+        var layout = RuntimeProfileLayout.ForHost(hostExecutable);
+        return ScriptPaths.Equal(operational, layout.ProfileRoot)
+            && ScriptPaths.Equal(chromium, layout.ChromiumRoot);
+    }
 
     internal static string CoordinationPath(string nonce) =>
         Path.Combine(Path.GetTempPath(), "Bezoro.AhkManager.Administration." + nonce);

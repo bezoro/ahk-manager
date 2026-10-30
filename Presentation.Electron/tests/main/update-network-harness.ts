@@ -5,6 +5,9 @@ import path from 'node:path';
 import { GitHubUpdateClient } from '../../src/main/updates/github-updates.js';
 import { createElectronUpdateFetch } from '../../src/main/updates/electron-update-fetch.js';
 import { configureUpdateNetwork } from '../../src/main/updates/update-network-policy.js';
+import { downloadPortableRelease } from '../../src/main/updates/portable-update-download.js';
+import { UpdateStore } from '../../src/main/updates/update-store.js';
+import { createHash } from 'node:crypto';
 
 const argument = process.argv.indexOf('--output');
 const output = process.argv[argument + 1];
@@ -75,10 +78,40 @@ function fixture(version: string, id: number, prerelease = false) {
 const stable = fixture('1.3.1', 11);
 const previous = fixture('1.3.0', 10);
 const preview = fixture('1.3.2-test.40.1.2', 12, true);
-const releases = [stable.release, previous.release, preview.release];
-const manifests = new Map(
+const portableBody = Buffer.from('Portable network archive fixture. Never executed.');
+const portableManifest = {
+  schemaVersion: 1,
+  updateProtocol: 2,
+  version: '1.4.0-test.40.1.6',
+  commit: 'a'.repeat(40),
+  publishedAt: '2026-10-30T00:00:00.000Z',
+  notes: 'Portable network fixture.',
+  archive: {
+    name: 'AHK-Manager-1.4.0-test.40.1.6-Portable-x64.zip',
+    bytes: portableBody.length,
+    sha256: createHash('sha256').update(portableBody).digest('hex'),
+    sha512: createHash('sha512').update(portableBody).digest('base64'),
+  },
+};
+const portableMetadata = {
+  ...preview.release,
+  id: 13,
+  tag_name: 'v' + portableManifest.version,
+  assets: [
+    {
+      id: 130,
+      name: 'ahk-manager-portable-release.json',
+      size: Buffer.byteLength(JSON.stringify(portableManifest)),
+      state: 'uploaded',
+    },
+    { id: 131, name: portableManifest.archive.name, size: portableBody.length, state: 'uploaded' },
+  ],
+};
+const releases = [stable.release, previous.release, preview.release, portableMetadata];
+const manifests = new Map<string, unknown>(
   [stable, previous, preview].map((item) => [String(item.release.assets[0]!.id), item.manifest]),
 );
+manifests.set('130', portableManifest);
 
 async function check(name: string, action: () => Promise<void>) {
   stage = name;
@@ -132,14 +165,18 @@ app
         return Response.json(releases, { headers: { ETag: 'network-fixture-etag' } });
       }
       const asset = /\/releases\/assets\/(\d+)$/.exec(url.pathname)?.[1];
-      if (url.origin === 'https://api.github.com' && asset && manifests.has(asset))
+      if (
+        url.origin === 'https://api.github.com' &&
+        asset &&
+        (manifests.has(asset) || asset === '131')
+      )
         return new Response(null, {
           status: 302,
           headers: {
             Location:
               mode === 'untrusted'
                 ? 'https://untrusted.example/fixture.json'
-                : `${CDN}/${asset}.json`,
+                : `${CDN}/${asset}.${asset === '131' ? 'zip' : 'json'}`,
           },
         });
       if (url.origin === CDN) {
@@ -147,6 +184,10 @@ app
           return new Response(null, { status: 302, headers: { Location: `${CDN}/loop.json` } });
         const id = /^\/(\d+)\.json$/.exec(url.pathname)?.[1];
         if (id && manifests.has(id)) return Response.json(manifests.get(id));
+        if (url.pathname === '/131.zip')
+          return new Response(portableBody, {
+            headers: { 'Content-Length': String(portableBody.length) },
+          });
       }
       return new Response('Unexpected fixture request.', { status: 404 });
     });
@@ -252,6 +293,30 @@ app
         mode = 'normal';
       }
     });
+    await check(
+      'the portable archive streams through the protected Electron transport and retains offline proof',
+      async () => {
+        const client = new GitHubUpdateClient(fetcher, 'portable');
+        const choices = await client.releases('test');
+        assert.equal(choices.length, 1);
+        const release = choices[0]!;
+        assert.equal(release.version, portableManifest.version);
+        const store = new UpdateStore(path.join(output, 'portable-cache'), 'portable');
+        const source = await downloadPortableRelease(release, () => {}, {
+          fetcher,
+          store,
+          verifyManifest: async () => {},
+        });
+        const cached = await store.cache(release.version, source, release.sha256, release.bytes);
+        await store.verify(cached);
+        assert.deepEqual(fs.readFileSync(cached.installerPath), portableBody);
+        assert.equal(
+          fs.readFileSync(path.join(path.dirname(cached.installerPath), 'release.json'), 'utf8'),
+          JSON.stringify(portableManifest),
+        );
+        assert.deepEqual(await new UpdateStore(store.root).cached(), []);
+      },
+    );
     await check('AbortSignal cancels a pending Chromium update request', async () => {
       mode = 'delayed';
       try {
@@ -290,6 +355,8 @@ app
           requests,
           credentialsProvided: false,
           installersDownloadedOrExecuted: false,
+          portablePackageDownloaded: true,
+          portablePackageExecuted: false,
         },
         null,
         2,

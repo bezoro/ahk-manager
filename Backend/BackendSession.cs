@@ -18,6 +18,7 @@ internal sealed class BackendSession : IBackendSession
     readonly ProfileMigrationService migration;
     readonly BackendAuthorityRequests authority;
     readonly BackendRequestDispatcher dispatcher;
+    readonly PortableProfileSession? portableProfile;
     bool loaded,
         disposed;
     Task? disposal;
@@ -34,20 +35,24 @@ internal sealed class BackendSession : IBackendSession
         string? startupDescriptor = null
     )
     {
+        var layout = RuntimeProfileLayout.ForHost(hostExecutable);
+        if (!ScriptPaths.Equal(layout.ProfileRoot, profileRoot))
+            throw new ProtocolException("ParentMismatch");
         var manager = ManagerService.CreateForTrustedStartupHost(
             profileRoot,
-            hostExecutable,
+            layout.StartupHostExecutable,
             out var owner
         );
         var session = new BackendSession(
             manager,
             profileRoot,
-            hostExecutable,
+            layout.StartupHostExecutable,
             () => owner.Held && owner.Trusted,
             new RegistryStartupAdapter(),
             startupDescriptor is null
                 ? null
-                : new StartupAdoption(StartupAdoptionDescriptor.Parse(startupDescriptor), parent)
+                : new StartupAdoption(StartupAdoptionDescriptor.Parse(startupDescriptor), parent),
+            layout
         );
         session.authority.Administration = new(
             parent,
@@ -69,12 +74,15 @@ internal sealed class BackendSession : IBackendSession
         string hostExecutable,
         Func<bool> effectsAllowed,
         IUserStartupAdapter startup,
-        StartupAdoption? startupAdoption = null
+        StartupAdoption? startupAdoption = null,
+        RuntimeProfileLayout? layout = null
     )
     {
         this.manager = manager;
         authority = new(manager, startupAdoption);
         migration = new(profileRoot, effectsAllowed);
+        if (layout is not null)
+            portableProfile = new(layout, effectsAllowed, () => manager.Snapshot);
         var startupTransfer = new StartupTransferService(
             startup,
             hostExecutable,
@@ -98,6 +106,7 @@ internal sealed class BackendSession : IBackendSession
             && action
                 is not (
                     "load"
+                    or "initializeProfile"
                     or "snapshot"
                     or "activity"
                     or "shutdown"
@@ -131,6 +140,17 @@ internal sealed class BackendSession : IBackendSession
             return Pack(preview, Protocol.Json.MigrationPreview);
         }
 
+        if (action == "initializeProfile")
+        {
+            Empty(payload);
+            return Pack(
+                portableProfile is null
+                    ? new OperationResult(Outcome.Confirmed)
+                    : await portableProfile.InitializeAsync(ct).ConfigureAwait(false),
+                Protocol.Json.OperationResult
+            );
+        }
+
         if (action == "migrate")
         {
             var request = Read(payload, Protocol.Json.ConfirmPreviewPayload);
@@ -147,6 +167,14 @@ internal sealed class BackendSession : IBackendSession
         if (action == "load")
         {
             Empty(payload);
+            if (portableProfile is not null)
+            {
+                var initialization = await portableProfile
+                    .InitializeAsync(ct)
+                    .ConfigureAwait(false);
+                if (!initialization.Succeeded)
+                    throw new ProtocolException("PortableProfileImportFailed");
+            }
             await manager.LoadAsync(ct).ConfigureAwait(false);
             loaded = true;
             return Pack(manager.Snapshot, Protocol.Json.ManagerSnapshot);
@@ -167,6 +195,15 @@ internal sealed class BackendSession : IBackendSession
 
         if (!loaded)
             throw new ProtocolException("InvalidRequest");
+        if (action == "preparePortableDataDirectory")
+        {
+            var request = Read(payload, Protocol.Json.PathPayload);
+            return Pack(
+                portableProfile?.PrepareDataDirectory(request.Path)
+                    ?? new OperationResult(Outcome.Failed, ReasonCode.InvalidPath),
+                Protocol.Json.OperationResult
+            );
+        }
         return await dispatcher.ExecuteAsync(action, payload, ct).ConfigureAwait(false);
     }
 

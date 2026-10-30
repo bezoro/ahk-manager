@@ -102,6 +102,51 @@ internal static class SnapshotSecurity
         VerifyPrivate(path, true, true);
     }
 
+    internal static void ProtectOwnedPath(string path, bool directory)
+    {
+        UpdatePaths.NoRedirects(path);
+        using var identity = WindowsIdentity.GetCurrent();
+        string owner =
+            (
+                directory
+                    ? (FileSystemSecurity)
+                        new DirectoryInfo(path).GetAccessControl(AccessControlSections.Owner)
+                    : new FileInfo(path).GetAccessControl(AccessControlSections.Owner)
+            )
+                .GetOwner(typeof(SecurityIdentifier))
+                ?.Value
+            ?? throw new UnauthorizedAccessException();
+        if (owner != identity.User?.Value && owner != "S-1-5-18" && owner != "S-1-5-32-544")
+            throw new UnauthorizedAccessException(
+                "The portable container belongs to another user."
+            );
+        var security = PrivateDirectory();
+        if (directory)
+            new DirectoryInfo(path).SetAccessControl(security);
+        else
+        {
+            var file = new FileSecurity();
+            file.SetOwner(identity.User!);
+            file.SetAccessRuleProtection(true, false);
+            foreach (
+                FileSystemAccessRule rule in security.GetAccessRules(
+                    true,
+                    true,
+                    typeof(SecurityIdentifier)
+                )
+            )
+                file.AddAccessRule(
+                    new FileSystemAccessRule(
+                        rule.IdentityReference,
+                        rule.FileSystemRights,
+                        AccessControlType.Allow
+                    )
+                );
+            new FileInfo(path).SetAccessControl(file);
+        }
+        VerifyPrivate(path, directory, true);
+    }
+
     internal static void VerifyPrivate(string path, bool directory, bool requireProtected = false)
     {
         using var identity = WindowsIdentity.GetCurrent();

@@ -9,6 +9,7 @@ import {
   StopExitIntent,
   SHUTDOWN_DEADLINE_MS,
   orderlyShutdown,
+  shutdownWithinDeadline,
   withinDeadline,
   reportStartupResult,
   reportStartupWithContinuation,
@@ -592,4 +593,42 @@ test('alive unresponsive shutdown remains unknown and cannot become a success re
     /unknown shutdown/,
   );
   assert.equal(completed, false);
+});
+
+test('a late data-restart preflight cannot shut down the backend after the restart deadline', async () => {
+  let release!: () => void;
+  let expire!: () => void;
+  let shutdowns = 0;
+  const authorization = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const request = shutdownWithinDeadline(
+    {
+      drain: async () => {},
+      backendPresent: () => true,
+      backendExited: () => false,
+      persistPlacement: async () => {},
+      shutdownBackend: async () => {
+        shutdowns++;
+      },
+      reportPlacementFailure: () => {},
+    },
+    1000,
+    {
+      schedule: (callback) => {
+        expire = callback;
+        return () => {};
+      },
+      beforeShutdown: () => authorization,
+      cancelled: 'The data location restart was cancelled.',
+      timedOut: 'Manager shutdown was not confirmed in time. The data location was preserved.',
+      unconfirmed: 'Manager shutdown was not confirmed. The data location was preserved.',
+    },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  expire();
+  await assert.rejects(request, /data location was preserved/);
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(shutdowns, 0);
 });

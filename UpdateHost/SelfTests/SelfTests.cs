@@ -35,6 +35,12 @@ internal static partial class SelfTests
         CheckReleaseVersions(root, plan, Check);
         CheckInstallerCommandLine(root, plan, Check);
         CheckSnapshotAclComparison(Check);
+        CheckPortableProtocol(root, plan, Check);
+        CheckPortablePayloadPolicy(Check);
+        CheckPortableSignatures(Check);
+        CheckPortableLayouts(root, Check);
+        CheckPortableDataMoveLeases(root, Check);
+        await CheckPortableTransactions(root, Check);
         await CheckInstallerCache(root, plan, Check);
         await CheckTestInstallerCache(root, Check);
         await CheckApplyTransactions(root, plan, Check);

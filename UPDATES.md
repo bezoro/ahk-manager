@@ -12,7 +12,7 @@ Open **Updates**, review the release and select **Update and reopen** or **Insta
 
 Entering Test explicitly may offer a preview older than the installed stable bootstrap release. After installing a stable release, remaining in Test does not repeatedly recommend an older preview; it remains an explicit history choice. Returning to Stable offers its latest release even when its version is lower than the installed preview.
 
-Version history combines compatible published releases with verified installers preserved on this computer. Rolling back changes application files, not the current profile or script contents. The Stable channel does not offer cached preview installers.
+Version history combines compatible published releases with verified packages preserved on this computer. Each edition offers its own package type. Rolling back changes application files, not the current profile or script contents. The Stable channel does not offer cached previews.
 
 ## Public network transport
 
@@ -40,9 +40,11 @@ Preview publication runs in a separate `workflow_run` workflow using release too
 
 A successful `main` CI also discovers eligible PR builds completed before the preview publisher became available. Their version identity remains the one calculated at build time. No manual download or rebuild is required for that backfill.
 
-Publication first creates a draft, uploads and verifies both assets, revalidates the tag and source, and only then publishes. Existing tags must identify the approved commit. Published tags and assets are never overwritten. An incomplete draft can resume only when existing bytes match. A preview is marked as a prerelease and cannot replace GitHub's latest stable release.
+Publication first creates a draft, uploads and verifies the complete asset family, revalidates the tag and source, and only then publishes. Existing tags must identify the approved commit. Published tags and assets are never overwritten or extended. An incomplete draft can resume only when existing bytes match. A preview is marked as a prerelease and cannot replace GitHub's latest stable release.
 
-The required assets are `AHK-Manager-<version>-Setup-x64.exe` and `ahk-manager-release.json`. Update protocol 1 records the version, source commit, date, plain-text notes, installer name, size and SHA256/SHA512 hashes. The client rejects unexpected or duplicate manifest fields and mismatched release, asset or installer identity.
+Installed releases use `AHK-Manager-<version>-Setup-x64.exe` and `ahk-manager-release.json`. Update protocol 1 records the version, source commit, date, plain-text notes, installer name, size and SHA256/SHA512 hashes. The client rejects unexpected or duplicate manifest fields and mismatched release, asset or installer identity.
+
+Releases that include the portable edition add `AHK-Manager-<version>-Portable-x64.zip` and `ahk-manager-portable-release.json`. Its schema-1 manifest uses update protocol 2 and an `archive` field with the ZIP name, size and both hashes. Both editions must identify the same version, source commit, publication date and notes. The legacy manifest retains its exact shape for older clients. The publisher accepts legacy installer-only artifacts or complete paired artifacts, never a partial family.
 
 `electron-updater` owns installer download progress and SHA512 verification. A separate SHA256 check runs before caching and before the installer is handed to the applicator. Automatic download and install-on-quit are disabled. The native applicator does not access the network.
 
@@ -68,7 +70,9 @@ To distribute signed installers, configure the GitHub secrets `WINDOWS_CSC_LINK`
 
 The stable packaging job signs when configured. A trusted Windows preview publisher signs the downloaded installer and regenerates its manifest hashes without running the package. Unsigned PR builds retain the expected publisher policy in their application update configuration, so installing a preview does not silently remove future signature verification. The updater checks that publisher for both channels and for cached rollback installers.
 
-Without a configured certificate, releases have no verified Authenticode publisher. Hash checks detect altered or corrupted bytes; they do not replace publisher signatures.
+For portable packages, the trusted publisher creates `ahk-manager-portable-release.json.p7s`, a detached CMS signature over the exact manifest bytes. It binds the archive checksum without extracting or executing PR content. The native verifier requires a trusted, currently valid code-signing certificate, SHA256, and an exact configured publisher name. The verified manifest and signature fingerprints remain pinned through publication retries and uploads. A required missing or invalid signature blocks both new downloads and cached rollback packages.
+
+Without a configured certificate, releases have no verified publisher signature. Hash checks detect altered or corrupted bytes; they do not replace publisher signatures.
 
 ## Applying updates and recovering
 
@@ -84,11 +88,25 @@ Installers and receipts are stored under `%LOCALAPPDATA%/Bezoro/AhkManagerElectr
 
 ## Preparation refusals
 
-In-app updates require the per-user installation record created by Manager Setup. Running an executable directly from a development `publish` directory or an extracted package does not create that record. Run Setup once and open Manager from its installed shortcut to enable updates. The profile and scripts remain outside the installation directory.
+The installed edition requires the per-user installation record created by Manager Setup. Running its executable directly from a development `publish` directory or an unpacked installer build does not create that record. Run Setup once and open Manager from its installed shortcut to enable installed-edition updates. Alternatively, use the separate portable distribution described below. The profile and scripts remain outside the installed application directory.
 
 The native helper also verifies that the installation directory and its parent have trusted ownership and permissions. A shared repository or custom directory writable by other Windows users may be refused. The updater does not loosen those permissions or change a repository's ACLs. Use the default private installation location or review the custom directory's permissions.
 
 Each preparation attempt has its own directory under `Updates/operations`. A rejected attempt does not start the installer or publish a shutdown commit. The helper records the validation phase and a fixed error code; the app saves valid refusal metadata as `helper-refusal.json`. These records exclude exception messages, paths and stack traces. Older helpers can fail before creating `helper.log`, leaving only `plan.json` and `cancel.json`.
+
+## Portable application and data
+
+The portable ZIP contains a native root launcher, mutable `portable.json`, a complete `portable-package.json` file inventory, and the application under `App`. It contains no user data. The inventory binds the exact release version, source commit, byte sizes and SHA256 hashes. Duplicate, redirected, missing, extra or escaping archive entries are refused, with limits on entry count and compressed and expanded bytes.
+
+The main process derives its deployment from the actual executable location. The initializer verifies a dedicated current-user-owned product container and prepares private access before Chromium starts. It may restrict permissions on that proven container; it never changes permissions on its containing repository or drive. Existing foreign files or an unsafe data directory cause a refusal. A private portable root can therefore live beneath a permissive repository parent without treating the parent as application-owned.
+
+Portable plans use schema 2 with `deployment: portable`; their installation directory is the actual `App` directory. Package fields identify the verified ZIP. The helper derives the selected update store from the proven parent image and portable configuration before accepting a plan. It requires the same process identity, ready/commit receipts, confirmed backend shutdown and normal manager exit as an installed update. No Setup or uninstall registry entry is needed.
+
+The helper stages the ZIP on the portable root's volume, verifies its complete contents, snapshots `App`, and promotes the new files. It also updates the root launcher and inventory. `portable.json` and the selected data directory remain outside application replacement. A confirmed failure restores the previous application files. An unknown result preserves staging, backups and evidence and blocks another apply; it never guesses which files to promote after a power interruption.
+
+The selected data folder contains `Profile`, `Chromium`, and `Updates`. The default is `Data` beside the root launcher. **Preferences > Data location** prepares a move to a new or empty local folder and applies it on a normal restart. Operational data and update history are copied and verified before the configuration pointer changes. Chromium storage is recreated. The original data and recovery copies are retained. A pending data move blocks updating until it is completed or cancelled.
+
+Portable cache entries use `Updates/installers/<version>/archive.zip` for compatibility with the common version-store layout, with a protocol-2 receipt, the original `release.json`, and a signature when required. Before a confirmed update, the current portable package is preserved from the public feed when available. This makes the first portable release rollbackable too. An installer-only historical release cannot be applied to a portable deployment. See [PORTABLE.md](PORTABLE.md) for migration and supported storage locations.
 
 ## Validation scope
 
@@ -97,3 +115,5 @@ Node tests cover channel isolation, persisted selection, public feed validation,
 Windows CI runs the actual Electron network transport, renders the production interface, captures light/dark and narrow-window states, packages real installers, and exercises installation, updating, rollback and cleanup in temporary locations. These checks do not validate the user's interactive UAC prompt, personal Windows session or next real sign-in.
 
 The installed-updater jobs launch the published preview and the current packaged candidate on fresh Windows runners, drive the real app's update action, and verify native readiness, confirmed shutdown, installer application and preservation. Separate cases verify refusal for a permissive custom parent and an unregistered executable. Candidate identity is checked against the CI manifest and source commit; scoped desktop automation controls only the exact fixture process.
+
+The portable-updater jobs build a distinct baseline package and the candidate from the same reviewed source. They exercise the real packaged application, profile import, update and rollback with default and custom data locations. They also check dedicated-root preparation below a permissive parent and refusal for a container with unrelated files. Package metadata and receipts prove both versions; source profiles, external files, startup state and unrelated processes remain preserved.

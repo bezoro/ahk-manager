@@ -7,6 +7,7 @@ import {
 } from '../../shared/update-versions.js';
 import { compareVersions, type RemoteUpdateRelease } from './github-updates.js';
 import type { CachedInstaller } from './update-store.js';
+import type { UpdateDeployment } from './update-deployment.js';
 
 export interface UpdateStorePort {
   removeLegacyAccess(): Promise<void>;
@@ -18,6 +19,8 @@ export interface UpdateStorePort {
 }
 export interface UpdateBoundary {
   version: string;
+  deployment?: UpdateDeployment;
+  preserveCurrent?(progress: (percent: number) => void): Promise<void>;
   store: UpdateStorePort;
   releases(channel: UpdateChannel): Promise<RemoteUpdateRelease[]>;
   resolve?(id: string): Promise<RemoteUpdateRelease>;
@@ -72,7 +75,10 @@ export class UpdateService {
         id: `local:${cached.version}`,
         version: cached.version,
         publishedAt: null,
-        notes: 'Installer preserved on this computer.',
+        notes:
+          this.boundary.deployment === 'portable'
+            ? 'Portable package preserved on this computer.'
+            : 'Installer preserved on this computer.',
         commit: null,
         installed: cached.version === this.boundary.version,
         canInstall: cached.version !== this.boundary.version,
@@ -215,6 +221,14 @@ export class UpdateService {
         });
       if (!(await this.boundary.confirm(choice))) return this.snapshot;
       this.publish({ phase: 'downloading', error: null, progress: 0 });
+      const preserving = !!this.boundary.preserveCurrent;
+      if (this.boundary.preserveCurrent) {
+        await this.boundary.preserveCurrent((percent) =>
+          this.publish({ progress: Math.max(0, Math.min(50, percent / 2)) }),
+        );
+        this.local = await this.boundary.store.cached();
+        this.publish({ progress: 50 });
+      }
       let remote = this.remote.find((item) => item.id === id);
       let target = this.local.find(
         (item) =>
@@ -250,7 +264,9 @@ export class UpdateService {
         if (!remote)
           throw new Error('The installer for this version is not available on this computer.');
         const file = await this.boundary.download(remote, (percent) =>
-          this.publish({ progress: Math.max(0, Math.min(100, percent)) }),
+          this.publish({
+            progress: Math.max(0, Math.min(100, preserving ? 50 + percent / 2 : percent)),
+          }),
         );
         target = await this.boundary.store.cache(remote.version, file, remote.sha256, remote.bytes);
       }

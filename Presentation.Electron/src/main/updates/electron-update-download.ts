@@ -3,9 +3,7 @@ import { Provider, type ProviderRuntimeOptions } from 'electron-updater/out/prov
 import type { UpdateInfo } from 'builder-util-runtime';
 import { CancellationToken } from 'builder-util-runtime';
 import { assetUrl, type RemoteUpdateRelease } from './github-updates.js';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { load, JSON_SCHEMA } from 'js-yaml';
+import { updatePublisherNames } from './update-publisher-policy.js';
 import { verifySignature } from 'electron-updater/out/windowsExecutableCodeSignatureVerifier.js';
 import { isTestUpdateVersion } from '../../shared/update-versions.js';
 
@@ -13,21 +11,8 @@ const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
 /** A signed installation applies the same publisher policy to cached rollback packages. */
 export async function verifyCachedInstallerSignature(file: string): Promise<void> {
-  const configPath = path.join(process.resourcesPath, 'app-update.yml');
-  const bytes = await fs.readFile(configPath);
-  if (bytes.length > 65536) throw new Error('The update signature policy is invalid.');
-  const config = load(bytes.toString('utf8'), { schema: JSON_SCHEMA });
-  if (!config || typeof config !== 'object')
-    throw new Error('The update signature policy is invalid.');
-  const publisher = (config as Record<string, unknown>).publisherName;
-  if (publisher === undefined || publisher === null) return;
-  const names = typeof publisher === 'string' ? [publisher] : publisher;
-  if (
-    !Array.isArray(names) ||
-    !names.length ||
-    names.some((value) => typeof value !== 'string' || !value.trim() || value.length > 1024)
-  )
-    throw new Error('The update signature policy is invalid.');
+  const names = await updatePublisherNames();
+  if (!names.length) return;
   if ((await verifySignature(names, file, silentLogger)) !== null)
     throw new Error("The installer signature does not match this installation's publisher.");
 }

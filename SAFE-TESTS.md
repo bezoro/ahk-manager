@@ -1,31 +1,51 @@
-# Testes nativos isolados
+# Isolated Windows validation
 
-O workflow [Windows CI](.github/workflows/windows-ci.yml) executa em `windows-2025` a cada push em `main`, pull request ou acionamento manual. Usa o SDK de `global.json`, Node 24.22.0 e dependências travadas. Publica o backend e seus testes, executa `--backend`, `--core`, `--corrections` e `--startup-inspection`, verifica os tipos TypeScript, roda os testes Node com os snapshots reais produzidos pela suíte .NET e gera o bundle de produção. Verificações independentes continuam após falhas de outras suítes; o job permanece reprovado. Os testes Node integrados exigem que a suíte backend tenha produzido seus snapshots com sucesso.
+The active product is Electron with a .NET backend. Ordinary tests use temporary profiles and adapters. Packaged integration tests run on disposable Windows runners, never against a personal profile or an existing installation.
 
-O AutoHotkey v2.0.30 portátil vem da release oficial, com SHA256 fixado. Ele é extraído somente na máquina descartável do runner para a descoberta e leitura dos metadados de versão. Nenhum instalador, script AHK ou seletor `--ahk-owned` é executado. A consulta WMI de startup é somente leitura; os testes de política usam adaptadores falsos e perfis temporários. Logs e snapshots ficam no artefato `windows-ci-evidence` por 14 dias, inclusive em falhas.
+## Windows CI
 
-A CI também abre o renderer de produção no harness Electron isolado, com dados sintéticos e sem backend. `tools/Test-ElectronPresentation.ps1` exercita a interface e gera capturas internas da própria janela em temas claro/escuro, largura reduzida e zoom de 200%, incluindo atualizações e retorno a versões anteriores. As imagens, resultados e logs ficam em `windows-ui-evidence` por 14 dias. As superfícies sólidas do harness permitem revisar o layout e os controles; não comprovam Mica ou a composição do Windows 11.
+[Windows CI](.github/workflows/windows-ci.yml) runs on `windows-2025` for pull requests, pushes to `main`, and manual dispatch. It uses the pinned .NET SDK, Node.js 24.22.0, and locked dependencies. Independent suites continue after other suites fail; any failure still fails the job.
 
-O workflow publica o aplicador independente e executa seus testes isolados. Compila dois instaladores compatíveis, 1.2.0 sintético e a versão alvo, e executa `tools/Test-UpdateInstallation.ps1` no runner Windows descartável. O ensaio exige ausência de instalação/perfil anteriores, instala em pasta temporária, atualiza, volta à versão anterior e confere registros, hashes e preservação dos seus arquivos inertes. Não abre o Manager nem scripts AHK, não cria tarefas de login e só remove seus próprios registros e arquivos ao terminar. Falhas preservam os resultados. O instalador alvo, seu manifesto e SHA256 ficam em `windows-installer`. UAC interativo, ciclo real de login e a aplicação pelo botão na sessão pessoal permanecem fora desse ensaio.
+Backend, Core, correction, and startup-inspection checks publish snapshots for the integrated Node checks. Missing backend snapshots do not turn integration tests into passing skips. The official AutoHotkey v2.0.30 portable download has a pinned SHA256 and is used for interpreter discovery and metadata inspection. Ordinary CI does not execute user AHK scripts or the separate `--ahk-owned` suite.
 
-O produto ativo é Electron com backend .NET. Os testes de TypeScript usam o runner Node e adaptadores falsos: em `Presentation.Electron`, execute `npm.cmd run test -- --out <pasta-absoluta-nova>`. Não abrem janelas, executam scripts ou escrevem Run/Startup. `npm.cmd run typecheck` verifica a fronteira compartilhada e o renderer. Os testes novos do backend ficam em `Tests.Backend`; seguem os seletores explícitos daquele projeto e usam somente perfis temporários e adaptadores de inicialização falsos.
+Backend tests use fresh roots and effect adapters. Startup inspection reads WMI without changing login registration. Node tests do not open windows, launch scripts, or write Windows startup settings. The real Electron transport suite separately tests Chromium redirect, download, integrity, and cache behavior.
 
-Não há argumento de produto para trocar perfil, ignorar o proprietário de efeitos, desativar o sandbox ou injetar código de teste. Integração com o executável empacotado exige nome e layout finais, parentela nativa comprovada e o novo perfil normal. A primeira execução normal é uma etapa controlada após revisão; testes isolados anteriores não dependem dela.
+The updater's native self-tests cover bounded protocol documents, package validation, identity checks, access control, transaction failures, and recovery. Test-only inert image adapters are confined to those tests; production updates verify the actual executable metadata and package contents.
 
-O instalador deve ser ensaiado em destino isolado, com o Manager fechado. Inicialização real permanece desautorizada nos testes. Verificar instalação, atualização, desinstalação e preservação dos dados é diferente de apenas compilar o NSIS. Uma confirmação de shutdown só vale junto com a saída observada do backend; o aplicador também exige um recibo da mesma operação e sessão e a saída normal do Manager. Prazo excedido é desconhecido e não autoriza matar processos ou repetir efeitos.
+## Interface captures
 
-O seletor atual `Tests.Backend.exe --inventory-scoped-readonly --root <pasta-absoluta-inexistente>` consulta uma vez o inventário delimitado do ensaio, com prazo de 30 segundos. Cria apenas seus arquivos inertes de diagnóstico e não inicia, encerra ou exclui scripts. O JSON contém contadores e códigos fixos, sem caminhos ou argumentos de scripts externos.
+`tools/Test-ElectronPresentation.ps1` opens the production renderer with a synthetic Electron host. It does not connect to the backend or execute scripts. It exercises light and dark themes, narrow layouts, 200% zoom, updates and rollback, preferences, and preparing or cancelling a custom data location. Screenshots and assertion results are saved in `windows-ui-evidence`.
 
-O ensaio `--ahk-owned --root <outra-pasta-absoluta-inexistente>` mantém um conjunto fechado de identidades externas comprovadamente anteriores à raiz. Só as exclui da observação do ensaio enquanto identidade e argumentos permanecem iguais; isso não modifica a política de observação do produto. Novas instâncias, identidades alteradas ou informações insuficientes continuam bloqueando uma conclusão segura. Nunca reutilize a raiz de uma tentativa anterior.
+These captures establish layout and control behavior with solid backgrounds. They do not establish Windows Mica composition, interactive UAC, or behavior at the next real sign-in. Inspect the captures when changing the interface.
 
-A etapa nativa de reciclagem exige o helper Electron de diagnóstico auditado, definido por `AHK_OWNED_TRASH_HELPER`, com caminho e hash fixados no ensaio. Esse helper e seus recibos pertencem à preparação local de validação e não são distribuídos no aplicativo. O comando não constitui um teste portátil sem essas dependências previamente preparadas; os testes comuns de core/backend/Node continuam separados.
+## Installed integration tests
 
-Os seletores WinUI abaixo são históricos e não validam a interface Electron:
+`tools/Test-UpdateInstallation.ps1` installs, updates, rolls back and uninstalls real packages in a temporary location. It requires no prior product registration or profile. It verifies registry ownership, hashes, version identities, and preservation of inert fixture files, then removes only its own confirmed registration and files. This package smoke test does not launch Manager or AHK scripts.
 
-Feche jogos e Playnite antes dos testes gráficos ou com AutoHotkey. Execute sem elevação. Não use o perfil real nem a pasta publish anterior. O executável Tests.WinUI/bin/x64/Release/net10.0-windows10.0.26100.0/win-x64/Bezoro.AhkManager.WinUI.Tests.exe exige seletor explícito e uma raiz inexistente:
+The separate installed-updater jobs launch the published preview or current candidate on a fresh runner and drive the actual app update action. Desktop automation binds to the fixture process identity and its owned dialogs. Positive cases use a registered private installation. Negative cases verify refusal for an unsafe parent or an unregistered executable. Fixtures explicitly disable automatic script launch and configure their own startup preferences.
 
-- `--core <pasta-nova>`: persistência, recuperação, análise, projeção e política com adaptadores isolados.
-- `--ui <outra-pasta-nova>`: janela de produção com serviço falso de testes; controles e ContentDialog reais, capturas do HWND próprio. Linhas de exemplo existem apenas no projeto de testes.
-- `--ahk-owned <outra-pasta-nova>`: scripts inofensivos criados nessa raiz, interpretador v2 conhecido e caminhos/hashes permitidos. O proprietário isolado existe apenas no projeto de testes. Não contorna o mutex do produto.
+## Portable integration tests
 
-Não há escrita real em Run/Startup/tarefas nem UAC real. A limpeza solicita saída normal, nunca termina processos à força, e registra pendências. Preserve stdout, stderr, código de saída, checks.txt, capturas e resultados. Solicitação enviada não equivale a efeito confirmado. O aplicativo legado e seus scripts nunca são alvos. O antigo tools/Run-SafeTests.ps1 valida somente o pacote legado.
+`tools/Test-PortableUpdater.ps1` uses a separately packaged older baseline and the current candidate. Both packages carry the reviewed source identity and their distinct complete versions. The baseline exists only for testing and is not a public release asset.
+
+The driver launches the real portable application and checks profile import, update and rollback with default and custom data directories. It verifies that no Setup registration is required, a proven dedicated product root can become private beneath a permissive parent without changing the parent's permissions, and a root containing unrelated files is refused.
+
+External fixture files, source profiles, startup state, and unrelated process identities are checked for preservation. A scoped helper may dismiss the exact known startup error dialog of its fixture process in a refusal case. It cannot acknowledge arbitrary desktop dialogs or operate on another process.
+
+## Shutdown and cleanup
+
+A shutdown request is not proof of exit. Updates require the matching operation/session receipt, observed backend exit, and normal Manager exit. A timeout is an unknown result and never authorizes force termination or replaying an operation. Delayed drain or placement completion cannot dispatch a late backend shutdown after cancellation.
+
+Cleanup requests normal shutdown only for proven fixture processes. It never kills personal applications or scripts. Failures retain logs, receipts, outcomes and recovery copies. Evidence artifacts are retained for 14 days. Building a package locally does not publish a release.
+
+The production application has no test switch to replace its profile, bypass effect ownership, disable the sandbox, or execute injected test code. Packaged tests use the normal layout, executable names, authenticated process ancestry and profile initialization.
+
+## Additional native suites
+
+`Tests.Backend --inventory-scoped-readonly --root <new-absolute-path>` reads a bounded process inventory once with a 30-second deadline. It writes only inert diagnostics and never starts, stops or deletes scripts. Its JSON contains fixed codes and counters rather than external script arguments.
+
+The separate `--ahk-owned` suite executes harmless temporary scripts and requires its audited interpreter and fixture setup. It excludes a closed set of proven pre-existing process identities only while those identities and arguments remain unchanged. New or uncertain processes still prevent a safe conclusion. The native recycle step also requires the audited diagnostic Electron helper selected by `AHK_OWNED_TRASH_HELPER`, with a fixed path and hash. That helper is not distributed with the product.
+
+Use a fresh absolute root for every attempt. Never use the personal profile or an old `publish` directory. Keep stdout, stderr, exit codes, assertions, captures and result documents.
+
+WinUI/WPF projects and `tools/Run-SafeTests.ps1` are historical. Their selectors and screenshots do not validate the current Electron application. Historical UI or AHK tests still require isolated owned fixtures, no real startup registration, and normal process shutdown. See [VALIDATION.md](VALIDATION.md) for historical evidence.

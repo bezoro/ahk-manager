@@ -6,9 +6,15 @@ internal sealed class PackageLease : IDisposable
     internal readonly FileLease Installer;
     readonly FileLease receipt;
 
-    internal PackageLease(string path, string version, string sha256, string updatesRoot)
+    internal PackageLease(
+        string path,
+        string version,
+        string sha256,
+        string updatesRoot,
+        bool portable = false
+    )
     {
-        UpdatePaths.ValidateInstallerLocation(path, version, updatesRoot);
+        UpdatePaths.ValidateInstallerLocation(path, version, updatesRoot, portable);
         Installer = FileLease.Open(path, MaximumInstallerBytes);
         try
         {
@@ -25,7 +31,7 @@ internal sealed class PackageLease : IDisposable
                 );
                 if (
                     proof.SchemaVersion != 1
-                    || proof.UpdateProtocol != 1
+                    || proof.UpdateProtocol != (portable ? 2 : 1)
                     || proof.Version != version
                     || !UpdateProtocol.Hash(proof.Sha256, false)
                     || !proof.Sha256.Equals(sha256, StringComparison.OrdinalIgnoreCase)
