@@ -177,6 +177,8 @@ export async function prepareUpdate(
       ['--plan', planPath, '--sha256', createHash('sha256').update(bytes).digest('hex')],
       {
         detached: true,
+        // Never inherit App as the current directory: Windows must be able to rename it.
+        cwd: directory,
         windowsHide: true,
         stdio: ['ignore', 'ignore', 'pipe'],
         shell: false,

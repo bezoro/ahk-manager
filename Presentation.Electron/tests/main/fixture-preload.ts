@@ -18,6 +18,8 @@ const listen = <T>(channel: string, callback: (value: T) => void): (() => void) 
 let guardProvider: (() => AdministrationUiGuard) | null = null;
 const api: AhkManagerApi = {
   openLogs: () => invoke('openLogs'),
+  copyDiagnostics: (mode) => invoke('copyDiagnostics', mode),
+  exportDiagnostics: () => invoke('exportDiagnostics'),
   getStorageState: () => invoke('getStorageState'),
   chooseDataLocation: () => invoke('chooseDataLocation'),
   openDataLocation: () => invoke('openDataLocation'),

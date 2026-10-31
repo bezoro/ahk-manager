@@ -206,6 +206,94 @@ test('opening logs uses a fixed host action during recovery, with no renderer pa
   assert.equal(opened, 3);
 });
 
+test('diagnostic copying authenticates and validates a fixed mode before writing the native clipboard', async () => {
+  const f = fixture();
+  const modes: string[] = [];
+  f.context.diagnosticReport = (mode) => {
+    modes.push(mode);
+    return 'Safe report: ' + mode;
+  };
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  for (const mode of ['recent', 'errors']) await invoke('copyDiagnostics', { mode });
+  assert.deepEqual(f.copied, ['Safe report: recent', 'Safe report: errors']);
+  for (const body of [
+    {},
+    { mode: 'all' },
+    { mode: 'errors', path: 'C:\\secret' },
+    { mode: 'recent', text: 'private' },
+  ])
+    await assert.rejects(invoke('copyDiagnostics', body), /Invalid/);
+  assert.deepEqual(modes, ['recent', 'errors']);
+  f.guard.invalidate();
+  await assert.rejects(invoke('copyDiagnostics', { mode: 'recent' }), /Stale/);
+  assert.equal(f.copied.length, 2);
+});
+
+test('diagnostic copying works during recovery but respects shutdown and document ownership', async () => {
+  const f = fixture();
+  f.context.diagnosticReport = () => 'Safe report';
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  for (const phase of ['updateApplying', 'adoptionPending', 'administrationPending'] as const) {
+    f.setPolicy({ [phase]: true });
+    await invoke('copyDiagnostics', { mode: 'errors' });
+    f.setPolicy({ [phase]: false });
+  }
+  assert.equal(f.copied.length, 3);
+  f.setPolicy({ quitting: true });
+  await assert.rejects(invoke('copyDiagnostics', { mode: 'recent' }), /closing/);
+  f.setPolicy({ quitting: false });
+  f.context.diagnosticReport = () => {
+    f.guard.invalidate();
+    return 'Must not be copied';
+  };
+  await assert.rejects(invoke('copyDiagnostics', { mode: 'recent' }), /document changed/i);
+  assert.equal(f.copied.length, 3);
+});
+
+test('report preparation and clipboard failures are surfaced without leaking, truncating or repeating a copy', async () => {
+  const f = fixture();
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  await assert.rejects(invoke('copyDiagnostics', { mode: 'recent' }), /unavailable/);
+  f.context.diagnosticReport = () => 'ç'.repeat(32769);
+  await assert.rejects(invoke('copyDiagnostics', { mode: 'recent' }), /prepared/);
+  assert.equal(f.copied.length, 0);
+  f.context.diagnosticReport = () => 'Safe report';
+  let attempts = 0;
+  f.context.clipboard.writeText = () => {
+    attempts++;
+    throw new Error('Clipboard is busy');
+  };
+  await assert.rejects(invoke('copyDiagnostics', { mode: 'errors' }), /Clipboard is busy/);
+  assert.equal(attempts, 1);
+});
+
+test('archive export has no renderer paths, authenticates, and remains available during recovery', async () => {
+  const f = fixture();
+  let exports = 0;
+  f.context.exportDiagnostics = async () => {
+    exports++;
+    return { complete: false, issueCount: 2 };
+  };
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  for (const phase of ['updateApplying', 'adoptionPending', 'administrationPending'] as const) {
+    f.setPolicy({ [phase]: true });
+    assert.deepEqual(await invoke('exportDiagnostics'), { complete: false, issueCount: 2 });
+    f.setPolicy({ [phase]: false });
+  }
+  await assert.rejects(invoke('exportDiagnostics', { path: 'C:\\untrusted.zip' }), /Invalid/);
+  f.setPolicy({ quitting: true });
+  await assert.rejects(invoke('exportDiagnostics'), /closing/);
+  f.setPolicy({ quitting: false });
+  f.guard.invalidate();
+  await assert.rejects(invoke('exportDiagnostics'), /Stale/);
+  assert.equal(exports, 3);
+  assert.deepEqual(f.copied, []);
+});
+
 test('the registered administration request keeps zero arguments and the native UI consent path', async () => {
   const f = fixture();
   const argumentCounts: number[] = [];

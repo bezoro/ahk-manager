@@ -17,6 +17,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { release as operatingSystemRelease } from 'node:os';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
 import {
@@ -79,8 +80,16 @@ import {
   type CommandLogBoundary,
   type CommandDetails,
   type CommandSource,
+  type DiagnosticLogMode,
 } from './logging/command-log.js';
 import { createCommandLog } from './logging/create-command-log.js';
+import {
+  createDiagnosticReport,
+  createDiagnosticRuntime,
+  type DiagnosticReportContext,
+} from './logging/diagnostic-report.js';
+import { createDiagnosticArchive } from './logging/diagnostic-archive.js';
+import { exportDiagnosticArchive, writeDiagnosticArchive } from './logging/diagnostic-export.js';
 import {
   acquirePortableStorageLease,
   type PortableStorageLease,
@@ -1295,6 +1304,17 @@ export function startManager(): void {
   }
   function registerIpc(): void {
     if (!guard || !controller || !updates) throw new Error('IPC setup unavailable');
+    const diagnosticContext = (): DiagnosticReportContext => ({
+      version: app.getVersion(),
+      platform: process.platform,
+      architecture: process.arch,
+      operatingSystemRelease: operatingSystemRelease(),
+      deployment: deployment.mode,
+      host: controller?.state ?? null,
+      updates: updates?.snapshot ?? null,
+    });
+    const diagnosticReport = (mode: DiagnosticLogMode) =>
+      createDiagnosticReport(diagnosticContext(), commandLog, mode);
     registerHandlers({
       guard,
       controller,
@@ -1305,6 +1325,38 @@ export function startManager(): void {
       ipc: ipcMain,
       clipboard,
       commandLog: commandTrace,
+      diagnosticReport,
+      exportDiagnostics: () => {
+        const currentDocument = documentScope.getStore();
+        return exportDiagnosticArchive({
+          chooseDestination: async () => {
+            const options = {
+              title: 'Save diagnostic archive',
+              defaultPath: path.join(
+                app.getPath('downloads'),
+                `AHK-Manager-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`,
+              ),
+              filters: [{ name: 'ZIP archives', extensions: ['zip'] }],
+            };
+            const result = window
+              ? await dialog.showSaveDialog(window, options)
+              : await dialog.showSaveDialog(options);
+            return result.canceled || !result.filePath ? null : result.filePath;
+          },
+          alive: () => !quitting && currentDocument?.() === true,
+          build: () =>
+            createDiagnosticArchive({
+              deployment,
+              summary: diagnosticReport('recent'),
+              runtime: createDiagnosticRuntime(diagnosticContext()),
+              commandLogs: commandLog?.exportFiles() ?? {
+                files: [],
+                issues: [{ file: 'Logs', reason: 'unavailable' }],
+              },
+            }),
+          write: writeDiagnosticArchive,
+        });
+      },
       openLogs: async () => {
         if (!commandLog?.status().available)
           throw new Error('Diagnostic logging is unavailable. Check access to the data folder.');

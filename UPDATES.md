@@ -96,6 +96,12 @@ Each preparation attempt has its own directory under `Updates/operations`. A rej
 
 ## Portable application and data
 
+The copied update helper starts with its validated operation directory as its working directory. It also detaches from any inherited application directory after authenticating the plan and claiming the operation. A reopened portable Manager uses the portable root. These boundaries matter on Windows, where a process's current-directory handle can prevent renaming `App`, including when the helper executable itself is cached elsewhere.
+
+The first payload rename retries only Windows sharing and lock violations, with six attempts and full ownership, integrity, metadata, destination and cancellation validation before every attempt. Other filesystem failures remain immediate failures. Native failure logs identify the stage, HRESULT and exception cause, preserve useful paths, redact recognized credentials and mark any message or log-size truncation. They do not terminate unrelated processes.
+
+Older portable clients that repeatedly restore the previous version after an `App` rename failure still run their old helper until the first successful update. Exit Manager normally from the notification area, leaving independent scripts running, then run the launcher at the portable root as administrator before retrying the in-app update. This avoids the application working directory inherited after an earlier update or rollback. A paused sync client alone does not change an inherited working directory.
+
 The portable ZIP contains a native root launcher, mutable `portable.json`, a complete `portable-package.json` file inventory, and the application under `App`. It contains no user data. The inventory binds the exact release version, source commit, byte sizes and SHA256 hashes. Duplicate, redirected, missing, extra or escaping archive entries are refused, with limits on entry count and compressed and expanded bytes.
 
 The main process derives its deployment from the actual executable location. The initializer verifies a dedicated current-user-owned product container and prepares private access before Chromium starts. It may restrict permissions on that proven container; it never changes permissions on its containing repository or drive. Existing foreign files or an unsafe data directory cause a refusal. A private portable root can therefore live beneath a permissive repository parent without treating the parent as application-owned.

@@ -5,6 +5,20 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { guid, operation, outcome, reason } from '../../shared/validation.js';
 import { assertStoragePath } from '../storage/deployment.js';
+import {
+  readCommandLogFiles,
+  readCommandLogSnapshot,
+  type CommandLogExport,
+  type CommandLogSnapshot,
+  type DiagnosticLogMode,
+} from './command-log-snapshot.js';
+export type {
+  CommandLogExport,
+  CommandLogExportIssue,
+  CommandLogExportIssueReason,
+  CommandLogSnapshot,
+  DiagnosticLogMode,
+} from './command-log-snapshot.js';
 
 const applicationId = 'Bezoro.AhkManager.Electron';
 const filePattern = /^commands-(\d{8}T\d{9}Z)-([0-9a-f-]{36})-(\d{6})\.jsonl$/;
@@ -108,6 +122,8 @@ export interface CommandLogBoundary {
     details?: CommandDetails,
   ): Promise<T>;
   status(): CommandLogStatus;
+  snapshot(mode: DiagnosticLogMode): CommandLogSnapshot;
+  exportFiles(): CommandLogExport;
   close(): void;
 }
 export interface CommandLogOptions {
@@ -313,6 +329,22 @@ export class CommandLog implements CommandLogBoundary {
       directory: this.directory,
       failure: this.closed ? 'closed' : this.failure,
     };
+  }
+
+  snapshot(mode: DiagnosticLogMode): CommandLogSnapshot {
+    return readCommandLogSnapshot(
+      this.directory,
+      this.directoryIdentity,
+      {
+        maximumFileBytes: this.maximumFileBytes,
+        maximumFiles: this.maximumFiles,
+      },
+      mode,
+    );
+  }
+
+  exportFiles(): CommandLogExport {
+    return readCommandLogFiles(this.directory, this.directoryIdentity, this.maximumFileBytes);
   }
 
   async run<T>(

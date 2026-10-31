@@ -945,6 +945,216 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     },
   );
   await check(
+    'Help copies native diagnostic reports with exact modes, one pending action and inline feedback while the backend is unavailable',
+    async () => {
+      await window.fixtureHarness.setState({
+        ...host,
+        snapshot: null,
+        connection: 'failed',
+        error: 'ISOLATED FIXTURE: backend unavailable',
+      });
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('copyDiagnostics', { pending: true });
+      button(text.help).click();
+      await until(() => !!document.querySelector('[role="dialog"]'), 'Help missing');
+      const dialog = document.querySelector('[role="dialog"]')!;
+      const copy = button(text.copyDiagnosticReport, dialog);
+      const errors = button(text.copyRecentErrors, dialog);
+      const open = button(text.openLogs, dialog);
+      const save = button(text.saveDiagnosticArchive, dialog);
+      assert(!copy.disabled && !errors.disabled, 'Backend failure disabled report copying');
+      assert(
+        dialog.textContent?.includes(text.copyDiagnosticsHint),
+        'Report privacy not explained',
+      );
+      copy.click();
+      errors.click();
+      open.click();
+      save.click();
+      await untilCall('copyDiagnostics');
+      await until(
+        () => copy.disabled && errors.disabled && open.disabled && save.disabled,
+        'Pending report did not disable diagnostic actions',
+      );
+      const pendingCalls = (await window.fixtureHarness.calls()).filter(
+        (call) =>
+          call.method === 'copyDiagnostics' ||
+          call.method === 'openLogs' ||
+          call.method === 'exportDiagnostics',
+      );
+      assert(
+        pendingCalls.length === 1 &&
+          pendingCalls[0]!.args.length === 1 &&
+          pendingCalls[0]!.args[0] === 'recent',
+        'Pending report repeated, changed mode or accepted renderer report contents',
+      );
+      await window.fixtureHarness.resolveResponse('copyDiagnostics', {
+        error: 'ISOLATED FIXTURE: clipboard unavailable',
+      });
+      await until(
+        () =>
+          !!dialog
+            .querySelector('[role="alert"]')
+            ?.textContent?.includes(text.copyDiagnosticsFailed),
+        'Copy failure was not reported inline',
+      );
+      assert(dialog.isConnected, 'Copy failure closed Help');
+      assert(document.querySelectorAll('[role="dialog"]').length === 1, 'Copy added a dialog');
+      await until(
+        () => !copy.disabled && !errors.disabled,
+        'Copy actions not restored after failure',
+      );
+      await window.fixtureHarness.setResponse('copyDiagnostics', {});
+      copy.click();
+      await until(
+        () =>
+          !!dialog
+            .querySelector('[role="status"]')
+            ?.textContent?.includes(text.diagnosticReportCopied) && !copy.disabled,
+        'Successful retry did not confirm the clipboard result',
+      );
+      assert(!dialog.querySelector('[role="alert"]'), 'Successful retry retained the error');
+      await window.fixtureHarness.setResponse('copyDiagnostics', { pending: true });
+      errors.click();
+      await until(() => errors.disabled, 'Error report did not enter its pending state');
+      await window.fixtureHarness.resolveResponse('copyDiagnostics', {});
+      await until(
+        () =>
+          !errors.disabled &&
+          !!dialog
+            .querySelector('[role="status"]')
+            ?.textContent?.includes(text.diagnosticReportCopied),
+        'Error report did not confirm copying',
+      );
+      const completedCalls = (await window.fixtureHarness.calls()).filter(
+        (call) => call.method === 'copyDiagnostics',
+      );
+      assert(
+        completedCalls.length === 3 &&
+          completedCalls.map((call) => call.args[0]).join(',') === 'recent,recent,errors' &&
+          completedCalls.every((call) => call.args.length === 1),
+        'Report modes or retry counts changed',
+      );
+      assert(
+        !(await window.fixtureHarness.calls()).some((call) => call.method === 'copyText'),
+        'Renderer copied raw report contents',
+      );
+      button(text.close, dialog).click();
+      await window.fixtureHarness.resetResponses();
+      await window.fixtureHarness.setState(host);
+      await tick();
+    },
+  );
+  await check(
+    'Help exports archives without a backend and distinguishes cancellation, failure, complete and partial saves',
+    async () => {
+      await window.fixtureHarness.setState({
+        ...host,
+        snapshot: null,
+        connection: 'failed',
+        error: 'ISOLATED FIXTURE: backend unavailable',
+      });
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('exportDiagnostics', { pending: true });
+      button(text.help).click();
+      await until(() => !!document.querySelector('[role="dialog"]'), 'Help missing');
+      const dialog = document.querySelector('[role="dialog"]')!;
+      const save = button(text.saveDiagnosticArchive, dialog);
+      const others = [text.copyDiagnosticReport, text.copyRecentErrors, text.openLogs].map(
+        (label) => button(label, dialog),
+      );
+      assert(!save.disabled, 'Backend failure disabled diagnostic export');
+      assert(
+        dialog.textContent?.includes(text.exportDiagnosticsHint),
+        'Complete archive contents and collection issues not explained',
+      );
+      save.click();
+      save.click();
+      others.forEach((node) => node.click());
+      await untilCall('exportDiagnostics');
+      await until(
+        () => save.disabled && others.every((node) => node.disabled),
+        'Pending export did not disable all diagnostic actions',
+      );
+      const pending = (await window.fixtureHarness.calls()).filter((call) =>
+        ['exportDiagnostics', 'copyDiagnostics', 'openLogs'].includes(call.method),
+      );
+      assert(
+        pending.length === 1 && pending[0]!.args.length === 0,
+        'Export repeated, accepted a renderer path or overlapped another action',
+      );
+      await window.fixtureHarness.resolveResponse('exportDiagnostics', { value: null });
+      await until(() => !save.disabled, 'Cancelled export did not restore its action');
+      assert(
+        !dialog.querySelector('[role="alert"]') && !dialog.querySelector('[role="status"]'),
+        'Cancelling the save dialog was reported as success or failure',
+      );
+      await window.fixtureHarness.setResponse('exportDiagnostics', { pending: true });
+      save.click();
+      await until(() => save.disabled, 'Export retry did not become pending');
+      await window.fixtureHarness.resolveResponse('exportDiagnostics', {
+        error: 'ISOLATED FIXTURE: archive destination unavailable',
+      });
+      await until(
+        () =>
+          !!dialog
+            .querySelector('[role="alert"]')
+            ?.textContent?.includes(text.exportDiagnosticsFailed) && !save.disabled,
+        'Archive failure was not reported inline',
+      );
+      assert(document.querySelectorAll('[role="dialog"]').length === 1, 'Export added a dialog');
+      await window.fixtureHarness.setResponse('exportDiagnostics', { pending: true });
+      save.click();
+      await until(() => save.disabled, 'Successful export retry did not become pending');
+      await window.fixtureHarness.resolveResponse('exportDiagnostics', {
+        value: { complete: true, issueCount: 0 },
+      });
+      await until(
+        () =>
+          !!dialog
+            .querySelector('[role="status"]')
+            ?.textContent?.includes(text.diagnosticArchiveSaved) && !save.disabled,
+        'Saved archive did not report success',
+      );
+      assert(!dialog.querySelector('[role="alert"]'), 'Successful export retained the error');
+      assert(
+        !dialog
+          .querySelector('[role="status"]')
+          ?.textContent?.includes(text.diagnosticReportCopied),
+        'Archive success claimed clipboard contents',
+      );
+      await window.fixtureHarness.setResponse('exportDiagnostics', { pending: true });
+      save.click();
+      await until(() => save.disabled, 'Partial export did not become pending');
+      await window.fixtureHarness.resolveResponse('exportDiagnostics', {
+        value: { complete: false, issueCount: 2 },
+      });
+      await until(
+        () =>
+          !!dialog
+            .querySelector('[role="alert"]')
+            ?.textContent?.includes(text.diagnosticArchivePartial) && !save.disabled,
+        'Partial archive did not report its missing evidence',
+      );
+      assert(
+        !dialog.querySelector('[role="status"]') &&
+          dialog.querySelector('[role="alert"]')?.textContent?.includes('manifest.json'),
+        'Partial archive claimed completeness or omitted the collection manifest',
+      );
+      const exports = (await window.fixtureHarness.calls()).filter(
+        (call) => call.method === 'exportDiagnostics',
+      );
+      assert(
+        exports.length === 4 && exports.every((call) => call.args.length === 0),
+        'Export arguments or explicit retry count changed',
+      );
+      button(text.close, dialog).click();
+      await window.fixtureHarness.resetResponses();
+      await window.fixtureHarness.setState(host);
+      await tick();
+    },
+  );
+  await check(
     'footer reports actual problem count, connection and pending request without claiming all-clear',
     async () => {
       await window.fixtureHarness.setState({
@@ -2635,6 +2845,53 @@ export async function runStartInTrayScenario(): Promise<AssertionRecord[]> {
       },
     ];
   }
+}
+
+export async function previewHelp(): Promise<AssertionRecord[]> {
+  const previous = document.querySelector('[role="dialog"]');
+  if (previous) {
+    const close = [...previous.querySelectorAll<HTMLButtonElement>('button')].find((node) =>
+      [text.close, text.cancel].some((label) => label === node.textContent?.trim()),
+    );
+    assert(close, 'Previous dialog cannot be closed');
+    close.click();
+    await tick();
+  }
+  await window.fixtureHarness.resetResponses();
+  await window.fixtureHarness.setState(state());
+  await tick();
+  button(text.help).click();
+  await until(() => !!document.querySelector('[role="dialog"]'), 'Help preview missing');
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  const actions = dialog.querySelector<HTMLElement>('.diagnostic-actions')!;
+  assert(actions, 'Diagnostic actions missing');
+  actions.scrollIntoView({ block: 'center', behavior: 'instant' });
+  await tick();
+  const nodes = [
+    text.saveDiagnosticArchive,
+    text.copyDiagnosticReport,
+    text.copyRecentErrors,
+    text.openLogs,
+  ].map((label) => button(label, dialog));
+  for (const node of nodes) {
+    const rect = node.getBoundingClientRect();
+    assert(
+      !node.disabled &&
+        rect.width > 0 &&
+        rect.left >= 0 &&
+        rect.right <= innerWidth &&
+        rect.top >= 0 &&
+        rect.bottom <= innerHeight,
+      'Diagnostic action clipped or unavailable: ' + node.textContent,
+    );
+  }
+  assert(actions.scrollWidth <= actions.clientWidth, 'Diagnostic buttons overflow their group');
+  return [
+    {
+      name: 'Help shows complete archive, both summaries and logs folder with visible wrapping actions',
+      passed: true,
+    },
+  ];
 }
 
 export async function previewPreferences(): Promise<AssertionRecord[]> {

@@ -37,6 +37,32 @@ internal static class PortableProfileChecks
                 && layout.HostExecutable == Path.Combine(root, "App", "Bezoro.AhkManager.exe"),
             "portable storage and startup resolve from the fixed marker while process authority retains the actual App host"
         );
+        var elevated = ManagerElevation.CommittedHostStartInfo(layout.HostExecutable);
+        var elevatedLogin = ManagerElevation.CommittedHostStartInfo(
+            layout.HostExecutable,
+            resumeLogin: true
+        );
+        var elevatedAdoption = ManagerElevation.CommittedHostStartInfo(
+            layout.HostExecutable,
+            "fixture-descriptor",
+            backgroundStartup: true
+        );
+        check(
+            elevated.FileName == layout.HostExecutable
+                && !elevated.UseShellExecute
+                && elevated.WorkingDirectory == root
+                && elevated.ArgumentList.SequenceEqual(["--foreground"])
+                && elevatedLogin.FileName == layout.HostExecutable
+                && elevatedLogin.WorkingDirectory == root
+                && elevatedLogin.ArgumentList.SequenceEqual(["--login", "--background"])
+                && elevatedAdoption.FileName == layout.HostExecutable
+                && elevatedAdoption.WorkingDirectory == root
+                && elevatedAdoption.ArgumentList.SequenceEqual([
+                    "--background",
+                    "--startup-adoption=fixture-descriptor",
+                ]),
+            "automatic portable elevation retains the authenticated image and activation intent while using the root outside the replaceable App payload"
+        );
         var installed = RuntimeProfileLayout.ForHost(
             Path.Combine(fixture, "installed", "Bezoro.AhkManager.exe"),
             Path.Combine(fixture, "local"),
@@ -51,6 +77,14 @@ internal static class PortableProfileChecks
                 && installed.UpdatesRoot == Path.Combine(installed.ProfileRoot, "Updates")
                 && installed.StartupHostExecutable == installed.HostExecutable,
             "installed profiles, Chromium storage, update history and startup paths retain their existing locations"
+        );
+        var elevatedInstalled = ManagerElevation.CommittedHostStartInfo(installed.HostExecutable);
+        check(
+            elevatedInstalled.FileName == installed.HostExecutable
+                && elevatedInstalled.WorkingDirectory
+                    == Path.GetDirectoryName(installed.HostExecutable)
+                && elevatedInstalled.ArgumentList.SequenceEqual(["--foreground"]),
+            "installed administrative activation retains its application working directory and foreground intent"
         );
         check(
             Refuses(() =>
@@ -141,6 +175,10 @@ internal static class PortableProfileChecks
                 "malformed, ambiguous or oversized portable markers never fall back to the installed profile"
             );
         }
+        check(
+            Refuses(() => ManagerElevation.CommittedHostStartInfo(layout.HostExecutable)),
+            "administrative activation refuses an invalid portable marker instead of selecting an unvalidated root"
+        );
         WriteMarker(root, "Data");
         File.WriteAllText(Path.Combine(root, "portable-package.json"), "inert descriptor");
         File.Delete(Path.Combine(root, "portable.json"));
@@ -159,6 +197,10 @@ internal static class PortableProfileChecks
                 && File.ReadAllText(marker) == File.ReadAllText(markerLink),
             "multiply linked portable settings are rejected without rewriting either linked file"
         );
+        check(
+            Refuses(() => ManagerElevation.CommittedHostStartInfo(layout.HostExecutable)),
+            "administrative activation rejects multiply linked portable settings without launching a replacement"
+        );
         File.Delete(markerLink);
         string fileData = Path.Combine(root, "data-is-file");
         File.WriteAllText(fileData, "preserve");
@@ -172,6 +214,10 @@ internal static class PortableProfileChecks
         Directory.CreateDirectory(external);
         Directory.CreateSymbolicLink(redirected, external);
         WriteMarker(root, "redirected");
+        check(
+            Refuses(() => ManagerElevation.CommittedHostStartInfo(layout.HostExecutable)),
+            "administrative activation refuses redirected portable storage without changing host identity or granting authority"
+        );
         check(
             Refuses(() => Read(layout.HostExecutable, fixture, "layout")),
             "portable data cannot be redirected through a directory link"

@@ -226,6 +226,15 @@ try {
         Invoke-Assertions 'updates' 'updates' @{ recovery = $true }
         Save-Capture "$theme-updates-zoom-200"
     }
+
+    foreach ($theme in @('light', 'dark')) {
+        Set-Presentation $theme
+        Invoke-Assertions 'help' 'help'
+        Save-Capture "$theme-help-diagnostics-1240"
+        Set-Presentation $theme 740 600
+        Invoke-Assertions 'help' 'help'
+        Save-Capture "$theme-help-diagnostics-narrow-740"
+    }
 }
 catch { $script:failures.Add($_.Exception.Message); Write-Trace $_.Exception.Message }
 finally {

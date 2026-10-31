@@ -909,6 +909,11 @@ time {
 .fui-DialogSurface {
   max-width: calc(100vw - 40px);
 }
+.diagnostic-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 @media (max-width: 1170px) {
   .app-root {
     --rail-width: 145px;

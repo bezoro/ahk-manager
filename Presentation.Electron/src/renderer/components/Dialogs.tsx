@@ -9,7 +9,7 @@ import {
   DialogTitle,
   Input,
 } from '@fluentui/react-components';
-import type { ImportPreview } from '../../shared/contracts.js';
+import type { DiagnosticExportResult, ImportPreview } from '../../shared/contracts.js';
 import { importedCount, reason, text } from '../resources/en-US.js';
 import { OperationNotice, type Notice } from './OperationNotice.js';
 type Feedback = { notice: Notice | null; onDismissNotice(): void };
@@ -133,36 +133,65 @@ export function ImportDialog({
 export function HelpDialog({
   busy,
   onOpenLogs,
+  onCopyDiagnostics,
+  onExportDiagnostics,
   onClose,
   onImport,
   onBackup,
 }: {
   busy: boolean;
   onOpenLogs(): Promise<void>;
+  onCopyDiagnostics(mode: 'recent' | 'errors'): Promise<void>;
+  onExportDiagnostics(): Promise<DiagnosticExportResult | null>;
   onClose(): void;
   onImport(): void;
   onBackup(): void;
 }): React.ReactElement {
   const [logsNotice, setLogsNotice] = React.useState<Notice | null>(null);
-  const [openingLogs, setOpeningLogs] = React.useState(false);
+  const [logsPending, setLogsPending] = React.useState(false);
   const logsRequest = React.useRef(false);
-  const openLogs = async (): Promise<void> => {
+  const diagnosticAction = async (
+    action: 'open' | 'recent' | 'errors' | 'export',
+  ): Promise<void> => {
     if (logsRequest.current) return;
     logsRequest.current = true;
-    setOpeningLogs(true);
+    setLogsPending(true);
     setLogsNotice(null);
     try {
-      await onOpenLogs();
+      if (action === 'open') await onOpenLogs();
+      else if (action === 'export') {
+        const result = await onExportDiagnostics();
+        if (result)
+          setLogsNotice({
+            title: result.complete
+              ? text.diagnosticArchiveSavedTitle
+              : text.diagnosticArchivePartialTitle,
+            message: result.complete ? text.diagnosticArchiveSaved : text.diagnosticArchivePartial,
+            warning: !result.complete,
+          });
+      } else {
+        await onCopyDiagnostics(action);
+        setLogsNotice({
+          title: text.copied,
+          message: text.diagnosticReportCopied,
+          warning: false,
+        });
+      }
     } catch (error) {
       setLogsNotice({
         title: text.error,
-        message: text.openLogsFailed,
+        message:
+          action === 'open'
+            ? text.openLogsFailed
+            : action === 'export'
+              ? text.exportDiagnosticsFailed
+              : text.copyDiagnosticsFailed,
         detail: error instanceof Error ? error.message : String(error),
         warning: true,
       });
     } finally {
       logsRequest.current = false;
-      setOpeningLogs(false);
+      setLogsPending(false);
     }
   };
   return (
@@ -180,10 +209,27 @@ export function HelpDialog({
             <p>{text.safeEditHint}</p>
             <h3>{text.diagnosticLogs}</h3>
             <p>{text.diagnosticLogsHint}</p>
+            <p>{text.exportDiagnosticsHint}</p>
+            <p className="muted">{text.copyDiagnosticsHint}</p>
             <OperationNotice notice={logsNotice} onDismiss={() => setLogsNotice(null)} />
-            <Button disabled={openingLogs} onClick={() => void openLogs()}>
-              {text.openLogs}
-            </Button>
+            <div className="diagnostic-actions" aria-busy={logsPending}>
+              <Button
+                appearance="primary"
+                disabled={logsPending}
+                onClick={() => void diagnosticAction('export')}
+              >
+                {text.saveDiagnosticArchive}
+              </Button>
+              <Button disabled={logsPending} onClick={() => void diagnosticAction('recent')}>
+                {text.copyDiagnosticReport}
+              </Button>
+              <Button disabled={logsPending} onClick={() => void diagnosticAction('errors')}>
+                {text.copyRecentErrors}
+              </Button>
+              <Button disabled={logsPending} onClick={() => void diagnosticAction('open')}>
+                {text.openLogs}
+              </Button>
+            </div>
             <h3>{text.shortcuts}</h3>
             <dl className="key-values">
               <dt>Ctrl + F</dt>
