@@ -24,10 +24,13 @@ internal static class ElevationActivation
         bool backgroundStartup = false
     )
     {
+        var layout = RuntimeProfileLayout.ForHost(hostPath);
         var start = new ProcessStartInfo(hostPath)
         {
             UseShellExecute = false,
-            WorkingDirectory = Path.GetDirectoryName(hostPath)!,
+            // The authenticated image stays under App; its current directory must
+            // not pin that replaceable payload across a later portable update.
+            WorkingDirectory = layout.PortableRoot ?? Path.GetDirectoryName(hostPath)!,
         };
         // This requests only window activation. Authority still comes from native token proof.
         if (resumeLogin && startupAdoption is not null)
