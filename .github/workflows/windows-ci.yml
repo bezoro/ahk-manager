@@ -301,7 +301,7 @@ jobs:
 
       - name: Build Windows installer
         id: installer-build
-        if: ${{ !cancelled() && steps.frontend-build.outcome == 'success' && steps.update-host.outcome == 'success' && steps.electron-runtime.outcome == 'success' }}
+        if: ${{ success() && steps.frontend-build.outcome == 'success' && steps.update-host.outcome == 'success' && steps.electron-runtime.outcome == 'success' }}
         working-directory: Presentation.Electron
         env:
           CSC_LINK: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.WINDOWS_CSC_LINK || '' }}
