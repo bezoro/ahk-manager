@@ -157,7 +157,11 @@ internal static partial class SelfTests
         Directory.CreateDirectory(source);
         string file = Path.Combine(source, "payload.txt");
         File.WriteAllText(file, "preserved source payload");
-        FileStream? hold = new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        // A child file can make MoveDirectory return access-denied instead of
+        // a sharing violation. Retain the source directory itself with the
+        // same FILE_LIST_DIRECTORY / no-FILE_SHARE_DELETE lease used by the
+        // namespace policy, so this probe exercises the exact retryable code.
+        DirectoryLease? hold = new([source]);
         bool observed = false;
         int validations = 0;
         try
@@ -192,6 +196,11 @@ internal static partial class SelfTests
                 )
                 .ConfigureAwait(false);
         }
+        catch (IOException failure)
+        {
+            ApplyDiagnostics.Failure(Console.WriteLine, "directory-sharing-probe", failure);
+            throw;
+        }
         finally
         {
             hold?.Dispose();
@@ -202,7 +211,7 @@ internal static partial class SelfTests
                 && !Directory.Exists(source)
                 && File.ReadAllText(Path.Combine(destination, "payload.txt"))
                     == "preserved source payload",
-            "real Windows sharing violation on an isolated payload is revalidated and promoted after its external read handle releases"
+            "real Windows directory sharing violation is revalidated and promoted after the retained namespace handle releases"
         );
     }
 }

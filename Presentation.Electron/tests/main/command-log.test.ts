@@ -635,17 +635,30 @@ test('a redirected or replaced log directory cannot be copied and read failure d
   const original = path.join(directory, 'OriginalLogs');
   const external = path.join(directory, 'External');
   fs.mkdirSync(external);
-  fs.renameSync(log.directory, original);
-  fs.symlinkSync(external, log.directory, process.platform === 'win32' ? 'junction' : 'dir');
+  const lstat = fs.lstatSync;
+  const unavailable = t.mock.method(fs, 'lstatSync', (...args: Parameters<typeof fs.lstatSync>) => {
+    if (String(args[0]) === log.directory)
+      throw Object.assign(new Error('Isolated read failure'), { code: 'EACCES' });
+    return lstat(...args);
+  });
   assert.throws(() => log.snapshot('recent'), /Diagnostic logs could not be read/);
   assert.equal(log.status().available, true);
-  assert.deepEqual(fs.readdirSync(external), []);
-  fs.unlinkSync(log.directory);
-  fs.renameSync(original, log.directory);
+  unavailable.mock.restore();
   assert.equal(await log.run('ui', 'refresh', () => 1), 1);
   assert.equal(log.status().available, true);
   assert.equal(log.snapshot('recent').records.length, 4);
+  // Windows deliberately prevents renaming the namespace while its log file is open.
+  // Close the writer before constructing an actual redirected-directory read fixture.
   log.close();
+  const before = log.status();
+  fs.renameSync(log.directory, original);
+  fs.symlinkSync(external, log.directory, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => log.snapshot('recent'), /Diagnostic logs could not be read/);
+  assert.deepEqual(log.status(), before);
+  assert.deepEqual(fs.readdirSync(external), []);
+  fs.unlinkSync(log.directory);
+  fs.renameSync(original, log.directory);
+  assert.equal(log.snapshot('recent').records.length, 4);
 });
 
 test('snapshot copies reject changed files and still read retained evidence after logging has failed', async (t) => {
@@ -827,6 +840,10 @@ test('complete export makes namespace and entry-limit failures explicit without 
   assert.equal(log.status().available, true);
   for (let index = 0; index < 256; index++)
     fs.unlinkSync(path.join(log.directory, `foreign-${index}`));
+  assert.equal(await log.run('ui', 'refresh', () => 1), 1);
+  assert.equal(log.status().available, true);
+  log.close();
+  const before = log.status();
   const original = path.join(directory, 'OriginalLogs');
   fs.renameSync(log.directory, original);
   fs.mkdirSync(log.directory);
@@ -834,7 +851,7 @@ test('complete export makes namespace and entry-limit failures explicit without 
     files: [],
     issues: [{ file: 'Logs', reason: 'unavailable' }],
   });
-  assert.equal(log.status().available, true);
+  assert.deepEqual(log.status(), before);
   fs.rmdirSync(log.directory);
   fs.renameSync(original, log.directory);
   assert.deepEqual(log.exportFiles().issues, []);
