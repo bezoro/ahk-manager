@@ -17,6 +17,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { release as operatingSystemRelease } from 'node:os';
 import { BackendClient } from './backend.js';
 import { ManagerController } from './controller.js';
 import {
@@ -81,6 +82,7 @@ import {
   type CommandSource,
 } from './logging/command-log.js';
 import { createCommandLog } from './logging/create-command-log.js';
+import { createDiagnosticReport } from './logging/diagnostic-report.js';
 import {
   acquirePortableStorageLease,
   type PortableStorageLease,
@@ -1305,6 +1307,20 @@ export function startManager(): void {
       ipc: ipcMain,
       clipboard,
       commandLog: commandTrace,
+      diagnosticReport: (mode) =>
+        createDiagnosticReport(
+          {
+            version: app.getVersion(),
+            platform: process.platform,
+            architecture: process.arch,
+            operatingSystemRelease: operatingSystemRelease(),
+            deployment: deployment.mode,
+            host: controller?.state ?? null,
+            updates: updates?.snapshot ?? null,
+          },
+          commandLog,
+          mode,
+        ),
       openLogs: async () => {
         if (!commandLog?.status().available)
           throw new Error('Diagnostic logging is unavailable. Check access to the data folder.');

@@ -8,8 +8,22 @@ export interface RequestPolicy {
 }
 
 const duringShutdown = new Set(['getState', 'getTheme', 'storage:get']);
-const duringUpdate = new Set(['getState', 'getTheme', 'getUpdateState', 'storage:get', 'openLogs']);
-const duringAdoption = new Set(['getState', 'getTheme', 'getActivity', 'storage:get', 'openLogs']);
+const duringUpdate = new Set([
+  'getState',
+  'getTheme',
+  'getUpdateState',
+  'storage:get',
+  'openLogs',
+  'copyDiagnostics',
+]);
+const duringAdoption = new Set([
+  'getState',
+  'getTheme',
+  'getActivity',
+  'storage:get',
+  'openLogs',
+  'copyDiagnostics',
+]);
 const duringAdministration = new Set([...duringAdoption, 'requestAdministration']);
 
 /** These checks run after document authentication and before dispatching any action. */

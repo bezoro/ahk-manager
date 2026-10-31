@@ -99,6 +99,7 @@ function subscribe<T>(
 }
 const api: AhkManagerApi = {
   openLogs: () => checked('openLogs', {}, empty),
+  copyDiagnostics: (mode) => checked('copyDiagnostics', { mode }, empty),
   getStorageState: () => checked('storage:get', {}, storageState),
   chooseDataLocation: () => checked('storage:choose', {}, nullable(storageChangeResult)),
   openDataLocation: () => checked('storage:open', {}, empty),

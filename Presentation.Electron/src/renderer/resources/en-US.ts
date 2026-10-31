@@ -248,6 +248,12 @@ export const text = {
     'Manager automatically records commands and their results for troubleshooting. Logs are kept locally and rotated to limit disk use.',
   openLogs: 'Open logs folder',
   openLogsFailed: 'The logs folder could not be opened. Check the details and try again.',
+  copyDiagnosticReport: 'Copy diagnostic report',
+  copyRecentErrors: 'Copy recent errors',
+  copyDiagnosticsHint:
+    'Copy a short report to paste into a support chat. It includes app information and recent commands, without file paths, tokens or script contents.',
+  diagnosticReportCopied: 'The report is on your clipboard. Paste it into your support chat.',
+  copyDiagnosticsFailed: 'The report could not be copied. Check the details and try again.',
   shortcuts: 'Keyboard shortcuts',
   shortcutSearch: 'Search',
   shortcutRefresh: 'Refresh observations',

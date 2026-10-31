@@ -360,7 +360,12 @@ app
         storage = { ...storage, pendingDataDirectory: null, canChange: true, error: null };
         return storage;
       }
-      if (method === 'openLogs' || method === 'openDataLocation' || method === 'restartForDataMove')
+      if (
+        method === 'openLogs' ||
+        method === 'copyDiagnostics' ||
+        method === 'openDataLocation' ||
+        method === 'restartForDataMove'
+      )
         return;
       if (method === 'checkUpdates') {
         updates = { ...updates, phase: 'idle', lastCheckedAt: new Date().toISOString() };
@@ -513,6 +518,12 @@ app
                   ')',
               );
               write('updates-' + command.id + '.json', { assertions, fixture: true });
+            } else if (command.action === 'help' && scenarios) {
+              const assertions = await window.webContents.executeJavaScript(
+                scenarios + '\nAhkRendererScenarios.previewHelp()',
+              );
+              write('help-' + command.id + '.json', { assertions, fixture: true });
+              report();
             } else if (command.action === 'preferences') {
               if (scenarios)
                 await window.webContents.executeJavaScript(

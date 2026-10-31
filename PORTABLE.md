@@ -62,6 +62,8 @@ The JSON Lines files record command starts and completions, UTC timestamps, dura
 
 Logs rotate automatically, retaining up to five verified files of 2 MiB each. Unknown files in `Logs` are preserved. Logging errors never repeat or block an application command; an unavailable log folder is reported inline when opened from Help. Logs do not contain raw request bodies, authentication tokens, clipboard text, script contents or exception messages. Keep the corresponding Activity history and `Updates/operations` evidence when investigating a script or update failure.
 
+In **Help**, choose **Copy diagnostic report** to copy app information, safe Activity codes and recent command logs, ready to paste into a support chat. **Copy recent errors** limits the history to failures, refusals and uncertain results with their command context. Ordinary cancellations are excluded. Both actions work when the backend is unavailable and confirm the copy inline. Reports omit file paths, names, raw error messages, tokens and script contents. They include up to 200 command records within a 64 KiB clipboard limit and say when records or unreadable files were omitted. The report covers readable recent local history, rather than every past session. **Open logs folder** remains available for inspecting the original files.
+
 Close Manager normally before copying or moving its data. Logs move with the selected data folder; the previous folder remains a backup after changing the data location.
 
 ## Supported locations

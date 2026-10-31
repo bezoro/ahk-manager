@@ -47,6 +47,7 @@ export interface IpcTransport {
 export interface IpcContext {
   commandLog?: Pick<CommandLogBoundary, 'run'>;
   openLogs?(): Promise<void>;
+  diagnosticReport?(mode: 'recent' | 'errors'): string;
   storage?: {
     get(): StorageState;
     choose(): Promise<StorageChangeResult | null>;
@@ -111,6 +112,18 @@ export function registerHandlers(context: IpcContext): void {
     if (!context.openLogs) throw new Error('Diagnostic logs are unavailable.');
     await context.openLogs();
   });
+  bind<{ mode: 'recent' | 'errors' }>(
+    'copyDiagnostics',
+    shape({ mode: oneOf('recent', 'errors') }),
+    ({ mode }) => {
+      if (!context.diagnosticReport) throw new Error('Diagnostic reports are unavailable.');
+      const report = context.diagnosticReport(mode);
+      if (!report || Buffer.byteLength(report, 'utf8') > 65536)
+        throw new Error('The diagnostic report could not be prepared.');
+      if (context.documentScope.getStore()?.() !== true) throw new Error(t.documentChanged);
+      clipboard.writeText(report);
+    },
+  );
   if (context.storage) {
     const storage = context.storage;
     bind('storage:get', none, storage.get);

@@ -48,6 +48,11 @@ test('shortcut retry diagnostics retain bounded attempts and OS codes without ra
   assert.equal(complete.retrying, true);
   assert.equal(complete.errorCode, 'EPERM');
   assert.doesNotMatch(JSON.stringify(records(directory)), /private source path/);
+  const copied = log.snapshot('errors').records.at(-1)!;
+  assert.equal(copied.command, 'repairSearchShortcut.rename');
+  assert.equal(copied.attempt, 1);
+  assert.equal(copied.retrying, true);
+  assert.equal(copied.errorCode, 'EPERM');
 });
 
 test('successful, declined, cancelled and failed commands retain scoped intent and outcomes without raw payloads', async (t) => {
@@ -439,4 +444,251 @@ test('metadata-only changes do not disable an active log, while same-size modifi
   assert.equal(log.status().available, false);
   assert.equal(log.status().failure, 'unsafe-path');
   assert.deepEqual(fs.readFileSync(file), edited);
+});
+
+test('diagnostic snapshots include retained sessions and current commands without changing logging', async (t) => {
+  const directory = fixture(t);
+  const previous = new CommandLog(directory);
+  await previous.run('ui', 'refresh', () => undefined);
+  previous.close();
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  await log.run('ui', 'saveSettings', () => ({ outcome: 'Confirmed', code: 'None' }));
+  const before = fs.readdirSync(log.directory).map((name) => ({
+    name,
+    bytes: fs.readFileSync(path.join(log.directory, name)),
+  }));
+  const snapshot = log.snapshot('recent');
+  assert.deepEqual(
+    snapshot.records.map((record) => record.command),
+    ['refresh', 'refresh', 'saveSettings', 'saveSettings'],
+  );
+  assert.equal(new Set(snapshot.records.map((record) => record.sessionId)).size, 2);
+  assert.equal(snapshot.omittedRecords, 0);
+  assert.equal(snapshot.skippedFiles, 0);
+  for (const file of before)
+    assert.deepEqual(fs.readFileSync(path.join(log.directory, file.name)), file.bytes);
+  assert.equal(log.status().available, true);
+  await log.run('ui', 'refresh', () => 7);
+  assert.equal(log.snapshot('recent').records.length, 6);
+});
+
+test('error snapshots retain failed requests and parent context while excluding routine cancellations', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  await log.run('ui', 'operate', () =>
+    log.run('backend', 'perform', () => ({ outcome: 'Partial', code: 'AccessDenied' })),
+  );
+  await log.run('ui', 'pickEditor', () => null);
+  await log.run('ui', 'confirm', () => false);
+  await log.run('backend', 'prepare', () => ({ allowed: false, reason: 'StaleSelection' }));
+  await log.run('backend', 'administrationStatus', () => ({
+    state: 'Unknown',
+    reason: 'PendingOperation',
+  }));
+  await assert.rejects(
+    log.run('updates', 'check', () => {
+      throw Object.assign(new Error('private message'), { code: 'ETIMEDOUT' });
+    }),
+  );
+  const snapshot = log.snapshot('errors');
+  assert.deepEqual(
+    snapshot.records.map((record) => record.command),
+    [
+      'operate',
+      'perform',
+      'perform',
+      'operate',
+      'prepare',
+      'prepare',
+      'administrationStatus',
+      'administrationStatus',
+      'check',
+      'check',
+    ],
+  );
+  assert.ok(snapshot.records.some((record) => record.parentRequestId !== null));
+  assert.ok(snapshot.records.some((record) => record.result === 'refused'));
+  assert.ok(snapshot.records.some((record) => record.errorCode === 'ETIMEDOUT'));
+  assert.ok(snapshot.records.some((record) => record.state === 'Unknown'));
+  assert.doesNotMatch(JSON.stringify(snapshot), /private message|cancelled|declined/);
+});
+
+test('diagnostic snapshots cap recent records and report omitted history across rotations', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  for (let index = 0; index < 130; index++) await log.run('ui', 'refresh', () => undefined);
+  const snapshot = log.snapshot('recent');
+  assert.equal(snapshot.records.length, 200);
+  assert.equal(snapshot.omittedRecords, 60);
+  assert.equal(log.snapshot('errors').records.length, 0);
+  const rotatedDirectory = fixture(t);
+  const rotated = new CommandLog(rotatedDirectory, { maximumFileBytes: 4096, maximumFiles: 3 });
+  t.after(() => rotated.close());
+  for (let index = 0; index < 50; index++) await rotated.run('ui', 'refresh', () => undefined);
+  const retained = rotated.snapshot('recent');
+  assert.ok(retained.records.length > 0 && retained.records.length < 100);
+  assert.equal(retained.skippedFiles, 0);
+  assert.ok(retained.records.every((record) => record.command === 'refresh'));
+});
+
+test('copying diagnostics reconstructs finite values and excludes forged secrets in recognized fields', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  await log.run('backend', 'perform', () => ({ outcome: 'Failed', code: 'AccessDenied' }));
+  log.close();
+  const file = path.join(log.directory, fs.readdirSync(log.directory)[0]!);
+  const lines = fs
+    .readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  const secret = 'github_pat_private-sentinel';
+  const template = lines.find((record) => record.phase === 'completed');
+  const forged = {
+    ...template,
+    command: secret,
+    outcome: secret,
+    code: secret,
+    errorCode: secret,
+    errorName: secret,
+    state: secret,
+    result: secret,
+    version: `1.5.0-${secret}`,
+    detail: secret,
+    token: secret,
+    contents: secret,
+    addedCount: -1,
+    durationMs: secret,
+    backendRequestId: secret,
+    attempt: 100000,
+    retrying: secret,
+    runAtLogin: secret,
+    scriptId: secret,
+    correlationId: secret,
+  };
+  const invalid = [
+    { ...forged, timestamp: secret },
+    { ...forged, source: secret },
+    { ...forged, requestId: secret },
+    { ...forged, parentRequestId: secret },
+    { ...forged, timestamp: '2026-02-30T00:00:00.000Z' },
+  ];
+  fs.writeFileSync(
+    file,
+    [lines[0], forged, ...invalid].map((record) => JSON.stringify(record)).join('\n') + '\n',
+  );
+  const snapshot = log.snapshot('recent');
+  assert.equal(snapshot.records.length, 1);
+  assert.equal(snapshot.records[0]!.command, 'unknown');
+  assert.doesNotMatch(JSON.stringify(snapshot), /private-sentinel|token|detail|contents/);
+  assert.equal('version' in snapshot.records[0]!, false);
+  assert.equal('durationMs' in snapshot.records[0]!, false);
+  assert.equal('attempt' in snapshot.records[0]!, false);
+  assert.equal('outcome' in snapshot.records[0]!, false);
+  assert.equal(log.status().failure, 'closed');
+});
+
+test('snapshots skip malformed, oversized and linked log-like files without touching them', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  await log.run('ui', 'refresh', () => undefined);
+  const validFile = path.join(log.directory, fs.readdirSync(log.directory)[0]!);
+  const external = path.join(directory, 'external-private.txt');
+  const sentinel = 'private external document';
+  fs.writeFileSync(external, sentinel);
+  const malformed = path.join(
+    log.directory,
+    `commands-20000101T000000000Z-${randomUUID()}-000000.jsonl`,
+  );
+  const oversized = path.join(
+    log.directory,
+    `commands-20000101T000000000Z-${randomUUID()}-000001.jsonl`,
+  );
+  const hardlink = path.join(
+    log.directory,
+    `commands-20000101T000000000Z-${randomUUID()}-000002.jsonl`,
+  );
+  fs.writeFileSync(malformed, sentinel);
+  fs.writeFileSync(oversized, Buffer.alloc(2 * 1024 * 1024 + 1, 65));
+  fs.linkSync(external, hardlink);
+  const before = fs.readFileSync(validFile);
+  const snapshot = log.snapshot('recent');
+  assert.equal(snapshot.records.length, 2);
+  assert.equal(snapshot.skippedFiles, 3);
+  assert.doesNotMatch(JSON.stringify(snapshot), /private external/);
+  assert.equal(fs.readFileSync(external, 'utf8'), sentinel);
+  assert.equal(fs.readFileSync(malformed, 'utf8'), sentinel);
+  assert.equal(fs.lstatSync(oversized).size, 2 * 1024 * 1024 + 1);
+  assert.deepEqual(fs.readFileSync(validFile), before);
+  assert.equal(log.status().available, true);
+  log.close();
+});
+
+test('a redirected or replaced log directory cannot be copied and read failure does not disable logging', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  await log.run('ui', 'refresh', () => undefined);
+  const original = path.join(directory, 'OriginalLogs');
+  const external = path.join(directory, 'External');
+  fs.mkdirSync(external);
+  fs.renameSync(log.directory, original);
+  fs.symlinkSync(external, log.directory, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => log.snapshot('recent'), /Diagnostic logs could not be read/);
+  assert.equal(log.status().available, true);
+  assert.deepEqual(fs.readdirSync(external), []);
+  fs.unlinkSync(log.directory);
+  fs.renameSync(original, log.directory);
+  assert.equal(await log.run('ui', 'refresh', () => 1), 1);
+  assert.equal(log.status().available, true);
+  assert.equal(log.snapshot('recent').records.length, 4);
+  log.close();
+});
+
+test('snapshot copies reject changed files and still read retained evidence after logging has failed', async (t) => {
+  const directory = fixture(t);
+  const previous = new CommandLog(directory);
+  await previous.run('ui', 'refresh', () => undefined);
+  previous.close();
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const log = new CommandLog(directory);
+  const file = path.join(log.directory, fs.readdirSync(log.directory).sort().at(-1)!);
+  fs.writeFileSync(file, 'unknown private contents');
+  await log.run('ui', 'saveSettings', () => 1);
+  assert.equal(log.status().available, false);
+  const snapshot = log.snapshot('recent');
+  assert.deepEqual(
+    snapshot.records.map((record) => record.command),
+    ['refresh', 'refresh'],
+  );
+  assert.equal(snapshot.skippedFiles, 1);
+  assert.doesNotMatch(JSON.stringify(snapshot), /private contents/);
+  log.close();
+});
+
+test('a log changed during a snapshot is omitted without disclosing its partial contents', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  await log.run('ui', 'refresh', () => undefined);
+  log.close();
+  const file = path.join(log.directory, fs.readdirSync(log.directory)[0]!);
+  const originalRead = fs.readSync;
+  let changed = false;
+  const mock = t.mock.method(fs, 'readSync', (...args: Parameters<typeof fs.readSync>) => {
+    const count = originalRead(...args);
+    if (!changed) {
+      changed = true;
+      fs.appendFileSync(file, 'private concurrently appended text\n');
+    }
+    return count;
+  });
+  const snapshot = log.snapshot('recent');
+  mock.mock.restore();
+  assert.equal(changed, true);
+  assert.equal(snapshot.records.length, 0);
+  assert.equal(snapshot.skippedFiles, 1);
+  assert.doesNotMatch(JSON.stringify(snapshot), /private concurrently/);
 });

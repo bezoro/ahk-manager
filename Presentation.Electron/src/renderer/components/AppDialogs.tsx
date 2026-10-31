@@ -53,6 +53,7 @@ export function AppDialogs({
         <HelpDialog
           busy={busy || !ready}
           onOpenLogs={() => window.ahkManager.openLogs()}
+          onCopyDiagnostics={(mode) => window.ahkManager.copyDiagnostics(mode)}
           onClose={() => dialogs.setHelp(false)}
           onImport={onImport}
           onBackup={() => {

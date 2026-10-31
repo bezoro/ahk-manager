@@ -257,6 +257,7 @@ export interface ThemeState {
 }
 export interface AhkManagerApi {
   openLogs(): Promise<void>;
+  copyDiagnostics(mode: 'recent' | 'errors'): Promise<void>;
   getStorageState(): Promise<StorageState>;
   chooseDataLocation(): Promise<StorageChangeResult | null>;
   openDataLocation(): Promise<void>;
