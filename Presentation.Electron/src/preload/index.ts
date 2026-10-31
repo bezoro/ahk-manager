@@ -10,6 +10,7 @@ import {
   array,
   authorityMode,
   bool,
+  integer,
   catalogResult,
   guid,
   importPreview,
@@ -100,6 +101,14 @@ function subscribe<T>(
 const api: AhkManagerApi = {
   openLogs: () => checked('openLogs', {}, empty),
   copyDiagnostics: (mode) => checked('copyDiagnostics', { mode }, empty),
+  exportDiagnostics: () =>
+    checked(
+      'exportDiagnostics',
+      {},
+      nullable(
+        shape({ complete: bool, issueCount: (value) => integer(value) && (value as number) >= 0 }),
+      ),
+    ),
   getStorageState: () => checked('storage:get', {}, storageState),
   chooseDataLocation: () => checked('storage:choose', {}, nullable(storageChangeResult)),
   openDataLocation: () => checked('storage:open', {}, empty),

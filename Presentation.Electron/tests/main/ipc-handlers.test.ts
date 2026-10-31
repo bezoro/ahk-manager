@@ -270,6 +270,30 @@ test('report preparation and clipboard failures are surfaced without leaking, tr
   assert.equal(attempts, 1);
 });
 
+test('archive export has no renderer paths, authenticates, and remains available during recovery', async () => {
+  const f = fixture();
+  let exports = 0;
+  f.context.exportDiagnostics = async () => {
+    exports++;
+    return { complete: false, issueCount: 2 };
+  };
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  for (const phase of ['updateApplying', 'adoptionPending', 'administrationPending'] as const) {
+    f.setPolicy({ [phase]: true });
+    assert.deepEqual(await invoke('exportDiagnostics'), { complete: false, issueCount: 2 });
+    f.setPolicy({ [phase]: false });
+  }
+  await assert.rejects(invoke('exportDiagnostics', { path: 'C:\\untrusted.zip' }), /Invalid/);
+  f.setPolicy({ quitting: true });
+  await assert.rejects(invoke('exportDiagnostics'), /closing/);
+  f.setPolicy({ quitting: false });
+  f.guard.invalidate();
+  await assert.rejects(invoke('exportDiagnostics'), /Stale/);
+  assert.equal(exports, 3);
+  assert.deepEqual(f.copied, []);
+});
+
 test('the registered administration request keeps zero arguments and the native UI consent path', async () => {
   const f = fixture();
   const argumentCounts: number[] = [];

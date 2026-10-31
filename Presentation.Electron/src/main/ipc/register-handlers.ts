@@ -2,6 +2,7 @@ import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import type { AsyncLocalStorage } from 'node:async_hooks';
 import type {
   AdministrationUiGuard,
+  DiagnosticExportResult,
   OperationResult,
   SelectionContext,
   ThemeState,
@@ -48,6 +49,7 @@ export interface IpcContext {
   commandLog?: Pick<CommandLogBoundary, 'run'>;
   openLogs?(): Promise<void>;
   diagnosticReport?(mode: 'recent' | 'errors'): string;
+  exportDiagnostics?(): Promise<DiagnosticExportResult | null>;
   storage?: {
     get(): StorageState;
     choose(): Promise<StorageChangeResult | null>;
@@ -111,6 +113,10 @@ export function registerHandlers(context: IpcContext): void {
   bind('openLogs', none, async () => {
     if (!context.openLogs) throw new Error('Diagnostic logs are unavailable.');
     await context.openLogs();
+  });
+  bind('exportDiagnostics', none, async () => {
+    if (!context.exportDiagnostics) throw new Error('Diagnostic archives are unavailable.');
+    return context.exportDiagnostics();
   });
   bind<{ mode: 'recent' | 'errors' }>(
     'copyDiagnostics',

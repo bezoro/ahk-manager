@@ -255,9 +255,14 @@ export interface ThemeState {
   accent: string;
   material: 'mica' | 'solid';
 }
+export interface DiagnosticExportResult {
+  complete: boolean;
+  issueCount: number;
+}
 export interface AhkManagerApi {
   openLogs(): Promise<void>;
   copyDiagnostics(mode: 'recent' | 'errors'): Promise<void>;
+  exportDiagnostics(): Promise<DiagnosticExportResult | null>;
   getStorageState(): Promise<StorageState>;
   chooseDataLocation(): Promise<StorageChangeResult | null>;
   openDataLocation(): Promise<void>;

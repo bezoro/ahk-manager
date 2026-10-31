@@ -9,7 +9,7 @@ import {
   DialogTitle,
   Input,
 } from '@fluentui/react-components';
-import type { ImportPreview } from '../../shared/contracts.js';
+import type { DiagnosticExportResult, ImportPreview } from '../../shared/contracts.js';
 import { importedCount, reason, text } from '../resources/en-US.js';
 import { OperationNotice, type Notice } from './OperationNotice.js';
 type Feedback = { notice: Notice | null; onDismissNotice(): void };
@@ -134,6 +134,7 @@ export function HelpDialog({
   busy,
   onOpenLogs,
   onCopyDiagnostics,
+  onExportDiagnostics,
   onClose,
   onImport,
   onBackup,
@@ -141,6 +142,7 @@ export function HelpDialog({
   busy: boolean;
   onOpenLogs(): Promise<void>;
   onCopyDiagnostics(mode: 'recent' | 'errors'): Promise<void>;
+  onExportDiagnostics(): Promise<DiagnosticExportResult | null>;
   onClose(): void;
   onImport(): void;
   onBackup(): void;
@@ -148,14 +150,26 @@ export function HelpDialog({
   const [logsNotice, setLogsNotice] = React.useState<Notice | null>(null);
   const [logsPending, setLogsPending] = React.useState(false);
   const logsRequest = React.useRef(false);
-  const diagnosticAction = async (action: 'open' | 'recent' | 'errors'): Promise<void> => {
+  const diagnosticAction = async (
+    action: 'open' | 'recent' | 'errors' | 'export',
+  ): Promise<void> => {
     if (logsRequest.current) return;
     logsRequest.current = true;
     setLogsPending(true);
     setLogsNotice(null);
     try {
       if (action === 'open') await onOpenLogs();
-      else {
+      else if (action === 'export') {
+        const result = await onExportDiagnostics();
+        if (result)
+          setLogsNotice({
+            title: result.complete
+              ? text.diagnosticArchiveSavedTitle
+              : text.diagnosticArchivePartialTitle,
+            message: result.complete ? text.diagnosticArchiveSaved : text.diagnosticArchivePartial,
+            warning: !result.complete,
+          });
+      } else {
         await onCopyDiagnostics(action);
         setLogsNotice({
           title: text.copied,
@@ -166,7 +180,12 @@ export function HelpDialog({
     } catch (error) {
       setLogsNotice({
         title: text.error,
-        message: action === 'open' ? text.openLogsFailed : text.copyDiagnosticsFailed,
+        message:
+          action === 'open'
+            ? text.openLogsFailed
+            : action === 'export'
+              ? text.exportDiagnosticsFailed
+              : text.copyDiagnosticsFailed,
         detail: error instanceof Error ? error.message : String(error),
         warning: true,
       });
@@ -190,14 +209,18 @@ export function HelpDialog({
             <p>{text.safeEditHint}</p>
             <h3>{text.diagnosticLogs}</h3>
             <p>{text.diagnosticLogsHint}</p>
+            <p>{text.exportDiagnosticsHint}</p>
             <p className="muted">{text.copyDiagnosticsHint}</p>
             <OperationNotice notice={logsNotice} onDismiss={() => setLogsNotice(null)} />
             <div className="diagnostic-actions" aria-busy={logsPending}>
               <Button
                 appearance="primary"
                 disabled={logsPending}
-                onClick={() => void diagnosticAction('recent')}
+                onClick={() => void diagnosticAction('export')}
               >
+                {text.saveDiagnosticArchive}
+              </Button>
+              <Button disabled={logsPending} onClick={() => void diagnosticAction('recent')}>
                 {text.copyDiagnosticReport}
               </Button>
               <Button disabled={logsPending} onClick={() => void diagnosticAction('errors')}>

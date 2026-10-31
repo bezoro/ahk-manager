@@ -15,6 +15,7 @@ const duringUpdate = new Set([
   'storage:get',
   'openLogs',
   'copyDiagnostics',
+  'exportDiagnostics',
 ]);
 const duringAdoption = new Set([
   'getState',
@@ -23,6 +24,7 @@ const duringAdoption = new Set([
   'storage:get',
   'openLogs',
   'copyDiagnostics',
+  'exportDiagnostics',
 ]);
 const duringAdministration = new Set([...duringAdoption, 'requestAdministration']);
 

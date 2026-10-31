@@ -248,12 +248,22 @@ export const text = {
     'Manager automatically records commands and their results for troubleshooting. Logs are kept locally and rotated to limit disk use.',
   openLogs: 'Open logs folder',
   openLogsFailed: 'The logs folder could not be opened. Check the details and try again.',
-  copyDiagnosticReport: 'Copy diagnostic report',
-  copyRecentErrors: 'Copy recent errors',
+  copyDiagnosticReport: 'Copy diagnostic summary',
+  copyRecentErrors: 'Copy error summary',
   copyDiagnosticsHint:
-    'Copy a short report to paste into a support chat. It includes app information and recent commands, without file paths, tokens or script contents.',
-  diagnosticReportCopied: 'The report is on your clipboard. Paste it into your support chat.',
-  copyDiagnosticsFailed: 'The report could not be copied. Check the details and try again.',
+    'Clipboard summaries contain app information and a limited selection of recent commands, without file paths, tokens or script contents.',
+  diagnosticReportCopied: 'The summary is on your clipboard. Paste it into your support chat.',
+  copyDiagnosticsFailed: 'The summary could not be copied. Check the details and try again.',
+  saveDiagnosticArchive: 'Save complete diagnostic archive…',
+  exportDiagnosticsHint:
+    'Save all available retained logs and Activity, startup and update evidence. The archive lists collection issues and may include file paths, account names and error details. Attach it to your support chat.',
+  diagnosticArchiveSaved: 'The diagnostic archive was saved. Attach it to your support chat.',
+  diagnosticArchiveSavedTitle: 'Diagnostic archive saved',
+  diagnosticArchivePartialTitle: 'Diagnostic archive saved with issues',
+  diagnosticArchivePartial:
+    'The archive was saved with collection issues. Check manifest.json for missing evidence.',
+  exportDiagnosticsFailed:
+    'The diagnostic archive could not be saved. Check the details and try again.',
   shortcuts: 'Keyboard shortcuts',
   shortcutSearch: 'Search',
   shortcutRefresh: 'Refresh observations',

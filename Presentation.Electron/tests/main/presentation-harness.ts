@@ -347,6 +347,7 @@ app
       if (method === 'getTheme') return currentTheme();
       if (method === 'getUpdateState') return updates;
       if (method === 'getStorageState') return storage;
+      if (method === 'exportDiagnostics') return { complete: true, issueCount: 0 };
       if (method === 'chooseDataLocation' || method === 'restoreDefaultDataLocation') {
         storage = {
           ...storage,

@@ -692,3 +692,184 @@ test('a log changed during a snapshot is omitted without disclosing its partial 
   assert.equal(snapshot.skippedFiles, 1);
   assert.doesNotMatch(JSON.stringify(snapshot), /private concurrently/);
 });
+
+test('complete command-log export retains every available record, header and session ending byte for byte', async (t) => {
+  const directory = fixture(t);
+  const previous = new CommandLog(directory);
+  for (let index = 0; index < 140; index++) await previous.run('ui', 'refresh', () => undefined);
+  previous.close();
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  await log.run('backend', 'initializeStartup', () => ({ outcome: 'Confirmed', code: 'None' }));
+  const before = fs
+    .readdirSync(log.directory)
+    .sort()
+    .map((name) => ({
+      name,
+      contents: fs.readFileSync(path.join(log.directory, name), 'utf8'),
+    }));
+  assert.equal(log.snapshot('recent').records.length, 200);
+  const exported = log.exportFiles();
+  assert.deepEqual(exported.files, before);
+  assert.deepEqual(exported.issues, []);
+  const all = exported.files.flatMap((file) =>
+    file.contents
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)),
+  );
+  assert.equal(all.filter((record) => record.kind === 'command').length, 282);
+  assert.equal(all.filter((record) => record.kind === 'session').length, 2);
+  assert.equal(all.filter((record) => record.kind === 'session-end').length, 1);
+  assert.equal(log.status().available, true);
+});
+
+test('complete export considers all retained files instead of the five-file copy-summary window', async (t) => {
+  const directory = fixture(t);
+  for (let index = 0; index < 6; index++) {
+    const previous = new CommandLog(directory, { maximumFiles: 10 });
+    await previous.run('ui', 'refresh', () => undefined);
+    previous.close();
+  }
+  const log = new CommandLog(directory, { maximumFiles: 10 });
+  t.after(() => log.close());
+  assert.equal(log.snapshot('recent').skippedFiles, 2);
+  const exported = log.exportFiles();
+  assert.equal(exported.files.length, 7);
+  assert.deepEqual(exported.issues, []);
+});
+
+test('complete export reports sanitized and invalid rows explicitly while preserving other safe evidence', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  await log.run('ui', 'refresh', () => undefined);
+  log.close();
+  const name = fs.readdirSync(log.directory)[0]!;
+  const file = path.join(log.directory, name);
+  const original = fs.readFileSync(file, 'utf8');
+  const lines = original
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  const sentinel = 'github_pat_complete-export-private';
+  lines[1].command = sentinel;
+  lines[1].detail = sentinel;
+  fs.writeFileSync(
+    file,
+    lines.map((line) => JSON.stringify(line)).join('\n') + '\n{incomplete-json',
+  );
+  const before = fs.readFileSync(file);
+  const exported = log.exportFiles();
+  assert.equal(exported.files.length, 1);
+  assert.doesNotMatch(exported.files[0]!.contents, /complete-export-private|incomplete-json/);
+  const copied = exported.files[0]!.contents.trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.equal(copied[1].command, 'unknown');
+  assert.equal(copied.at(-1).kind, 'session-end');
+  assert.deepEqual(exported.issues, [
+    { file: name, reason: 'sanitized-records', count: 1 },
+    { file: name, reason: 'invalid-format', count: 1 },
+  ]);
+  assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test('complete export records unsafe files, malformed headers and size limits instead of silently skipping them', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  const external = path.join(directory, 'private.txt');
+  fs.writeFileSync(external, 'private external contents');
+  const names = [0, 1, 2].map(
+    (index) =>
+      `commands-20000101T000000000Z-${randomUUID()}-${String(index).padStart(6, '0')}.jsonl`,
+  );
+  fs.linkSync(external, path.join(log.directory, names[0]!));
+  fs.writeFileSync(path.join(log.directory, names[1]!), '{bad-header}\n');
+  fs.writeFileSync(path.join(log.directory, names[2]!), Buffer.alloc(2 * 1024 * 1024 + 1));
+  const exported = log.exportFiles();
+  assert.equal(exported.files.length, 1);
+  assert.deepEqual(
+    new Set(exported.issues.map((issue) => issue.reason)),
+    new Set(['unsafe-or-changed', 'invalid-format', 'size-limit']),
+  );
+  assert.doesNotMatch(JSON.stringify(exported), /private external/);
+  assert.equal(fs.readFileSync(external, 'utf8'), 'private external contents');
+  assert.equal(log.status().available, true);
+});
+
+test('complete export rejects duplicate JSON keys that could hide secrets behind validated values', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  await log.run('ui', 'refresh', () => ({ outcome: 'Confirmed', code: 'None' }));
+  log.close();
+  const name = fs.readdirSync(log.directory)[0]!;
+  const file = path.join(log.directory, name);
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  lines[2] = lines[2]!.replace('"code":"None"', '"code":"github_pat_hidden-private","code":"None"');
+  fs.writeFileSync(file, lines.join('\n') + '\n');
+  const exported = log.exportFiles();
+  assert.equal(exported.files.length, 1);
+  assert.doesNotMatch(exported.files[0]!.contents, /hidden-private/);
+  assert.deepEqual(exported.issues, [{ file: name, reason: 'invalid-format', count: 1 }]);
+});
+
+test('complete export makes namespace and entry-limit failures explicit without disabling command logging', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  for (let index = 0; index < 256; index++)
+    fs.writeFileSync(path.join(log.directory, `foreign-${index}`), 'Unrelated');
+  assert.deepEqual(log.exportFiles(), {
+    files: [],
+    issues: [{ file: 'Logs', reason: 'entry-limit', count: 257 }],
+  });
+  assert.equal(log.status().available, true);
+  for (let index = 0; index < 256; index++)
+    fs.unlinkSync(path.join(log.directory, `foreign-${index}`));
+  const original = path.join(directory, 'OriginalLogs');
+  fs.renameSync(log.directory, original);
+  fs.mkdirSync(log.directory);
+  assert.deepEqual(log.exportFiles(), {
+    files: [],
+    issues: [{ file: 'Logs', reason: 'unavailable' }],
+  });
+  assert.equal(log.status().available, true);
+  fs.rmdirSync(log.directory);
+  fs.renameSync(original, log.directory);
+  assert.deepEqual(log.exportFiles().issues, []);
+});
+
+test('complete export enforces a total read budget and lists every excluded file', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  const currentName = fs.readdirSync(log.directory)[0]!;
+  for (let index = 0; index < 17; index++) {
+    const sessionId = randomUUID();
+    const header =
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'session',
+        applicationId: 'Bezoro.AhkManager.Electron',
+        sessionId,
+        timestamp: '2000-01-01T00:00:00.000Z',
+        pid: process.pid,
+        fileIndex: 0,
+      }) + '\n';
+    const padded = header + ' '.repeat(2 * 1024 * 1024 - Buffer.byteLength(header) - 1) + '\n';
+    fs.writeFileSync(
+      path.join(log.directory, `commands-20000101T000000000Z-${sessionId}-000000.jsonl`),
+      padded,
+    );
+  }
+  const exported = log.exportFiles();
+  assert.equal(exported.files.length, 16);
+  assert.ok(exported.files.some((file) => file.name === currentName));
+  assert.ok(
+    exported.files.reduce((sum, file) => sum + Buffer.byteLength(file.contents), 0) <=
+      32 * 1024 * 1024,
+  );
+  assert.equal(exported.issues.filter((issue) => issue.reason === 'read-budget').length, 2);
+  assert.equal(log.status().available, true);
+});

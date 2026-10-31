@@ -14,6 +14,54 @@ export interface DiagnosticReportContext {
   updates: UpdateState | null;
 }
 
+/** Detailed current evidence belongs in the local archive, where credential redaction applies. */
+export function createDiagnosticRuntime(context: DiagnosticReportContext): unknown {
+  const host = context.host;
+  const profile = host?.snapshot;
+  const updates = context.updates;
+  return {
+    collectedAt: new Date().toISOString(),
+    applicationVersion: context.version,
+    deployment: context.deployment,
+    platform: context.platform,
+    architecture: context.architecture,
+    operatingSystemRelease: context.operatingSystemRelease,
+    backend: {
+      connection: host?.connection ?? 'unavailable',
+      error: host?.error ?? null,
+      authorityMode: host?.authorityMode ?? null,
+    },
+    updates: updates
+      ? {
+          currentVersion: updates.currentVersion,
+          channel: updates.channel,
+          phase: updates.phase,
+          availableVersion: updates.availableVersion,
+          lastCheckedAt: updates.lastCheckedAt,
+          error: updates.error,
+        }
+      : null,
+    startup: profile
+      ? {
+          launchManagerAtLogin: profile.settings.launchManagerAtLogin,
+          launchManagerAsAdministrator: profile.settings.launchManagerAsAdministrator,
+          startInTray: profile.settings.startInTray,
+          showWindowAtLogin: profile.settings.showWindowAtLogin,
+        }
+      : null,
+    issues: profile?.issues ?? [],
+    scripts:
+      profile?.scripts.map((script) => ({
+        id: script.id,
+        path: script.path,
+        status: script.status,
+        runAtLogin: script.runAtLogin,
+        runAsAdministrator: script.runAsAdministrator,
+        issues: script.issues,
+      })) ?? [],
+  };
+}
+
 const count = (value: number): number => Math.max(0, Math.min(1000000, Math.floor(value)));
 const version = (value: unknown): string | null =>
   parseUpdateVersion(value) ? (value as string) : null;

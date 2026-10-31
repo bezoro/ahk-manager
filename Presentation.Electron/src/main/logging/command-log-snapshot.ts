@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { guid, operation, outcome, reason } from '../../shared/validation.js';
+import { guid, operation, outcome, parseStrictJson, reason } from '../../shared/validation.js';
 import { parseUpdateVersion } from '../../shared/update-versions.js';
 import { assertStoragePath } from '../storage/deployment.js';
 
@@ -10,12 +10,30 @@ export interface CommandLogSnapshot {
   omittedRecords: number;
   skippedFiles: number;
 }
+export type CommandLogExportIssueReason =
+  | 'unavailable'
+  | 'unsafe-or-changed'
+  | 'invalid-format'
+  | 'sanitized-records'
+  | 'size-limit'
+  | 'entry-limit'
+  | 'read-budget';
+export interface CommandLogExportIssue {
+  file: string;
+  reason: CommandLogExportIssueReason;
+  count?: number;
+}
+export interface CommandLogExport {
+  files: { name: string; contents: string }[];
+  issues: CommandLogExportIssue[];
+}
 type Fields = Record<string, string | number | boolean | null>;
 type Stamp = fs.BigIntStats;
 const applicationId = 'Bezoro.AhkManager.Electron';
 const filePattern = /^commands-(\d{8}T\d{9}Z)-([0-9a-f-]{36})-(\d{6})\.jsonl$/;
 const maximumRecords = 200;
 const maximumFileBytes = 2 * 1024 * 1024;
+const maximumExportBytes = 32 * 1024 * 1024;
 const identity = (value: Stamp): string => [value.dev, value.ino, value.birthtimeNs].join(':');
 const version = (value: Stamp): string =>
   [identity(value), value.size, value.mtimeNs, value.ctimeNs, value.nlink, value.mode].join(':');
@@ -40,6 +58,7 @@ const commandNames = new Set([
   'getUpdateState',
   'openLogs',
   'copyDiagnostics',
+  'exportDiagnostics',
   'storage:get',
   'storage:choose',
   'storage:open',
@@ -142,7 +161,7 @@ const knownCommand = (value: unknown): string => {
   if (value.startsWith('dispatch.') && commandNames.has(value.slice(9))) return value;
   if (value.startsWith('repairSearchShortcut.') && shortcutPhases.has(value.slice(21)))
     return value;
-  if (/^pick\.(scripts|folder|interpreter|editor|import|backup|migration)$/.test(value))
+  if (/^pick\.(scripts|locate|folder|interpreter|editor|import|backup|migration)$/.test(value))
     return value;
   return 'unknown';
 };
@@ -303,26 +322,53 @@ function sanitize(value: unknown, sessionId: string): Fields | null {
   return result;
 }
 
-function readFile(file: string, byteLimit: number): Fields[] | null {
+interface InspectedLog {
+  records: Fields[];
+  contents: string;
+  issues: CommandLogExportIssue[];
+}
+
+function readFile(
+  file: string,
+  byteLimit: number,
+  complete = false,
+  remainingBudget = maximumExportBytes,
+  accountRead: (bytes: number) => void = () => {},
+): InspectedLog | CommandLogExportIssueReason {
   let descriptor: number | null = null;
   try {
     const match = filePattern.exec(path.basename(file));
-    if (!match || !guid(match[2])) return null;
+    if (!match || !guid(match[2])) return 'invalid-format';
     const before = fs.lstatSync(file, { bigint: true });
-    if (!regular(before) || before.size < 1n || before.size > BigInt(byteLimit)) return null;
+    if (!regular(before)) return 'unsafe-or-changed';
+    if (before.size < 1n) return 'invalid-format';
+    if (before.size > BigInt(byteLimit)) return 'size-limit';
+    if (before.size > BigInt(remainingBudget)) return 'read-budget';
     descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-    if (version(fs.fstatSync(descriptor, { bigint: true })) !== version(before)) return null;
+    if (version(fs.fstatSync(descriptor, { bigint: true })) !== version(before))
+      return 'unsafe-or-changed';
+    accountRead(Number(before.size));
     const buffer = Buffer.alloc(Number(before.size));
     let offset = 0;
     while (offset < buffer.length) {
       const count = fs.readSync(descriptor, buffer, offset, buffer.length - offset, offset);
-      if (!count) return null;
+      if (!count) return 'unsafe-or-changed';
       offset += count;
     }
-    const contents = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
-    if (!contents.endsWith('\n')) return null;
+    let contents: string;
+    try {
+      contents = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    } catch {
+      return 'invalid-format';
+    }
+    if (!complete && !contents.endsWith('\n')) return 'invalid-format';
     const lines = contents.trimEnd().split('\n');
-    const header: unknown = JSON.parse(lines.shift() ?? '');
+    let header: unknown;
+    try {
+      header = parseStrictJson(lines.shift() ?? '');
+    } catch {
+      return 'invalid-format';
+    }
     if (
       !object(header) ||
       header.schemaVersion !== 1 ||
@@ -347,23 +393,72 @@ function readFile(file: string, byteLimit: number): Fields[] | null {
           ].includes(key),
       )
     )
-      return null;
+      return 'invalid-format';
     const records: Fields[] = [];
+    const exported: string[] = [JSON.stringify(header)];
+    let sanitizedRecords = 0;
+    let invalidRecords = 0;
+    const sameFields = (original: Record<string, unknown>, selected: Fields): boolean =>
+      Object.keys(original).length === Object.keys(selected).length &&
+      Object.keys(original).every((key) => original[key] === selected[key]);
     for (const line of lines) {
-      if (Buffer.byteLength(line, 'utf8') > 2048) return null;
-      const value: unknown = JSON.parse(line);
+      let value: unknown;
+      try {
+        if (Buffer.byteLength(line, 'utf8') > 2048) throw new Error('Invalid record size.');
+        value = parseStrictJson(line);
+      } catch {
+        if (!complete) return 'invalid-format';
+        invalidRecords++;
+        continue;
+      }
       const record = sanitize(value, match[2]!);
-      if (record) records.push(record);
+      if (record) {
+        records.push(record);
+        if (complete) {
+          exported.push(JSON.stringify(record));
+          if (!sameFields(value as Record<string, unknown>, record)) sanitizedRecords++;
+        }
+      } else if (complete) {
+        if (
+          object(value) &&
+          value.schemaVersion === 1 &&
+          value.kind === 'session-end' &&
+          value.sessionId === match[2] &&
+          timestamp(value.timestamp)
+        ) {
+          const ending: Fields = {
+            schemaVersion: 1,
+            kind: 'session-end',
+            sessionId: match[2]!,
+            timestamp: value.timestamp,
+          };
+          exported.push(JSON.stringify(ending));
+          if (!sameFields(value, ending)) sanitizedRecords++;
+        } else invalidRecords++;
+      }
     }
     const after = fs.fstatSync(descriptor, { bigint: true });
     const current = fs.lstatSync(file, { bigint: true });
-    return regular(current) &&
-      version(after) === version(before) &&
-      version(current) === version(before)
-      ? records
-      : null;
+    if (
+      !regular(current) ||
+      version(after) !== version(before) ||
+      version(current) !== version(before)
+    )
+      return 'unsafe-or-changed';
+    const issues: CommandLogExportIssue[] = [];
+    const name = path.basename(file);
+    if (sanitizedRecords)
+      issues.push({ file: name, reason: 'sanitized-records', count: sanitizedRecords });
+    if (invalidRecords || !contents.endsWith('\n'))
+      issues.push({ file: name, reason: 'invalid-format', count: invalidRecords });
+    return {
+      records,
+      // Valid current logs are copied exactly, including headers, ordering and session endings.
+      contents: issues.length ? exported.join('\n') + '\n' : contents,
+      issues,
+    };
   } catch {
-    return null;
+    return 'unavailable';
   } finally {
     if (descriptor !== null)
       try {
@@ -371,6 +466,56 @@ function readFile(file: string, byteLimit: number): Fields[] | null {
       } catch {
         /* No command behavior changes. */
       }
+  }
+}
+
+function assertDirectoryIdentity(directory: string, expected: string | null): void {
+  assertStoragePath(directory);
+  const current = fs.lstatSync(directory, { bigint: true });
+  if (!current.isDirectory() || current.isSymbolicLink() || identity(current) !== expected)
+    throw new Error('Unsafe diagnostic log directory.');
+}
+
+/** Every available retained command log is considered; exclusions are explicit in the archive. */
+export function readCommandLogFiles(
+  directory: string,
+  directoryIdentity: string | null,
+  fileByteLimit: number,
+): CommandLogExport {
+  const files: CommandLogExport['files'] = [];
+  const issues: CommandLogExportIssue[] = [];
+  try {
+    assertDirectoryIdentity(directory, directoryIdentity);
+    const entries = fs.readdirSync(directory);
+    if (entries.length > 256)
+      return { files, issues: [{ file: 'Logs', reason: 'entry-limit', count: entries.length }] };
+    let remainingBudget = maximumExportBytes;
+    // Prefer the newest evidence if an abnormal directory exceeds the explicit total read budget.
+    for (const name of entries
+      .filter((entry) => filePattern.test(entry))
+      .sort()
+      .reverse()) {
+      assertDirectoryIdentity(directory, directoryIdentity);
+      const read = readFile(
+        path.join(directory, name),
+        Math.min(fileByteLimit, maximumFileBytes),
+        true,
+        remainingBudget,
+        (bytes) => {
+          remainingBudget -= bytes;
+        },
+      );
+      if (typeof read === 'string') issues.push({ file: name, reason: read });
+      else {
+        files.push({ name, contents: read.contents });
+        issues.push(...read.issues);
+      }
+    }
+    assertDirectoryIdentity(directory, directoryIdentity);
+    return { files: files.sort((a, b) => a.name.localeCompare(b.name)), issues };
+  } catch {
+    // Never return files read through a namespace whose identity cannot be confirmed afterwards.
+    return { files: [], issues: [{ file: 'Logs', reason: 'unavailable' }] };
   }
 }
 
@@ -385,16 +530,7 @@ export function readCommandLogSnapshot(
     new Error('Diagnostic logs could not be read. Check access to the data folder.');
   try {
     if (mode !== 'recent' && mode !== 'errors') throw unavailable();
-    const checkDirectory = () => {
-      assertStoragePath(directory);
-      const current = fs.lstatSync(directory, { bigint: true });
-      if (
-        !current.isDirectory() ||
-        current.isSymbolicLink() ||
-        identity(current) !== directoryIdentity
-      )
-        throw unavailable();
-    };
+    const checkDirectory = () => assertDirectoryIdentity(directory, directoryIdentity);
     checkDirectory();
     const entries = fs.readdirSync(directory);
     if (entries.length > 256) throw unavailable();
@@ -408,8 +544,8 @@ export function readCommandLogSnapshot(
         path.join(directory, name),
         Math.min(limits.maximumFileBytes, maximumFileBytes),
       );
-      if (read === null) skippedFiles++;
-      else records.push(...read);
+      if (typeof read === 'string') skippedFiles++;
+      else records.push(...read.records);
     }
     checkDirectory();
     records.sort((a, b) => (a.timestamp as string).localeCompare(b.timestamp as string));
