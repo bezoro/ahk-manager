@@ -211,6 +211,70 @@ test('missing optional evidence is distinguished from malformed or unavailable e
   assert.equal(fs.readFileSync(file, 'utf8'), '{"truncated":\n');
 });
 
+test('invalid startup filenames and corrupt update-operation names remain visible as recovery evidence', (t) => {
+  const f = fixture(t);
+  f.write(
+    'Profile/startup-continuations/invalid.json',
+    '{"Detail":"Invalid filename blocks startup"}',
+  );
+  f.write(
+    'Profile/startup-continuations/UPPERCASE.JSON',
+    '{"Detail":"Case-insensitive Windows startup evidence"}',
+  );
+  let archive = createDiagnosticArchive(f.input);
+  let files = entries(archive.bytes);
+  assert.equal(archive.complete, true);
+  assert.match(files['Profile/startup-continuations/invalid.json']!, /blocks startup/);
+  assert.match(files['Profile/startup-continuations/UPPERCASE.JSON']!, /Windows startup evidence/);
+  f.write('Profile/startup-continuations/corrupt.JSON', '{"unfinished":');
+  const corruptOperation = 'a'.repeat(36);
+  f.write(
+    `Updates/operations/${corruptOperation}/ready.json`,
+    '{"Detail":"Corrupt operation name blocks recovery"}',
+  );
+  archive = createDiagnosticArchive(f.input);
+  files = entries(archive.bytes);
+  assert.equal(archive.complete, false);
+  assert.ok(
+    archive.manifest.issues.some(
+      (issue) =>
+        issue.file === 'Profile/startup-continuations/corrupt.JSON' &&
+        issue.reason === 'invalid-format',
+    ),
+  );
+  assert.ok(
+    archive.manifest.issues.some(
+      (issue) =>
+        issue.file === 'Updates/operations/' + corruptOperation &&
+        issue.reason === 'invalid-format',
+    ),
+  );
+  assert.match(files[`Updates/operations/${corruptOperation}/ready.json`]!, /blocks recovery/);
+});
+
+test('API-key credentials embedded in Activity details, runtime errors and helper CLI text are redacted', (t) => {
+  const f = fixture(t);
+  const secret = 'test-private-api-credential';
+  f.write(
+    'Profile/activity.jsonl',
+    JSON.stringify({ Detail: `Provider failed: api_key=${secret}; code=AccessDenied` }) + '\n',
+  );
+  f.write(
+    `Updates/operations/${operationId}/helper.log`,
+    `--api-key=${secret}\n--API_KEY "${secret}"\n--apikey ${secret}\nAPI-KEY: ${secret}\nhttps://example.com/file?api_key=${secret}&version=1.6.0\n`,
+  );
+  f.input.runtime = {
+    error: `Cannot open C:\\Users\\Bezor\\Data: apiKey=${secret}; version=1.6.0`,
+  };
+  const archive = createDiagnosticArchive(f.input);
+  const text = Object.values(entries(archive.bytes)).join('\n');
+  assert.equal(archive.complete, true);
+  assert.doesNotMatch(text, /test-private-api-credential/);
+  assert.match(text, /AccessDenied/);
+  assert.match(text, /version=1\.6\.0/);
+  assert.match(text, /Users\\\\Bezor/);
+});
+
 test('current runtime errors and startup details are included with recursive credential redaction', (t) => {
   const f = fixture(t);
   f.input.runtime = {

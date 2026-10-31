@@ -63,7 +63,7 @@ const marker = '[REDACTED]';
 const secretKey =
   /^(?:access[_-]?token|auth(?:entication)?[_-]?token|refresh[_-]?token|session[_-]?token|token|api[_-]?key|private[_-]?key|credentials?|authorization|proxy[_-]?authorization|cookie|set[_-]?cookie|password|passwd|secret|client[_-]?secret|nonce|script[_-]?contents?|source[_-]?text|raw[_-]?script|request[_-]?body|response[_-]?body)$/i;
 const secretQuery =
-  /^(?:access_token|auth_token|refresh_token|token|authorization|password|secret|client_secret|nonce|code|key|sig|signature|x-amz-credential|x-amz-signature|x-amz-security-token|x-goog-credential|x-goog-signature)$/i;
+  /^(?:access_token|auth_token|refresh_token|token|api[_-]?key|authorization|password|secret|client_secret|nonce|code|key|sig|signature|x-amz-credential|x-amz-signature|x-amz-security-token|x-goog-credential|x-goog-signature)$/i;
 const updateNames = new Set([
   'plan.json',
   'ready.json',
@@ -144,11 +144,11 @@ export function redactDiagnosticText(
         (_match, prefix: string) => prefix + JSON.stringify(replace('credential')),
       )
       .replace(
-        /\b((?:access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|secret|client[_-]?secret|nonce)\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&\r\n]+)/gi,
+        /\b((?:access[_-]?token|auth[_-]?token|refresh[_-]?token|token|api[_-]?key|password|passwd|secret|client[_-]?secret|nonce)\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&\r\n]+)/gi,
         (_match, prefix: string) => prefix + replace('credential'),
       )
       .replace(
-        /(--(?:access-token|auth-token|token|password|secret|nonce)(?:=|\s+))(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)/gi,
+        /(--(?:access-token|auth-token|token|api[_-]?key|password|secret|nonce)(?:=|\s+))(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)/gi,
         (_match, prefix: string) => prefix + replace('credential'),
       );
   const visit = (value: unknown, depth = 0): unknown => {
@@ -446,9 +446,15 @@ export function createDiagnosticArchive(
   }
   read(path.join(profile, 'operations.json'), 'Profile/operations.json', 'json');
   const startup = path.join(profile, 'startup-continuations');
-  for (const name of list(startup, 'Profile/startup-continuations'))
-    if (/^[0-9a-f-]{36}\.json$/i.test(name) && guid(name.slice(0, -5)))
-      read(path.join(startup, name), 'Profile/startup-continuations/' + name, 'json');
+  for (const name of list(startup, 'Profile/startup-continuations')) {
+    if (!/\.json$/i.test(name)) continue;
+    if (name.length > 255 || /[\x00-\x1f\\/:]/.test(name)) {
+      issue('Profile/startup-continuations', 'unsafe-or-changed');
+      continue;
+    }
+    // Core examines every *.json entry. A non-GUID filename can itself block startup.
+    read(path.join(startup, name), 'Profile/startup-continuations/' + name, 'json');
+  }
   const quarantine = path.join(startup, 'quarantine');
   for (const operation of list(quarantine, 'Profile/startup-continuations/quarantine')) {
     if (!guid(operation)) continue;
@@ -464,9 +470,10 @@ export function createDiagnosticArchive(
   }
   const operations = path.join(input.deployment.updatesDirectory, 'operations');
   for (const operation of list(operations, 'Updates/operations')) {
-    if (!guid(operation)) continue;
+    if (!guid(operation) && !/^[a-f0-9-]{36}$/.test(operation)) continue;
     const source = path.join(operations, operation);
     const prefix = 'Updates/operations/' + operation;
+    if (!guid(operation)) issue(prefix, 'invalid-format');
     for (const name of list(source, prefix))
       if (updateNames.has(name))
         read(
