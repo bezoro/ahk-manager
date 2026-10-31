@@ -23,7 +23,11 @@ internal interface IApplyEffects
 
 internal static class ApplyEngine
 {
-    internal static async Task<UpdateOutcome> Run(UpdatePlan plan, IApplyEffects effects)
+    internal static async Task<UpdateOutcome> Run(
+        UpdatePlan plan,
+        IApplyEffects effects,
+        Action<string>? log = null
+    )
     {
         UpdateOutcome Result(
             string outcome,
@@ -62,6 +66,7 @@ internal static class ApplyEngine
         }
         catch (Exception ex) when (UpdateProtocol.Known(ex))
         {
+            ApplyDiagnostics.Failure(log, "prepare-recovery-copy", ex);
             return Result(
                 "Failed",
                 "A recovery copy could not be prepared. The installation was preserved."
@@ -84,6 +89,7 @@ internal static class ApplyEngine
         }
         catch (Exception ex) when (UpdateProtocol.Known(ex))
         {
+            ApplyDiagnostics.Failure(log, "install", ex);
             return Result(
                 "Unknown",
                 "The installer launch could not be confirmed. No recovery operation was replayed automatically.",
@@ -105,13 +111,18 @@ internal static class ApplyEngine
             );
         if (installation.ExitCode == 0)
         {
+            string stage = "verify-installed-version";
             try
             {
                 effects.VerifyInstalled(plan.Version);
+                stage = "launch-installed-manager";
                 effects.Launch();
                 return Result("Installed", "Update installed. Manager was reopened.", 0, backup);
             }
-            catch (Exception ex) when (UpdateProtocol.Known(ex)) { }
+            catch (Exception ex) when (UpdateProtocol.Known(ex))
+            {
+                ApplyDiagnostics.Failure(log, stage, ex);
+            }
         }
 
         try
@@ -129,6 +140,7 @@ internal static class ApplyEngine
         }
         catch (Exception ex) when (UpdateProtocol.Known(ex))
         {
+            ApplyDiagnostics.Failure(log, "restore-previous-installation", ex);
             return Result(
                 "Unknown",
                 "Recovery could not be confirmed. The installation copies were preserved; do not replay the update automatically.",

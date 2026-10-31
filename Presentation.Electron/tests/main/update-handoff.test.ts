@@ -1,9 +1,12 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
+import childProcess, { type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { preparedUpdateControl } from '../../src/main/updates/update-handoff.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { prepareUpdate, preparedUpdateControl } from '../../src/main/updates/update-handoff.js';
 import { UpdateStore } from '../../src/main/updates/update-store.js';
 import { shutdownAndCommitUpdate } from '../../src/main/updates/update-shutdown.js';
 import type { ShutdownBoundary } from '../../src/main/lifecycle.js';
@@ -28,6 +31,78 @@ async function fixture(t: TestContext) {
     cancel = path.join(directory, 'cancel.json');
   return { store, control, directory, commit, cancel, operationId, parentStartedAtUtc };
 }
+
+test('the copied update host starts in its operation folder even when Manager is running from App', async (t) => {
+  const f = await fixture(t);
+  const store = new UpdateStore(path.join(f.store.root, 'Data', 'Updates'));
+  const application = path.join(f.store.root, 'App');
+  const helper = path.join(application, 'backend', 'update', 'AhkManager.UpdateHost.exe');
+  await fs.mkdir(path.dirname(helper), { recursive: true });
+  await fs.writeFile(helper, 'immutable helper fixture');
+  const installerPath = path.join(store.root, 'installers', '1.6.0', 'installer.exe');
+  const contents = Buffer.from('immutable installer fixture');
+  await fs.mkdir(path.dirname(installerPath), { recursive: true });
+  await fs.writeFile(installerPath, contents);
+  const operationId = randomUUID();
+  const directory = path.join(store.root, 'operations', operationId);
+  let unref = 0;
+  let dispatched = 0;
+  const processFixture = Object.assign(new EventEmitter(), {
+    stderr: null,
+    exitCode: null,
+    signalCode: null,
+    unref: () => {
+      unref++;
+    },
+  }) as unknown as ChildProcess;
+  t.mock.method(childProcess, 'spawn', (command: string, args: string[], options: SpawnOptions) => {
+    dispatched++;
+    assert.equal(process.cwd(), application);
+    assert.equal(options.cwd, directory);
+    assert.equal(options.detached, true);
+    assert.equal(options.shell, false);
+    assert.notEqual(path.dirname(command), application);
+    const planBytes = fsSync.readFileSync(args[1]!);
+    assert.equal(args[3], createHash('sha256').update(planBytes).digest('hex'));
+    const plan = JSON.parse(planBytes.toString('utf8'));
+    fsSync.writeFileSync(
+      path.join(directory, 'ready.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        operationId: plan.operationId,
+        parentPid: plan.parentPid,
+        parentStartedAtUtc: plan.parentStartedAtUtc,
+      }),
+    );
+    queueMicrotask(() => processFixture.emit('spawn'));
+    return processFixture;
+  });
+  const original = process.cwd();
+  try {
+    process.chdir(application);
+    const prepared = await prepareUpdate(
+      store,
+      operationId,
+      {
+        version: '1.6.0',
+        installerPath,
+        sha256: createHash('sha256').update(contents).digest('hex'),
+        bytes: contents.length,
+      },
+      application,
+      new Date().toISOString(),
+    );
+    assert.equal(dispatched, 1);
+    assert.equal(unref, 1);
+    await prepared.cancel();
+    assert.equal(
+      JSON.parse(await fs.readFile(path.join(directory, 'cancel.json'), 'utf8')).operationId,
+      operationId,
+    );
+  } finally {
+    process.chdir(original);
+  }
+});
 
 test('shutdown commit is published complete, binds the exact session and has a single final link', async (t) => {
   const f = await fixture(t);

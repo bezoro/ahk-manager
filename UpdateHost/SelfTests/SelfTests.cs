@@ -31,6 +31,10 @@ internal static partial class SelfTests
             "1.2.1"
         );
         CheckAdmissionDiagnostics(Check);
+        CheckApplyDiagnostics(Check);
+        CheckPortablePromotionPolicy(Check);
+        CheckOperationLogLimits(root, Check);
+        CheckUpdateWorkingDirectory(root, Check);
         CheckStoragePathPolicy(Check);
         CheckRetainedStorageHandles(root, Check);
         await CheckCloudFiles(root, Check).ConfigureAwait(false);
@@ -45,6 +49,7 @@ internal static partial class SelfTests
         CheckPortableDataMoveLeases(root, Check);
         CheckPortableStorageLeases(root, Check);
         await CheckPortableTransactions(root, Check);
+        await CheckPortablePromotionSharing(root, Check);
         await CheckInstallerCache(root, plan, Check);
         await CheckTestInstallerCache(root, Check);
         await CheckApplyTransactions(root, plan, Check);

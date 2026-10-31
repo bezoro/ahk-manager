@@ -23,6 +23,8 @@ internal static partial class SelfTests
         CheckPortableSignatures(Check);
         CheckStoragePathPolicy(Check);
         CheckAdmissionDiagnostics(Check);
+        CheckApplyDiagnostics(Check);
+        CheckPortablePromotionPolicy(Check);
         Console.WriteLine("PORTABLE POLICY checks=" + checks);
         return 0;
     }

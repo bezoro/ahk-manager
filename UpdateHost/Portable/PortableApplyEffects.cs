@@ -65,39 +65,61 @@ internal sealed class PortableApplyEffects(
 
     public async Task<InstallerRun> Install()
     {
+        string stage = "validate-portable-layout";
         try
         {
             CheckCancellation();
             layout.Revalidate();
+            stage = "verify-cached-package";
             package.Verify(plan.InstallerSha256);
+            stage = "extract-portable-payload";
             await PortablePayload
                 .Extract(package, Stage, plan.Version, verifyImage)
                 .ConfigureAwait(false);
             if (snapshot is null)
                 throw new InvalidDataException("A portable recovery snapshot is missing.");
-            InstallationSnapshot.Verify(
-                layout.Application,
-                snapshot,
-                PortablePayload.MaximumFiles * 2
-            );
-            InstallationSnapshot.VerifySecurity(layout.Application, snapshot);
-            VerifyOriginalMetadata();
-            CheckCancellation();
-            layout.Revalidate();
+            stage = "move-current-application";
             log?.Invoke("Promoting the verified portable payload on its original volume.");
-            if (Directory.Exists(Previous) || File.Exists(Previous))
-                throw new IOException("The portable preservation destination already exists.");
-            Directory.Move(layout.Application, Previous);
+            await PortablePromotion
+                .MoveApplication(
+                    layout.Application,
+                    Previous,
+                    () =>
+                    {
+                        CheckCancellation();
+                        layout.Revalidate();
+                        InstallationSnapshot.Verify(
+                            layout.Application,
+                            snapshot,
+                            PortablePayload.MaximumFiles * 2
+                        );
+                        InstallationSnapshot.VerifySecurity(layout.Application, snapshot);
+                        VerifyOriginalMetadata();
+                        if (Directory.Exists(Previous) || File.Exists(Previous))
+                            throw new IOException(
+                                "The portable preservation destination already exists."
+                            );
+                        // Snapshot hashing can take time. A cancellation published
+                        // during that verification still precedes the first move.
+                        layout.Revalidate();
+                        CheckCancellation();
+                    },
+                    log
+                )
+                .ConfigureAwait(false);
             applicationMoved = true;
             log?.Invoke("Previous portable payload preserved.");
+            stage = "promote-new-application";
             Directory.Move(Path.Combine(Stage, "App"), layout.Application);
             log?.Invoke("New portable payload promoted.");
+            stage = "replace-portable-launcher";
             File.Replace(
                 Path.Combine(Stage, PortableLayout.Executable),
                 layout.Launcher,
                 Path.Combine(Stage, "launcher-before-replacement.exe")
             );
             log?.Invoke("Portable launcher replaced atomically.");
+            stage = "replace-portable-inventory";
             File.Replace(
                 Path.Combine(Stage, PortableLayout.Descriptor),
                 DescriptorPath,
@@ -115,6 +137,7 @@ internal sealed class PortableApplyEffects(
             // All effects are in this process; there is no unobserved installer
             // dispatch. A caught failure can enter verified snapshot recovery.
             log?.Invoke("Portable promotion failed: " + ex.GetType().Name);
+            ApplyDiagnostics.Failure(log, stage, ex);
             return new(true, 20);
         }
     }
@@ -136,7 +159,7 @@ internal sealed class PortableApplyEffects(
         var start = new ProcessStartInfo(executable)
         {
             UseShellExecute = false,
-            WorkingDirectory = layout.Application,
+            WorkingDirectory = layout.Root,
         };
         start.ArgumentList.Add("--foreground");
         using var process =

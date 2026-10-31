@@ -136,6 +136,8 @@ internal static class Program
             trustedPlan = plan;
             phase = UpdatePhase.OperationLog;
             log = new OperationLog(operation);
+            UpdateWorkingDirectory.Detach(operation);
+            log.Write("Update helper working directory detached into its validated operation.");
             log.Write("Validating pinned installer and installation ownership.");
             phase = UpdatePhase.PackageOwnership;
             ProfileOwnership.Verify(Path.GetDirectoryName(plan.InstallerPath)!);
@@ -217,7 +219,7 @@ internal static class Program
             ready = true;
             log.Write("Ready. Waiting for the authenticated Manager to exit normally.");
             phase = UpdatePhase.Apply;
-            var result = await ApplyEngine.Run(plan, effects).ConfigureAwait(false);
+            var result = await ApplyEngine.Run(plan, effects, log.Write).ConfigureAwait(false);
             log.Write(result.Outcome + ": " + result.Detail);
             phase = UpdatePhase.Outcome;
             Evidence.WriteNew(Path.Combine(operation, "outcome.json"), result);
@@ -255,6 +257,11 @@ internal static class Program
             try
             {
                 log?.Write(AdmissionDiagnostics.Encode(phase, failure));
+                ApplyDiagnostics.Failure(
+                    log is null ? null : log.Write,
+                    "admission-" + phase,
+                    failure
+                );
                 log?.Write(outcome + ": " + detail);
                 if (
                     trustedOperation is not null

@@ -25,7 +25,8 @@ internal static partial class SelfTests
         )
         {
             var fake = new FakeEffects(scenario, root);
-            var result = await ApplyEngine.Run(plan, fake);
+            var diagnostics = new List<string>();
+            var result = await ApplyEngine.Run(plan, fake, diagnostics.Add);
             string expected =
                 scenario == "success" ? "Installed"
                 : scenario is "installer-active" or "restore-failed" ? "Unknown"
@@ -58,6 +59,22 @@ internal static partial class SelfTests
                 check(
                     fake.Restores == 1 && fake.Installs == 1,
                     "recovery is attempted once without replaying an installer: " + scenario
+                );
+            string? failureStage = scenario switch
+            {
+                "backup-failed" => "prepare-recovery-copy",
+                "verification-failed" => "verify-installed-version",
+                "launch-failed" => "launch-installed-manager",
+                "restore-failed" => "restore-previous-installation",
+                _ => null,
+            };
+            if (failureStage is not null)
+                check(
+                    diagnostics.Any(line =>
+                        line.Contains("stage=" + failureStage) && line.Contains("hresult=0x")
+                    ),
+                    "transaction diagnostics retain the original failure before recovery: "
+                        + scenario
                 );
         }
     }
