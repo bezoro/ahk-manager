@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
@@ -450,6 +451,17 @@ internal static partial class SelfTests
 
         string unsafeContainer = Path.Combine(root, "foreign portable root");
         var unsafeLayout = CreatePortableFixture(unsafeContainer, "1.2.0", protect: false);
+        // The fixture builder always creates a private root. A first extraction
+        // must instead inherit its containing directory's permissions.
+        var firstRunPermissions = new DirectoryInfo(unsafeContainer).GetAccessControl(
+            AccessControlSections.Access
+        );
+        firstRunPermissions.SetAccessRuleProtection(false, true);
+        new DirectoryInfo(unsafeContainer).SetAccessControl(firstRunPermissions);
+        check(
+            !new DirectoryInfo(unsafeContainer).GetAccessControl().AreAccessRulesProtected,
+            "first-time portable refusal fixture has a genuinely unprotected extracted root"
+        );
         File.WriteAllText(Path.Combine(unsafeContainer, "foreign.txt"), "unrelated owner data");
         string before = SnapshotSecurity.Read(unsafeContainer, true);
         PortableRefused(
