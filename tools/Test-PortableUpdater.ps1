@@ -181,38 +181,77 @@ function Test-InheritedAccessRepair {
     $again = & $tool -PortableRoot $portableRoot -BackupRoot $backupRoot
     Write-Json 'inherited-access-idempotent.json' $again
     Check ($again.Mode -ceq 'Preview' -and @($again.ChangedPaths).Count -eq 0 -and @($again.Targets).Count -eq 8 -and @($again.Targets | Where-Object { -not $_.Protected }).Count -eq 0 -and @(Get-ChildItem -LiteralPath $backupRoot -Directory -Force).Count -eq 1) 'a subsequent recovery preview is idempotent and verifies all eight protected startup targets without another backup'
+    $legacyApplicationAcl = Get-Acl -LiteralPath $application
+    $legacyApplicationAcl.SetAccessRuleProtection($false, $true)
+    Set-Acl -LiteralPath $application -AclObject $legacyApplicationAcl
+    if ((Get-Acl -LiteralPath $application).AreAccessRulesProtected -or -not (Is-Private $application)) { throw 'The Windows PowerShell recovery fixture must begin with privately inherited App permissions.' }
     $windowsPowerShell = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    $nativeModules = Join-Path (Split-Path -Parent $windowsPowerShell) 'Modules'
     $legacyPreviewFile = Join-Path $OutputRoot 'inherited-access-windows-powershell-preview.json'
-    $legacyParameters = [Convert]::ToBase64String($utf8.GetBytes((@{ tool = $tool; portableRoot = $portableRoot; backupRoot = $backupRoot; output = $legacyPreviewFile } | ConvertTo-Json -Compress)))
+    $legacyFailureFile = Join-Path $OutputRoot 'inherited-access-windows-powershell-failure.txt'
+    $legacyParameters = [Convert]::ToBase64String($utf8.GetBytes((@{ tool = $tool; portableRoot = $portableRoot; application = $application; backupRoot = $backupRoot; output = $legacyPreviewFile } | ConvertTo-Json -Compress)))
     $legacyCommand = @'
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'The recovery compatibility check requires Windows PowerShell 5.1.' }
-$inputPaths = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PARAMETERS__')) | ConvertFrom-Json
-$result = & $inputPaths.tool -PortableRoot $inputPaths.portableRoot -BackupRoot $inputPaths.backupRoot
-$evidence = [ordered]@{ fixture = $true; major = $PSVersionTable.PSVersion.Major; minor = $PSVersionTable.PSVersion.Minor; version = $PSVersionTable.PSVersion.ToString(); preview = $result }
-$bytes = [Text.UTF8Encoding]::new($false).GetBytes(($evidence | ConvertTo-Json -Depth 20))
-if ($bytes.Length -gt 65536) { throw 'Windows PowerShell recovery evidence exceeded its limit.' }
-$output = [IO.File]::Open($inputPaths.output, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
-try { $output.Write($bytes, 0, $bytes.Length); $output.Flush($true) } finally { $output.Dispose() }
+$stage = 'version'
+$failurePath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__FAILURE_PATH__'))
+function Save-Evidence([string]$Path, [string]$Text) {
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+    if ($bytes.Length -gt 65536) { throw 'Windows PowerShell recovery evidence exceeded its limit.' }
+    $output = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    try { $output.Write($bytes, 0, $bytes.Length); $output.Flush($true) } finally { $output.Dispose() }
+}
+try {
+    if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'The recovery compatibility check requires Windows PowerShell 5.1.' }
+    foreach ($name in @('Security', 'Management', 'Utility')) {
+        $stage = 'import-native-' + $name
+        $module = 'Microsoft.PowerShell.' + $name
+        Import-Module (Join-Path $PSHOME ('Modules\' + $module + '\' + $module + '.psd1')) -Force -ErrorAction Stop
+    }
+    $stage = 'parameters'
+    $inputPaths = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PARAMETERS__')) | ConvertFrom-Json
+    $before = Get-Acl -LiteralPath $inputPaths.application
+    $owner = $before.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($before.AreAccessRulesProtected) { throw 'Windows PowerShell must apply a real inherited-permission repair.' }
+    $stage = 'apply'
+    $applied = & $inputPaths.tool -PortableRoot $inputPaths.portableRoot -BackupRoot $inputPaths.backupRoot -Apply
+    $stage = 'preview'
+    $result = & $inputPaths.tool -PortableRoot $inputPaths.portableRoot -BackupRoot $inputPaths.backupRoot
+    $after = Get-Acl -LiteralPath $inputPaths.application
+    $modules = @(Get-Module -Name Microsoft.PowerShell.Security, Microsoft.PowerShell.Management, Microsoft.PowerShell.Utility | ForEach-Object { [ordered]@{ name = $_.Name; path = $_.Path; version = $_.Version.ToString() } })
+    $evidence = [ordered]@{ fixture = $true; major = $PSVersionTable.PSVersion.Major; minor = $PSVersionTable.PSVersion.Minor; version = $PSVersionTable.PSVersion.ToString(); psHome = $PSHOME; modulePath = $env:PSModulePath; modules = $modules; ownerBefore = $owner; ownerAfter = $after.GetOwner([Security.Principal.SecurityIdentifier]).Value; protectedBefore = $before.AreAccessRulesProtected; protectedAfter = $after.AreAccessRulesProtected; applied = $applied; preview = $result }
+    $stage = 'evidence'
+    Save-Evidence $inputPaths.output ($evidence | ConvertTo-Json -Depth 20)
+}
+catch {
+    $failure = $_
+    $exception = $failure.Exception.ToString()
+    $details = "PowerShell: $($PSVersionTable.PSVersion)`r`nPSHOME: $PSHOME`r`nPSModulePath: $env:PSModulePath`r`nStage: $stage`r`nErrorId: $($failure.FullyQualifiedErrorId)`r`n" + $exception.Substring(0, [Math]::Min(8192, $exception.Length))
+    Save-Evidence $failurePath $details
+    [Console]::Error.WriteLine('Windows PowerShell recovery failed during ' + $stage + '. Details: ' + $failurePath)
+    exit 1
+}
 '@
     $legacyStart = [Diagnostics.ProcessStartInfo]::new($windowsPowerShell)
     $legacyStart.UseShellExecute = $false; $legacyStart.CreateNoWindow = $true; $legacyStart.RedirectStandardOutput = $true; $legacyStart.RedirectStandardError = $true
-    foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($legacyCommand.Replace('__PARAMETERS__', $legacyParameters))))) { $legacyStart.ArgumentList.Add($argument) }
+    # Windows PowerShell must not inherit PowerShell 7's incompatible module path.
+    $legacyStart.Environment['PSModulePath'] = $nativeModules
+    $legacyEncodedCommand = $legacyCommand.Replace('__PARAMETERS__', $legacyParameters).Replace('__FAILURE_PATH__', [Convert]::ToBase64String($utf8.GetBytes($legacyFailureFile)))
+    foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($legacyEncodedCommand)))) { $legacyStart.ArgumentList.Add($argument) }
     $legacyProcess = [Diagnostics.Process]::Start($legacyStart)
     try {
         $legacyOutput = $legacyProcess.StandardOutput.ReadToEndAsync()
         $legacyError = $legacyProcess.StandardError.ReadToEndAsync()
-        if (-not $legacyProcess.WaitForExit(90000)) { $legacyProcess.Kill(); [void]$legacyProcess.WaitForExit(5000); throw 'The isolated read-only Windows PowerShell recovery preview exceeded 90 seconds.' }
+        if (-not $legacyProcess.WaitForExit(90000)) { $legacyProcess.Kill(); [void]$legacyProcess.WaitForExit(5000); throw 'The isolated Windows PowerShell recovery check exceeded 90 seconds.' }
         $legacyText = $legacyOutput.GetAwaiter().GetResult()
         $legacyErrorText = $legacyError.GetAwaiter().GetResult()
-        if ($legacyProcess.ExitCode -ne 0 -or $legacyText.Length -gt 65536 -or $legacyErrorText.Length -gt 65536) { throw "Windows PowerShell recovery preview failed. Exit=$($legacyProcess.ExitCode); stderr=$($legacyErrorText.Substring(0, [Math]::Min(4096, $legacyErrorText.Length)))" }
+        if ($legacyProcess.ExitCode -ne 0 -or $legacyText.Length -gt 65536 -or $legacyErrorText.Length -gt 65536) { throw "Windows PowerShell recovery check failed. Exit=$($legacyProcess.ExitCode); details=$legacyFailureFile; stderr=$($legacyErrorText.Substring(0, [Math]::Min(4096, $legacyErrorText.Length)))" }
     }
     finally { $legacyProcess.Dispose() }
     $legacyFile = Get-Item -LiteralPath $legacyPreviewFile -Force
     if ($legacyFile -isnot [IO.FileInfo] -or ($legacyFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $legacyFile.Length -le 0 -or $legacyFile.Length -gt 65536) { throw 'Windows PowerShell did not retain bounded regular recovery evidence.' }
     $legacyPreview = [IO.File]::ReadAllText($legacyPreviewFile, $utf8) | ConvertFrom-Json -Depth 25
-    Check ($legacyPreview.fixture -eq $true -and $legacyPreview.major -eq 5 -and $legacyPreview.minor -eq 1 -and $legacyPreview.preview.Mode -ceq 'Preview' -and $legacyPreview.preview.Version -ceq $baseline.Version -and (Same-Path $legacyPreview.preview.PortableRoot $portableRoot) -and @($legacyPreview.preview.ChangedPaths).Count -eq 0 -and @(Get-ChildItem -LiteralPath $backupRoot -Directory -Force).Count -eq 1) 'the exact Windows PowerShell 5.1 executable previews the verified repaired package without changes or another backup'
+    Check ($legacyPreview.fixture -eq $true -and $legacyPreview.major -eq 5 -and $legacyPreview.minor -eq 1 -and (Same-Path $legacyPreview.psHome (Split-Path -Parent $windowsPowerShell)) -and @($legacyPreview.modules).Count -eq 3 -and @($legacyPreview.modules | Where-Object { -not $_.path.StartsWith($nativeModules.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) }).Count -eq 0 -and $legacyPreview.protectedBefore -eq $false -and $legacyPreview.protectedAfter -eq $true -and $legacyPreview.ownerBefore -ceq $applicationOwner -and $legacyPreview.ownerAfter -ceq $applicationOwner -and $legacyPreview.applied.Mode -ceq 'Applied' -and @($legacyPreview.applied.ChangedPaths).Count -eq 1 -and (Same-Path $legacyPreview.applied.ChangedPaths[0] $application) -and (Is-Private $legacyPreview.applied.BackupDirectory) -and $legacyPreview.preview.Mode -ceq 'Preview' -and $legacyPreview.preview.Version -ceq $baseline.Version -and (Same-Path $legacyPreview.preview.PortableRoot $portableRoot) -and @($legacyPreview.preview.ChangedPaths).Count -eq 0 -and @(Get-ChildItem -LiteralPath $backupRoot -Directory -Force).Count -eq 2) 'the exact Windows PowerShell 5.1 executable uses native modules, repairs App inheritance without changing its owner and confirms an idempotent preview with its own private backup'
     $privateApplicationAcl = Get-Acl -LiteralPath $application
     $foreignApplicationAcl = Get-Acl -LiteralPath $application
     $foreignApplicationAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'), [Security.AccessControl.FileSystemRights]::Modify, [Security.AccessControl.AccessControlType]::Allow))
@@ -221,7 +260,7 @@ try { $output.Write($bytes, 0, $bytes.Length); $output.Flush($true) } finally { 
     $foreignRefused = $false
     try { $null = & $tool -PortableRoot $portableRoot -BackupRoot $backupRoot -Apply }
     catch { $foreignRefused = $_.Exception.Message.StartsWith('Another principal has access to ', [StringComparison]::Ordinal) }
-    Check ($foreignRefused -and (Get-Acl -LiteralPath $application).Sddl -ceq $foreignPermissions -and @(Get-ChildItem -LiteralPath $backupRoot -Directory -Force).Count -eq 1) 'the recovery command refuses an App folder writable by another principal before changing permissions or creating another backup'
+    Check ($foreignRefused -and (Get-Acl -LiteralPath $application).Sddl -ceq $foreignPermissions -and @(Get-ChildItem -LiteralPath $backupRoot -Directory -Force).Count -eq 2) 'the recovery command refuses an App folder writable by another principal before changing permissions or creating another backup'
     Set-Acl -LiteralPath $application -AclObject $privateApplicationAcl
     foreach ($file in $critical.Keys) {
         if ((Hash $file) -cne $critical[$file].sha256 -or (Get-Acl -LiteralPath $file).GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $critical[$file].owner) { throw 'Recovery modified a critical portable file or its owner.' }
