@@ -45,8 +45,7 @@ internal static class AdmissionDiagnostics
 
     internal static string Encode(UpdatePhase phase, Exception exception)
     {
-        if (exception is PortableDataInitializationException data)
-            exception = data.Failure;
+        exception = PortableInitializationDiagnostics.Original(exception);
         string name = phase switch
         {
             UpdatePhase.Arguments => "arguments",

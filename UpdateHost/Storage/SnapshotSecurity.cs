@@ -47,12 +47,13 @@ internal static class SnapshotSecurity
         return true;
     }
 
-    static DirectorySecurity PrivateDirectory()
+    static DirectorySecurity PrivateDirectory(bool includeOwner = true)
     {
         using var identity = WindowsIdentity.GetCurrent();
         var user = identity.User ?? throw new UnauthorizedAccessException();
         var security = new DirectorySecurity();
-        security.SetOwner(user);
+        if (includeOwner)
+            security.SetOwner(user);
         security.SetAccessRuleProtection(true, false);
         foreach (
             var sid in new[]
@@ -116,17 +117,15 @@ internal static class SnapshotSecurity
                 .GetOwner(typeof(SecurityIdentifier))
                 ?.Value
             ?? throw new UnauthorizedAccessException();
-        if (owner != identity.User?.Value && owner != "S-1-5-18" && owner != "S-1-5-32-544")
-            throw new UnauthorizedAccessException(
-                "The portable container belongs to another user."
-            );
-        var security = PrivateDirectory();
+        VerifyTrustedOwner(owner, identity.User?.Value);
+        // Restricting a proven container requires WRITE_DAC, not WRITE_OWNER.
+        // Preserve its already trusted owner, including SYSTEM or Administrators.
+        var security = PrivateDirectory(includeOwner: false);
         if (directory)
             new DirectoryInfo(path).SetAccessControl(security);
         else
         {
             var file = new FileSecurity();
-            file.SetOwner(identity.User!);
             file.SetAccessRuleProtection(true, false);
             foreach (
                 FileSystemAccessRule rule in security.GetAccessRules(
@@ -145,6 +144,14 @@ internal static class SnapshotSecurity
             new FileInfo(path).SetAccessControl(file);
         }
         VerifyPrivate(path, directory, true);
+    }
+
+    internal static void VerifyTrustedOwner(string owner, string? userSid)
+    {
+        if (userSid is null || (owner != userSid && owner != "S-1-5-18" && owner != "S-1-5-32-544"))
+            throw new UnauthorizedAccessException(
+                "The portable container belongs to another user."
+            );
     }
 
     internal static void VerifyPrivate(string path, bool directory, bool requireProtected = false)

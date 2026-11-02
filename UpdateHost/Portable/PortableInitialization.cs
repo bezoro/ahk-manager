@@ -1,4 +1,5 @@
 using Bezoro.AhkManager.Core.Infrastructure;
+using static Bezoro.AhkManager.UpdateHost.PortableInitializationDiagnostics;
 
 namespace Bezoro.AhkManager.UpdateHost;
 
@@ -6,16 +7,33 @@ internal static class PortableInitialization
 {
     internal static PortableLayout Run()
     {
-        var layout =
-            PortableLayout.FromParent()
-            ?? throw new InvalidDataException("The parent is not a portable Manager.");
-        using var directories = new DirectoryLease([layout.Root]);
+        var layout = Step(
+            "resolve-layout",
+            "application",
+            () =>
+                PortableLayout.FromParent()
+                ?? throw new InvalidDataException("The parent is not a portable Manager.")
+        );
+        using var directories = Step(
+            "retain-root",
+            "root",
+            () => new DirectoryLease([layout.Root])
+        );
         using var dataDirectories = RetainDataDirectory(layout);
-        using var marker = FileLease.Open(layout.Marker, 4096);
-        if (marker.Hash() != layout.MarkerHash)
-            throw new InvalidDataException("Portable configuration changed before initialization.");
-        VerifySourceHelper(layout);
-        Initialize(layout);
+        using var marker = Step("open-marker", "marker", () => FileLease.Open(layout.Marker, 4096));
+        Step(
+            "verify-marker",
+            "marker",
+            () =>
+            {
+                if (marker.Hash() != layout.MarkerHash)
+                    throw new InvalidDataException(
+                        "Portable configuration changed before initialization."
+                    );
+            }
+        );
+        Step("verify-helper", "helper", () => VerifySourceHelper(layout));
+        Step("prepare-app", "application", () => Initialize(layout));
         try
         {
             InitializeData(layout);
@@ -31,9 +49,16 @@ internal static class PortableInitialization
     {
         try
         {
-            return new DirectoryLease([
-                Directory.Exists(layout.Data) ? layout.Data : Path.GetDirectoryName(layout.Data)!,
-            ]);
+            return Step(
+                "retain-data",
+                "data",
+                () =>
+                    new DirectoryLease([
+                        Directory.Exists(layout.Data)
+                            ? layout.Data
+                            : Path.GetDirectoryName(layout.Data)!,
+                    ])
+            );
         }
         catch (Exception failure) when (UpdateProtocol.Known(failure))
         {
@@ -57,13 +82,25 @@ internal static class PortableInitialization
     {
         if (AlreadyPrivate(layout))
             return;
-        VerifyRootMembers(layout);
-        using var inventory = new PortableInventory(layout.Root);
-        PortablePayload.VerifyVersion(layout.Application, inventory.Descriptor.Version);
+        Step("verify-root-members", "root", () => VerifyRootMembers(layout));
+        using var inventory = Step(
+            "open-inventory",
+            "descriptor",
+            () => new PortableInventory(layout.Root)
+        );
+        Step(
+            "verify-version",
+            "application",
+            () => PortablePayload.VerifyVersion(layout.Application, inventory.Descriptor.Version)
+        );
         // Every inventoried file remains read-locked while only this dedicated
         // product container is protected. Repository and ancestor ACLs are untouched.
-        SnapshotSecurity.ProtectOwnedPath(layout.Root, true);
-        SnapshotSecurity.ProtectOwnedPath(layout.Application, true);
+        Step("protect-root", "root", () => SnapshotSecurity.ProtectOwnedPath(layout.Root, true));
+        Step(
+            "protect-app",
+            "application",
+            () => SnapshotSecurity.ProtectOwnedPath(layout.Application, true)
+        );
         var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in inventory.Files.Values)
         {
@@ -75,17 +112,34 @@ internal static class PortableInitialization
             }
         }
         foreach (string directory in directories.OrderBy(path => path.Length))
-            SnapshotSecurity.ProtectOwnedPath(directory, true);
+            Step(
+                "protect-directory",
+                "payload-directory",
+                () => SnapshotSecurity.ProtectOwnedPath(directory, true)
+            );
         foreach (var file in inventory.Files.Values)
-            SnapshotSecurity.ProtectOwnedPath(file.Path, false);
-        SnapshotSecurity.ProtectOwnedPath(
-            Path.Combine(layout.Root, PortableLayout.Descriptor),
-            false
+            Step(
+                "protect-file",
+                "payload-file",
+                () => SnapshotSecurity.ProtectOwnedPath(file.Path, false)
+            );
+        Step(
+            "protect-descriptor",
+            "descriptor",
+            () =>
+                SnapshotSecurity.ProtectOwnedPath(
+                    Path.Combine(layout.Root, PortableLayout.Descriptor),
+                    false
+                )
         );
-        SnapshotSecurity.ProtectOwnedPath(layout.Marker, false);
-        ProfileOwnership.Verify(layout.Root);
-        ProfileOwnership.Verify(layout.Application);
-        VerifyRootMembers(layout);
+        Step(
+            "protect-marker",
+            "marker",
+            () => SnapshotSecurity.ProtectOwnedPath(layout.Marker, false)
+        );
+        Step("verify-root-access", "root", () => ProfileOwnership.Verify(layout.Root));
+        Step("verify-app-access", "application", () => ProfileOwnership.Verify(layout.Application));
+        Step("verify-root-members", "root", () => VerifyRootMembers(layout));
     }
 
     static bool AlreadyPrivate(PortableLayout layout)
@@ -93,7 +147,9 @@ internal static class PortableInitialization
         try
         {
             SnapshotSecurity.VerifyPrivate(layout.Root, true, true);
-            SnapshotSecurity.VerifyPrivate(layout.Application, true, true);
+            // Children may safely inherit the retained root's protected private DACL.
+            // Effective access and ownership remain restricted to the same trusted principals.
+            SnapshotSecurity.VerifyPrivate(layout.Application, true);
             foreach (
                 string relative in new[]
                 {
@@ -107,8 +163,7 @@ internal static class PortableInitialization
             )
                 SnapshotSecurity.VerifyPrivate(
                     Path.Combine(layout.Root, relative.Replace('/', Path.DirectorySeparatorChar)),
-                    false,
-                    true
+                    false
                 );
             return true;
         }
@@ -120,16 +175,16 @@ internal static class PortableInitialization
 
     internal static void InitializeData(PortableLayout layout)
     {
-        UpdatePaths.NoRedirects(layout.Data);
+        Step("prepare-data", "data", () => UpdatePaths.NoRedirects(layout.Data));
         if (!Directory.Exists(layout.Data))
         {
             if (File.Exists(Path.Combine(layout.Root, "portable-data-move.json")))
                 throw new InvalidDataException(
                     "A pending data move has no original data directory."
                 );
-            SnapshotSecurity.CreatePrivateDirectory(layout.Data);
+            Step("create-data", "data", () => SnapshotSecurity.CreatePrivateDirectory(layout.Data));
         }
-        ProfileOwnership.Verify(layout.Data);
+        Step("verify-data-access", "data", () => ProfileOwnership.Verify(layout.Data));
     }
 
     internal static void VerifyRootMembers(PortableLayout layout)

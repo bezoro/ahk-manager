@@ -138,6 +138,101 @@ function Is-Private([string]$Path) {
     }
     return $true
 }
+function Test-InheritedAccessRepair {
+    $tool = Join-Path $PSScriptRoot 'Repair-PortableInheritedAccess.ps1'
+    $application = Join-Path $portableRoot 'App'
+    $rootPermissions = (Get-Acl -LiteralPath $portableRoot).Sddl
+    $applicationOwner = (Get-Acl -LiteralPath $application).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    $dataPermissions = @{}
+    $dataHashes = @{}
+    foreach ($item in @((Get-Item -LiteralPath $dataRoot -Force)) + @(Get-ChildItem -LiteralPath $dataRoot -Force -Recurse)) {
+        $dataPermissions[$item.FullName] = (Get-Acl -LiteralPath $item.FullName).Sddl
+        if ($item -is [IO.FileInfo]) { $dataHashes[$item.FullName] = Hash $item.FullName }
+    }
+    $critical = @{}
+    foreach ($relative in @('Bezoro.AhkManager.exe', 'portable-package.json', 'portable.json', 'App/Bezoro.AhkManager.exe', 'App/backend/AhkManager.Backend.exe', 'App/backend/update/AhkManager.UpdateHost.exe')) {
+        $file = Join-Path $portableRoot $relative
+        $critical[$file] = [ordered]@{ owner = (Get-Acl -LiteralPath $file).GetOwner([Security.Principal.SecurityIdentifier]).Value; sha256 = Hash $file }
+    }
+    # Reproduce private effective inheritance from the retained root without
+    # changing owners, grants, user Data or the permissive shared parent.
+    $applicationAcl = Get-Acl -LiteralPath $application
+    $applicationAcl.SetAccessRuleProtection($false, $true)
+    Set-Acl -LiteralPath $application -AclObject $applicationAcl
+    $inheritedPermissions = (Get-Acl -LiteralPath $application).Sddl
+    Check (-not (Get-Acl -LiteralPath $application).AreAccessRulesProtected -and (Is-Private $application)) 'the recovery fixture reproduces a private App folder that safely inherits from the protected portable root'
+    $backupRoot = Join-Path $OutputRoot 'inherited-access-backups'
+    New-PrivateDirectory $backupRoot
+    $preview = & $tool -PortableRoot $portableRoot -BackupRoot $backupRoot
+    Write-Json 'inherited-access-preview.json' $preview
+    Check ($preview.Mode -ceq 'Preview' -and $preview.Version -ceq $baseline.Version -and (Same-Path $preview.PortableRoot $portableRoot) -and @($preview.ChangedPaths).Count -eq 1 -and (Same-Path $preview.ChangedPaths[0] $application) -and (Get-Acl -LiteralPath $application).Sddl -ceq $inheritedPermissions -and @(Get-ChildItem -LiteralPath $backupRoot -Force).Count -eq 0) 'the recovery preview identifies only inherited App permissions and leaves every permission and backup path unchanged'
+    $redirectTarget = Join-Path $OutputRoot 'inherited-access-redirect-target'
+    $redirect = Join-Path $OutputRoot 'inherited-access-backup-junction'
+    New-PrivateDirectory $redirectTarget
+    $null = New-Item -ItemType Junction -Path $redirect -Target $redirectTarget
+    $redirectRefused = $false
+    try { $null = & $tool -PortableRoot $portableRoot -BackupRoot (Join-Path $redirect 'uncreated-backup-parent') -Apply }
+    catch { $redirectRefused = $_.Exception.GetBaseException().Message.StartsWith('Unsupported redirected entry: ', [StringComparison]::Ordinal) }
+    Check ($redirectRefused -and @(Get-ChildItem -LiteralPath $redirectTarget -Force).Count -eq 0 -and (Get-Acl -LiteralPath $application).Sddl -ceq $inheritedPermissions -and @(Get-ChildItem -LiteralPath $backupRoot -Force).Count -eq 0) 'recovery refuses a redirected backup ancestor before creating any directory through it or changing App permissions'
+    [IO.Directory]::Delete($redirect)
+    $applied = & $tool -PortableRoot $portableRoot -BackupRoot $backupRoot -Apply
+    Write-Json 'inherited-access-applied.json' $applied
+    Check ($applied.Mode -ceq 'Applied' -and @($applied.ChangedPaths).Count -eq 1 -and (Same-Path $applied.ChangedPaths[0] $application) -and (Get-Acl -LiteralPath $application).AreAccessRulesProtected -and (Get-Acl -LiteralPath $application).GetOwner([Security.Principal.SecurityIdentifier]).Value -ceq $applicationOwner -and (Is-Private $application) -and (Test-Path -LiteralPath $applied.BackupDirectory -PathType Container) -and (Is-Private $applied.BackupDirectory) -and ([IO.Path]::GetFullPath($applied.BackupDirectory)).StartsWith([IO.Path]::GetFullPath($backupRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) 'the real recovery command freezes only App inheritance, preserves its owner and retains a private backup outside the portable installation'
+    $again = & $tool -PortableRoot $portableRoot -BackupRoot $backupRoot
+    Write-Json 'inherited-access-idempotent.json' $again
+    Check ($again.Mode -ceq 'Preview' -and @($again.ChangedPaths).Count -eq 0 -and @($again.Targets).Count -eq 8 -and @($again.Targets | Where-Object { -not $_.Protected }).Count -eq 0 -and @(Get-ChildItem -LiteralPath $backupRoot -Directory -Force).Count -eq 1) 'a subsequent recovery preview is idempotent and verifies all eight protected startup targets without another backup'
+    $windowsPowerShell = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    $legacyPreviewFile = Join-Path $OutputRoot 'inherited-access-windows-powershell-preview.json'
+    $legacyParameters = [Convert]::ToBase64String($utf8.GetBytes((@{ tool = $tool; portableRoot = $portableRoot; backupRoot = $backupRoot; output = $legacyPreviewFile } | ConvertTo-Json -Compress)))
+    $legacyCommand = @'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'The recovery compatibility check requires Windows PowerShell 5.1.' }
+$inputPaths = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PARAMETERS__')) | ConvertFrom-Json
+$result = & $inputPaths.tool -PortableRoot $inputPaths.portableRoot -BackupRoot $inputPaths.backupRoot
+$evidence = [ordered]@{ fixture = $true; major = $PSVersionTable.PSVersion.Major; minor = $PSVersionTable.PSVersion.Minor; version = $PSVersionTable.PSVersion.ToString(); preview = $result }
+$bytes = [Text.UTF8Encoding]::new($false).GetBytes(($evidence | ConvertTo-Json -Depth 20))
+if ($bytes.Length -gt 65536) { throw 'Windows PowerShell recovery evidence exceeded its limit.' }
+$output = [IO.File]::Open($inputPaths.output, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+try { $output.Write($bytes, 0, $bytes.Length); $output.Flush($true) } finally { $output.Dispose() }
+'@
+    $legacyStart = [Diagnostics.ProcessStartInfo]::new($windowsPowerShell)
+    $legacyStart.UseShellExecute = $false; $legacyStart.CreateNoWindow = $true; $legacyStart.RedirectStandardOutput = $true; $legacyStart.RedirectStandardError = $true
+    foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($legacyCommand.Replace('__PARAMETERS__', $legacyParameters))))) { $legacyStart.ArgumentList.Add($argument) }
+    $legacyProcess = [Diagnostics.Process]::Start($legacyStart)
+    try {
+        $legacyOutput = $legacyProcess.StandardOutput.ReadToEndAsync()
+        $legacyError = $legacyProcess.StandardError.ReadToEndAsync()
+        if (-not $legacyProcess.WaitForExit(90000)) { $legacyProcess.Kill(); [void]$legacyProcess.WaitForExit(5000); throw 'The isolated read-only Windows PowerShell recovery preview exceeded 90 seconds.' }
+        $legacyText = $legacyOutput.GetAwaiter().GetResult()
+        $legacyErrorText = $legacyError.GetAwaiter().GetResult()
+        if ($legacyProcess.ExitCode -ne 0 -or $legacyText.Length -gt 65536 -or $legacyErrorText.Length -gt 65536) { throw "Windows PowerShell recovery preview failed. Exit=$($legacyProcess.ExitCode); stderr=$($legacyErrorText.Substring(0, [Math]::Min(4096, $legacyErrorText.Length)))" }
+    }
+    finally { $legacyProcess.Dispose() }
+    $legacyFile = Get-Item -LiteralPath $legacyPreviewFile -Force
+    if ($legacyFile -isnot [IO.FileInfo] -or ($legacyFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $legacyFile.Length -le 0 -or $legacyFile.Length -gt 65536) { throw 'Windows PowerShell did not retain bounded regular recovery evidence.' }
+    $legacyPreview = [IO.File]::ReadAllText($legacyPreviewFile, $utf8) | ConvertFrom-Json -Depth 25
+    Check ($legacyPreview.fixture -eq $true -and $legacyPreview.major -eq 5 -and $legacyPreview.minor -eq 1 -and $legacyPreview.preview.Mode -ceq 'Preview' -and $legacyPreview.preview.Version -ceq $baseline.Version -and (Same-Path $legacyPreview.preview.PortableRoot $portableRoot) -and @($legacyPreview.preview.ChangedPaths).Count -eq 0 -and @(Get-ChildItem -LiteralPath $backupRoot -Directory -Force).Count -eq 1) 'the exact Windows PowerShell 5.1 executable previews the verified repaired package without changes or another backup'
+    $privateApplicationAcl = Get-Acl -LiteralPath $application
+    $foreignApplicationAcl = Get-Acl -LiteralPath $application
+    $foreignApplicationAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'), [Security.AccessControl.FileSystemRights]::Modify, [Security.AccessControl.AccessControlType]::Allow))
+    Set-Acl -LiteralPath $application -AclObject $foreignApplicationAcl
+    $foreignPermissions = (Get-Acl -LiteralPath $application).Sddl
+    $foreignRefused = $false
+    try { $null = & $tool -PortableRoot $portableRoot -BackupRoot $backupRoot -Apply }
+    catch { $foreignRefused = $_.Exception.Message.StartsWith('Another principal has access to ', [StringComparison]::Ordinal) }
+    Check ($foreignRefused -and (Get-Acl -LiteralPath $application).Sddl -ceq $foreignPermissions -and @(Get-ChildItem -LiteralPath $backupRoot -Directory -Force).Count -eq 1) 'the recovery command refuses an App folder writable by another principal before changing permissions or creating another backup'
+    Set-Acl -LiteralPath $application -AclObject $privateApplicationAcl
+    foreach ($file in $critical.Keys) {
+        if ((Hash $file) -cne $critical[$file].sha256 -or (Get-Acl -LiteralPath $file).GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $critical[$file].owner) { throw 'Recovery modified a critical portable file or its owner.' }
+    }
+    $observedData = @((Get-Item -LiteralPath $dataRoot -Force)) + @(Get-ChildItem -LiteralPath $dataRoot -Force -Recurse)
+    if ($observedData.Count -ne $dataPermissions.Count) { throw 'Recovery changed the set of portable Data entries.' }
+    foreach ($item in $observedData) {
+        if (-not $dataPermissions.ContainsKey($item.FullName) -or (Get-Acl -LiteralPath $item.FullName).Sddl -cne $dataPermissions[$item.FullName] -or ($item -is [IO.FileInfo] -and (Hash $item.FullName) -cne $dataHashes[$item.FullName])) { throw 'Recovery modified a portable Data entry, its contents or permissions.' }
+    }
+    Check ((Get-Acl -LiteralPath $application).Sddl -ceq $privateApplicationAcl.Sddl -and (Get-Acl -LiteralPath $portableRoot).Sddl -ceq $rootPermissions -and (Get-Acl -LiteralPath $parent).Sddl -ceq $parentAcl -and (Hash $scriptFile) -ceq $scriptHash -and -not $inert.HasExited -and (No-Registration)) 'recovery preserves all Data entries and permissions, critical bytes and owners, root and shared-parent ACLs, the external script and the unrelated process'
+}
 function Save-OperationEvidence([string]$Phase, [string]$Operation) {
     $destination = Join-Path $OutputRoot $Phase
     [IO.Directory]::CreateDirectory($destination) | Out-Null
@@ -542,6 +637,13 @@ try {
         [IO.File]::WriteAllText($foreign, 'An unrelated existing file must never authorize initialization.', $utf8)
         $foreignHash = Hash $foreign
         $rootAcl = (Get-Acl -LiteralPath $portableRoot).Sddl
+        $startupReports = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Bezoro/AhkManagerElectronDiagnostics/Startup'
+        $existingStartupReports = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        if (Test-Path -LiteralPath $startupReports) {
+            $directory = Get-Item -LiteralPath $startupReports -Force
+            if ($directory -isnot [IO.DirectoryInfo] -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'The isolated startup diagnostic namespace is not a regular directory.' }
+            foreach ($file in @(Get-ChildItem -LiteralPath $startupReports -File -Filter 'startup-*.json')) { [void]$existingStartupReports.Add($file.Name) }
+        }
         $session = Start-PortableSession -Root $portableRoot -EvidenceRoot $OutputRoot -ViaLauncher -ExpectStartupRefusal
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         $dismissed = $false
@@ -552,6 +654,15 @@ try {
         Write-Json 'foreign-root-windows.json' ([AhkManager.TestSupport.InstalledUpdaterUi]::Describe($session.Process.Id, $session.Image, $session.Started))
         Write-Json 'foreign-root-observation.json' ([ordered]@{ fixture = $true; dismissed = $dismissed; processExited = $session.Process.HasExited; observation = [AhkManager.TestSupport.PortableStartupUi]::LastObservation })
         Check ($dismissed -and $session.Process.WaitForExit(30000) -and $session.Process.ExitCode -eq 65) 'the actual portable app refuses an unknown root file and exits after its exact owned error dialog closes'
+        Check (Test-Path -LiteralPath $startupReports -PathType Container) 'the actual refused portable launch preserves diagnostics in the independent per-user namespace'
+        $newReports = @(Get-ChildItem -LiteralPath $startupReports -File -Filter 'startup-*.json' | Where-Object { -not $existingStartupReports.Contains($_.Name) })
+        Check ($newReports.Count -eq 1) 'the exact failed application session creates one new startup report before exiting'
+        $startupFile = $newReports[0]
+        Check (($startupFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and $startupFile.Length -gt 0 -and $startupFile.Length -le 65536 -and -not (Same-Path $startupReports $portableRoot) -and -not ([IO.Path]::GetFullPath($startupReports)).StartsWith([IO.Path]::GetFullPath($portableRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) 'startup evidence is bounded and stored outside the refused portable container'
+        $startupHash = Hash $startupFile.FullName
+        $startupReport = [IO.File]::ReadAllText($startupFile.FullName, $utf8) | ConvertFrom-Json -Depth 35
+        Check ($startupReport.schemaVersion -eq 1 -and $startupReport.applicationId -ceq 'Bezoro.AhkManager.Electron' -and $startupReport.kind -ceq 'startup-failure' -and $startupReport.version -ceq $baseline.Version -and (Same-Path $startupReport.executablePath $session.Image) -and (Same-Path $startupReport.deployment.portableRoot $portableRoot) -and (Same-Path $startupReport.deployment.dataDirectory $dataRoot) -and $startupReport.error.code -ceq 'invalid-package' -and $startupReport.error.diagnostic.origin -ceq 'native' -and $startupReport.error.diagnostic.phase -ceq 'portable-initialization' -and $startupReport.error.diagnostic.stage -ceq 'verify-root-members' -and $startupReport.error.diagnostic.resource -ceq 'root' -and $startupReport.error.diagnostic.exitCode -eq 65 -and $startupReport.error.diagnostic.hresult -cmatch '^0x[0-9A-F]{8}$' -and $startupReport.error.diagnostic.userSid -ceq $sid -and $startupReport.error.diagnostic.administrator -eq $true -and (Hash $startupFile.FullName) -ceq $startupHash) 'startup evidence binds the failed native check, version, portable paths and actual Windows token without a backend'
+        Write-Json 'startup-refusal-diagnostic.json' $startupReport
         Check ((Hash $foreign) -ceq $foreignHash -and (Get-Acl -LiteralPath $portableRoot).Sddl -ceq $rootAcl -and (Get-Acl -LiteralPath $parent).Sddl -ceq $parentAcl) 'failed initialization preserves unrelated files and both directory permission sets'
         Check (-not (Test-Path -LiteralPath $dataRoot) -and (No-Registration)) 'refused portable startup creates neither user Data nor installer registration'
         $shortcutPreserved = if ($null -eq $searchShortcutBefore) { -not (Test-Path -LiteralPath $searchShortcutPath) } else { (Test-Path -LiteralPath $searchShortcutPath -PathType Leaf) -and (Hash $searchShortcutPath) -ceq $searchShortcutBefore }
@@ -602,6 +713,7 @@ try {
         $backups = @(Get-ChildItem -LiteralPath (Join-Path $profile 'migration-backup') -Filter settings.json -File -Recurse)
         Check ($backups.Count -eq 1 -and (Hash $backups[0].FullName) -ceq $legacyHashes[(Join-Path $legacyRoot 'settings.json')]) 'automatic portable import preserves an exact backup of the original settings'
         Close-PortableSession $session; $session = $null
+        if ($Scenario -eq 'default') { Test-InheritedAccessRepair }
         $updatesRoot = Join-Path $dataRoot 'Updates'
         Check (-not (Test-Path -LiteralPath (Join-Path $updatesRoot 'installers/1.3.2/installer.exe'))) 'legacy NSIS packages are not imported into portable package history'
         $stateSentinel = Join-Path $profile 'ci-state-sentinel.txt'
