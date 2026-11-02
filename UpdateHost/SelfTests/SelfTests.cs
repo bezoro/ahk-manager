@@ -31,6 +31,7 @@ internal static partial class SelfTests
             "1.2.1"
         );
         CheckAdmissionDiagnostics(Check);
+        CheckPortableInitializationDiagnostics(Check);
         CheckApplyDiagnostics(Check);
         CheckPortablePromotionPolicy(Check);
         CheckOperationLogLimits(root, Check);
@@ -42,6 +43,7 @@ internal static partial class SelfTests
         CheckReleaseVersions(root, plan, Check);
         CheckInstallerCommandLine(root, plan, Check);
         CheckSnapshotAclComparison(Check);
+        CheckPortableProtectionPermissions(root, Check);
         CheckPortableProtocol(root, plan, Check);
         CheckPortablePayloadPolicy(Check);
         CheckPortableSignatures(Check);

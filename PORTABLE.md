@@ -58,6 +58,8 @@ Command logging is enabled automatically. Open **Help > Open logs folder** to in
 
 The installed edition writes to `%LOCALAPPDATA%/Bezoro/AhkManagerElectronDiagnostics/Logs`. Keeping these startup logs outside its operational profile preserves the empty destination required for profile migration, while recording backend initialization and load failures.
 
+Failures before portable initialization are recorded separately in `%LOCALAPPDATA%/Bezoro/AhkManagerElectronDiagnostics/Startup`, outside the blocked app or Data folder. Up to ten reports of 64 KiB are retained. Reports distinguish failure to launch the helper from a native startup refusal and retain the phase, check, resource category, Windows error, HRESULT and available token identity. They do not contain raw helper stderr, authentication tokens or script contents. The startup error dialog offers **Copy diagnostic details** and, when saved, **Open diagnostics folder**. Background login failures remain silent and still save a report. A later complete diagnostic archive includes these reports.
+
 The JSON Lines files record command starts and completions, UTC timestamps, durations, result and reason codes, and selected preference flags. Session and request IDs relate an interface command to its backend calls. Cancelled, refused, partial and unknown results remain distinct from success. Startup, tray actions, background update checks and shutdown are included after the data folder is prepared. A start without a completion can indicate that the process exited before reporting its result.
 
 Logs rotate automatically, retaining up to five verified files of 2 MiB each. Unknown files in `Logs` are preserved. Logging errors never repeat or block an application command; an unavailable log folder is reported inline when opened from Help. Logs do not contain raw request bodies, authentication tokens, clipboard text, script contents or exception messages. Keep the corresponding Activity history and `Updates/operations` evidence when investigating a script or update failure.
@@ -75,6 +77,22 @@ Close Manager normally before copying or moving its data. Logs move with the sel
 Use a local NTFS volume for both the application and its data. ReFS, exFAT and FAT are not supported. An unsupported filesystem has a separate startup message; permission failures and incomplete packages do not appear as filesystem errors. On first launch, the Manager restricts access to its own dedicated portable folder when it can prove the package and current-user ownership. It never changes permissions on the containing repository or drive. A folder containing unrelated files is refused instead of having its permissions rewritten.
 
 The application and data folders must remain private to the current user, Administrators, and SYSTEM. Network paths, junctions, symbolic links and unknown reparse tags are refused. Recognized Windows Cloud Files tags, used by OneDrive, are accepted without relaxing file identities, ownership, permissions or package integrity checks. Moving a private folder to another Windows account or computer may require a normal copy into a new user-owned folder because Windows account identities differ. Portable packaging does not bypass Windows UAC or make external script paths portable.
+
+The portable root keeps a protected private DACL. App folders and startup files may inherit an equally private effective DACL from that root; startup verifies their trusted owners and access rules without rewriting valid inherited permissions. When a verified owned package needs protection, Manager changes only the DACL and preserves its already trusted owner. It does not request ownership changes as a side effect of preparing access. Foreign owners or writers remain a refusal.
+
+### Recovering an older blocked version
+
+An older version may refuse a private package whose `App` folder inherits its permissions. If the root already has protected private permissions, `tools/Repair-PortableInheritedAccess.ps1` can freeze that existing inheritance so the older Manager can open and update normally. This is a narrow compatibility repair, not a general permission reset.
+
+Close Manager normally first. Independent AutoHotkey scripts can keep running. Preview the repair with Windows PowerShell 5.1 or PowerShell 7:
+
+```powershell
+& .\Repair-PortableInheritedAccess.ps1 -PortableRoot 'C:\Your portable folder'
+```
+
+Review the displayed paths, then run the same command with `-Apply`. The script verifies the full application inventory, trusted owners and existing private permissions before making changes. It only protects the existing DACL on the root, `App` and six startup files when needed. It does not add permissions, change owners, touch `Data`, or change the containing OneDrive or other parent folders. Foreign access, incomplete packages and redirected paths are refused.
+
+Before changing permissions, the script saves the original descriptors, identities and package hashes under `%LOCALAPPDATA%\Bezoro\AhkManagerElectronDiagnostics\PermissionRepairs`. Keep this evidence if a repair fails. A failure after a completed change reports the affected paths and preserves the backup; it does not overwrite concurrent permission changes with an automatic rollback. Open the root launcher after a successful repair, then use **Updates** to obtain the corrected version.
 
 ## Cloud backup
 

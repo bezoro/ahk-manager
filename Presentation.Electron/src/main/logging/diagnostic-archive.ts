@@ -51,6 +51,7 @@ export interface DiagnosticArchiveInput {
   deployment: Pick<DeploymentLayout, 'profileDirectory' | 'updatesDirectory'>;
   summary: string;
   commandLogs: CommandLogExport;
+  startupDirectory?: string;
   runtime?: unknown;
 }
 export interface DiagnosticArchiveOptions {
@@ -190,6 +191,7 @@ export function createDiagnosticArchive(
     complete: true,
     scope: [
       'All available retained Manager command records, without a 200-record excerpt limit.',
+      'Independent per-user startup failure reports, including failures before portable data becomes available.',
       'Activity history and recovery journal, startup-continuation evidence, and update-operation diagnostic files.',
       'Selected current runtime state, including backend/update errors and startup issue details when supplied.',
       'The summary is a bounded convenience. Evidence files contain their full readable records. No live Task Scheduler XML is collected.',
@@ -202,6 +204,7 @@ export function createDiagnosticArchive(
     ],
     retention: [
       'Command logs normally retain up to five files of 2 MiB each.',
+      'Startup diagnostics retain up to ten verified reports of 64 KiB each outside the portable data folder.',
       'Activity normally retains its active file and three rotations of approximately 1 MiB each.',
       'Native updater helper logs are bounded to 32 KiB. New helpers explicitly mark message or file truncation.',
       'Previously rotated or deleted records cannot be recovered by this export.',
@@ -416,6 +419,12 @@ export function createDiagnosticArchive(
     }
   };
   add('summary.txt', input.summary, false);
+  if (input.startupDirectory) {
+    for (const name of list(input.startupDirectory, 'Startup')) {
+      if (/^startup-\d{8}T\d{9}Z-[0-9a-f-]{36}\.json$/.test(name))
+        read(path.join(input.startupDirectory, name), 'Startup/' + name, 'json');
+    }
+  }
   if (input.runtime !== undefined) {
     try {
       const serialized = JSON.stringify(input.runtime);

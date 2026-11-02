@@ -68,7 +68,12 @@ import { verifyCachedPortablePackageSignature } from './updates/portable-update-
 import { DataLocationController } from './desktop/data-location.js';
 import { initializePortableStorage } from './desktop/storage-bootstrap.js';
 import { ensurePortableSearchShortcut } from './desktop/portable-search-shortcut.js';
-import { resolveDeployment, samePath, type DeploymentLayout } from './storage/deployment.js';
+import {
+  assertStoragePath,
+  resolveDeployment,
+  samePath,
+  type DeploymentLayout,
+} from './storage/deployment.js';
 import {
   canKeepCurrentData,
   completePendingDataMove,
@@ -83,6 +88,7 @@ import {
   type DiagnosticLogMode,
 } from './logging/command-log.js';
 import { createCommandLog } from './logging/create-command-log.js';
+import { recordStartupFailure, startupFailureDirectory } from './logging/startup-failure.js';
 import {
   createDiagnosticReport,
   createDiagnosticRuntime,
@@ -109,24 +115,19 @@ export function startManager(): void {
   const localAppData =
     process.env.LOCALAPPDATA ?? path.join(app.getPath('home'), 'AppData', 'Local');
   let deployment: DeploymentLayout;
+  let bootstrapLayout: DeploymentLayout | null = null;
   let storageError: string | null = null;
   let storageRestarting = false;
   try {
     deployment = resolveDeployment(app.getPath('exe'), localAppData);
+    bootstrapLayout = deployment;
     initializePortableStorage(deployment);
   } catch (error) {
     const quiet =
       !process.argv.includes('--foreground') &&
       !process.argv.includes('--request-administrator') &&
       (process.argv.includes('--login') || process.argv.includes('--background'));
-    if (quiet) {
-      app.exit(65);
-      return;
-    }
-    void app.whenReady().then(() => {
-      dialog.showErrorBox(t.title, safeError(error));
-      app.exit(65);
-    });
+    reportStartupFailure(error, quiet);
     return;
   }
   // Chromium storage never opens or copies a framework's previous operational profile.
@@ -267,10 +268,59 @@ export function startManager(): void {
         if (!storageRestarting) return start();
       })
       .catch((error) => {
-        if (!lifecycle.quietStartup) dialog.showErrorBox(t.title, safeError(error));
         quitComplete = true;
-        app.quit();
+        reportStartupFailure(error, lifecycle.quietStartup, () => app.quit());
       });
+  }
+  function reportStartupFailure(error: unknown, quiet: boolean, finish = () => app.exit(65)): void {
+    const report = recordStartupFailure({
+      localAppDataDirectory: localAppData,
+      version: app.getVersion(),
+      executablePath: app.getPath('exe'),
+      layout: bootstrapLayout,
+      login: process.argv.includes('--login'),
+      background: process.argv.includes('--background'),
+      error,
+    });
+    if (quiet) {
+      finish();
+      return;
+    }
+    void app
+      .whenReady()
+      .then(async () => {
+        const buttons = [
+          'Copy diagnostic details',
+          ...(report.directory ? ['Open diagnostics folder'] : []),
+          'Close',
+        ];
+        const result = await dialog.showMessageBox({
+          type: 'error',
+          title: t.title,
+          message: safeError(error),
+          detail:
+            report.summary +
+            '\n\n' +
+            (report.file
+              ? `Diagnostic details were saved to:\n${report.file}\n\nCopy the details to share them for troubleshooting.`
+              : 'The diagnostic file could not be saved. You can copy the details for troubleshooting.'),
+          buttons,
+          defaultId: buttons.length - 1,
+          cancelId: buttons.length - 1,
+          noLink: true,
+        });
+        if (result.response === 0) clipboard.writeText(report.text);
+        else if (result.response === 1 && report.directory) {
+          assertStoragePath(report.directory);
+          const directory = await fs.lstat(report.directory);
+          if (directory.isDirectory() && !directory.isSymbolicLink())
+            await shell.openPath(report.directory);
+        }
+      })
+      .catch(() => {
+        /* The report is already retained when native error UI is unavailable. */
+      })
+      .finally(finish);
   }
   function safeError(error: unknown): string {
     return error instanceof Error ? error.message.slice(0, 4096) : t.unknownError;
@@ -1348,6 +1398,7 @@ export function startManager(): void {
             createDiagnosticArchive({
               deployment,
               summary: diagnosticReport('recent'),
+              startupDirectory: startupFailureDirectory(localAppData),
               runtime: createDiagnosticRuntime(diagnosticContext()),
               commandLogs: commandLog?.exportFiles() ?? {
                 files: [],

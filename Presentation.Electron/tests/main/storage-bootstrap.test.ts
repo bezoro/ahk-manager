@@ -27,6 +27,12 @@ function layout(mode: DeploymentLayout['mode'] = 'portable'): DeploymentLayout {
 
 const wire = (code: string, phase = 'portable-initialization'): string =>
   `AHK_UPDATE_REFUSAL:{"schemaVersion":1,"phase":"${phase}","code":"${code}"}\n`;
+const context = (
+  stage = 'protect-root',
+  resource = 'root',
+  phase = 'portable-initialization',
+): string =>
+  `AHK_PORTABLE_INITIALIZATION:{"schemaVersion":1,"phase":"${phase}","stage":"${stage}","resource":"${resource}","hresult":"0x80070005","nativeError":null,"userSid":null,"administrator":null}\n`;
 
 function refusal(stderr: string, error?: Error): PortableInitializationError {
   let failure: unknown;
@@ -69,7 +75,10 @@ test('portable initialization distinguishes NTFS requirements, unavailable cloud
     ['unsupported-filesystem', /requires NTFS.*ReFS, FAT32 and exFAT are not supported/],
     ['cloud-file-unavailable', /available offline.*sync app.*syncing/],
     ['redirected-path', /symbolic link, junction or unsupported redirect/],
-    ['access-denied', /owned by your Windows account.*permissions/],
+    [
+      'access-denied',
+      /denied access during portable startup.*Copy diagnostic details.*folder or helper/,
+    ],
     ['incomplete-package', /package is incomplete.*entire portable ZIP/],
     ['invalid-package', /package or its data settings are invalid.*Data folder and portable.json/],
   ];
@@ -145,4 +154,116 @@ test('helper spawn failures use fixed recovery instructions and never display OS
       error.code === 'access-denied' &&
       !error.message.includes('Private native details'),
   );
+});
+
+test('bootstrap diagnostics retain native app and data phases, the failing stage and HRESULT', () => {
+  const app = refusal(context() + wire('access-denied'));
+  assert.deepEqual(app.diagnostic, {
+    origin: 'native',
+    phase: 'portable-initialization',
+    stage: 'protect-root',
+    resource: 'root',
+    code: 'access-denied',
+    exitCode: 65,
+    errorCode: null,
+    hresult: '0x80070005',
+    nativeError: null,
+    userSid: null,
+    administrator: null,
+  });
+  const data = refusal(
+    context('verify-data-access', 'data', 'portable-data-initialization') +
+      wire('access-denied', 'portable-data-initialization'),
+  );
+  assert.equal(data.diagnostic.phase, 'portable-data-initialization');
+  assert.equal(data.diagnostic.stage, 'verify-data-access');
+  assert.equal(data.diagnostic.resource, 'data');
+  const win32 = refusal(
+    context().replace('"nativeError":null', '"nativeError":5') + wire('access-denied'),
+  );
+  assert.equal(win32.diagnostic.nativeError, 5);
+  const legacy = refusal(wire('access-denied'));
+  assert.equal(legacy.diagnostic.origin, 'native');
+  assert.equal(legacy.diagnostic.phase, 'portable-initialization');
+  assert.equal(legacy.diagnostic.stage, null);
+  assert.equal(legacy.diagnostic.hresult, null);
+});
+
+test('spawn diagnostics are distinct from native permission refusals and contain no raw OS messages', () => {
+  const error = refusal(
+    context() + wire('access-denied'),
+    Object.assign(new Error('token=private-native-value C:\\Private'), { code: 'EPERM' }),
+  );
+  assert.deepEqual(error.diagnostic, {
+    origin: 'spawn',
+    phase: null,
+    stage: null,
+    resource: 'helper',
+    code: 'access-denied',
+    exitCode: 65,
+    errorCode: 'EPERM',
+    hresult: null,
+    nativeError: null,
+    userSid: null,
+    administrator: null,
+  });
+  assert.doesNotMatch(JSON.stringify(error.diagnostic), /private|Private|token/);
+  const unrecognized = refusal('', Object.assign(new Error('secret'), { code: 'secret-code' }));
+  assert.equal(unrecognized.diagnostic.errorCode, null);
+});
+
+test('untrusted, duplicated, mismatched or partial bootstrap context is ignored without hiding the finite refusal', () => {
+  const valid = context();
+  for (const invalid of [
+    valid.trimEnd(),
+    valid + valid,
+    valid.replace('schemaVersion":1', 'schemaVersion":2'),
+    valid.replace('"stage":', '"stage":"private-value","stage":'),
+    valid.replace('"stage":', '"extra":"token=private-value","stage":'),
+    valid.replace('protect-root', 'unknown-stage'),
+    valid.replace('"root"', '"private-resource"'),
+    valid.replace('0x80070005', 'C:\\Private\\secret'),
+    valid.replace('0x80070005', '0x8007000a'),
+    valid.replace('"nativeError":null', '"nativeError":65536'),
+    valid.replace('"nativeError":null', '"nativeError":-5'),
+    valid.replace('"nativeError":null', '"nativeError":"private-value"'),
+    valid.replace('"userSid":null', '"userSid":"private-token"'),
+    valid.replace('"userSid":null', '"userSid":"S-1' + '-1'.repeat(16) + '"'),
+    valid.replace('"userSid":null', '"userSid":"S-' + '1'.repeat(185) + '-5"'),
+    valid.replace('"administrator":null', '"administrator":"true"'),
+    context('verify-data-access', 'data', 'portable-data-initialization'),
+  ]) {
+    const error = refusal(wire('access-denied') + invalid);
+    assert.equal(error.code, 'access-denied');
+    assert.equal(error.diagnostic.stage, null);
+    assert.equal(error.diagnostic.resource, null);
+    assert.equal(error.diagnostic.hresult, null);
+    assert.doesNotMatch(JSON.stringify(error.diagnostic), /private|Private|secret|token/);
+  }
+  const overflow = refusal(wire('access-denied') + valid + 'ø'.repeat(4096));
+  assert.equal(overflow.diagnostic.origin, 'unknown');
+  assert.equal(overflow.diagnostic.stage, null);
+  const crlf = refusal((wire('access-denied') + valid).replaceAll('\n', '\r\n'));
+  assert.equal(crlf.diagnostic.stage, 'protect-root');
+  const subject = refusal(
+    (wire('access-denied') + valid)
+      .replace('"userSid":null', '"userSid":"S-1-5-21-100-200-300-1001"')
+      .replace('"administrator":null', '"administrator":true'),
+  );
+  assert.equal(subject.diagnostic.userSid, 'S-1-5-21-100-200-300-1001');
+  assert.equal(subject.diagnostic.administrator, true);
+});
+
+test('bootstrap context cannot turn an unsuccessful initializer into success or affect successful startup', () => {
+  assert.throws(
+    () => initializePortableStorage(layout(), () => ({ status: null, stderr: context() })),
+    (error) =>
+      error instanceof PortableInitializationError &&
+      error.code === 'unknown' &&
+      error.diagnostic.phase === null,
+  );
+  initializePortableStorage(layout(), () => ({
+    status: 0,
+    stderr: context() + wire('access-denied'),
+  }));
 });

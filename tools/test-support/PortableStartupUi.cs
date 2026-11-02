@@ -31,6 +31,21 @@ public static class PortableStartupUi
         catch (Exception) { return false; }
     }
 
+    static bool ExpectedContent(string title, string body) =>
+        body.Contains(Refusal, StringComparison.Ordinal) && (title == "Error"
+            ? body.Contains("\nAHK Manager\n", StringComparison.Ordinal)
+            : title == "AHK Manager"
+                && body.Contains("Failure code: invalid-package", StringComparison.Ordinal)
+                && body.Contains("Phase: portable-initialization", StringComparison.Ordinal)
+                && body.Contains("Stage: verify-root-members", StringComparison.Ordinal)
+                && body.Contains("Resource: root", StringComparison.Ordinal));
+
+    static bool ExpectedButtons(bool legacy, int count, int firstId, HashSet<string> labels) =>
+        legacy ? count == 1 && labels.SetEquals(new[] { "OK" }) && firstId is 0 or 1
+        : count == labels.Count && (
+            labels.SetEquals(new[] { "Copy diagnostic details", "Open diagnostics folder", "Close" })
+            || labels.SetEquals(new[] { "Copy diagnostic details", "Close" }));
+
     public static bool DismissRefusal(
         int pid,
         string image,
@@ -41,23 +56,31 @@ public static class PortableStartupUi
         bool closed = false;
         LastObservation = "No exact owned visible Error task dialog was found.";
         EnumWindows((window, _) => {
-            if (closed || !Owned(window, pid, image, started) || !IsWindowVisible(window) || Class(window) != "#32770" || Text(window) != "Error") return true;
+            if (closed || !Owned(window, pid, image, started) || !IsWindowVisible(window) || Class(window) != "#32770") return true;
+            string title = Text(window);
+            bool legacy = title == "Error";
+            if (!legacy && title != "AHK Manager") return true;
             string body;
             try { body = readDialogText(window, pid, image, started); }
             catch (Exception error) { LastObservation = "The exact owned dialog reader failed: " + error.GetType().Name + ": " + error.Message[..Math.Min(error.Message.Length, 300)]; return true; }
-            if (!body.Contains("\nAHK Manager\n", StringComparison.Ordinal) || !body.Contains(Refusal, StringComparison.Ordinal)) { LastObservation = "The exact owned Error dialog did not yet expose the expected app instruction and refusal. Read characters=" + body.Length; return true; }
+            if (!ExpectedContent(title, body)) { LastObservation = "The exact owned refusal dialog did not yet expose the expected app instructions and diagnostic context. Read characters=" + body.Length; return true; }
             var buttons = new List<IntPtr>();
+            var labels = new HashSet<string>(StringComparer.Ordinal);
             var observed = new List<string>();
             EnumChildWindows(window, (child, state) => {
                 if (Owned(child, pid, image, started) && Class(child) == "Button") {
                     observed.Add($"id={GetDlgCtrlID(child)},visible={IsWindowVisible(child)},enabled={IsWindowEnabled(child)}");
-                    if (IsWindowVisible(child) && IsWindowEnabled(child) && GetDlgCtrlID(child) is 0 or 1 && Text(child).Replace("&", "", StringComparison.Ordinal).Trim() == "OK") buttons.Add(child);
+                    if (IsWindowVisible(child) && IsWindowEnabled(child)) {
+                        buttons.Add(child);
+                        labels.Add(Text(child).Replace("&", "", StringComparison.Ordinal).Trim());
+                    }
                 }
-                return buttons.Count <= 1;
+                return buttons.Count <= 3;
             }, IntPtr.Zero);
-            // Electron's TaskDialog allows title-bar cancellation and uses
-            // WM_CLOSE itself. This refusal has no action to authorize.
-            if (buttons.Count == 1 && Owned(window, pid, image, started) && Owned(buttons[0], pid, image, started) && Text(window) == "Error") closed = PostMessageW(window, 0x0010, IntPtr.Zero, IntPtr.Zero);
+            bool recognized = ExpectedButtons(legacy, buttons.Count, buttons.Count > 0 ? GetDlgCtrlID(buttons[0]) : -1, labels);
+            // Close only the exact owned refusal. WM_CLOSE selects the safe
+            // cancel action, never clipboard copying or opening another process.
+            if (recognized && Owned(window, pid, image, started) && buttons.TrueForAll(button => Owned(button, pid, image, started)) && Text(window) == title) closed = PostMessageW(window, 0x0010, IntPtr.Zero, IntPtr.Zero);
             LastObservation = "The exact owned app refusal matched. Posted close=" + closed + "; buttons=" + string.Join(";", observed);
             return !closed;
         }, IntPtr.Zero);
