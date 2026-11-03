@@ -4,6 +4,7 @@ import type {
   ManagerSnapshot,
   ScriptSnapshot,
   ThemeState,
+  StartupRepairPreview,
 } from '../../src/shared/contracts.js';
 import {
   operation,
@@ -168,6 +169,33 @@ const light: ThemeState = {
   reducedMotion: false,
   accent: '#627c47',
   material: 'solid',
+};
+
+function startupRepairFixture(): StartupRepairPreview {
+  return {
+    canRepair: true,
+    previousExecutable: 'V:\\ISOLATED FIXTURE\\Previous Manager\\Bezoro.AhkManager.exe',
+    currentExecutable: 'C:\\ISOLATED FIXTURE\\OneDrive Manager\\Bezoro.AhkManager.exe',
+    fingerprint: 'b'.repeat(64),
+    reason: 'None',
+    detail: 'The saved preference disables Manager startup. The current task will also be removed.',
+  };
+}
+const unavailableStartupRepair: StartupRepairPreview = {
+  canRepair: false,
+  previousExecutable: null,
+  currentExecutable: null,
+  fingerprint: null,
+  reason: 'None',
+  detail: null,
+};
+const startupRepairStorage = {
+  mode: 'portable',
+  currentDataDirectory: 'C:\\ISOLATED FIXTURE\\Manager\\Data',
+  defaultDataDirectory: 'C:\\ISOLATED FIXTURE\\Manager\\Data',
+  pendingDataDirectory: null,
+  canChange: true,
+  error: null,
 };
 
 export async function runScenarios(): Promise<AssertionRecord[]> {
@@ -1364,6 +1392,516 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       },
     );
   }
+  await check(
+    'preferences copy startup refusal details with pending, failure and retry feedback without losing the draft',
+    async () => {
+      const detail =
+        'Startup registration was preserved: task-source.\nNo startup entry was changed.';
+      await window.fixtureHarness.setResponse('saveSettings', {
+        value: { ...failure, outcome: 'Partial', code: 'StartupEntryConflict', detail },
+      });
+      await open('preferences');
+      const dialog = activeDialog();
+      const draft = dialog.querySelector<HTMLTextAreaElement>('#settings-editor-arguments')!;
+      edit(draft, 'FIXTURE startup diagnostic draft');
+      await tick();
+      try {
+        button(text.save, dialog).click();
+        await until(
+          () => dialog.querySelector('.notice pre')?.textContent === detail,
+          'Startup refusal diagnostic detail missing',
+        );
+        (dialog.querySelector('.notice details') as HTMLDetailsElement).open = true;
+        await window.fixtureHarness.clearCalls();
+        await window.fixtureHarness.setResponse('copyText', { pending: true });
+        const copy = button(text.copyDetails, dialog);
+        copy.click();
+        await untilCall('copyText');
+        await tick();
+        assert(copy.disabled, 'Pending copy was not disabled');
+        assert(
+          dialog.querySelector('.copy-feedback[role="status"]')?.textContent === text.pending,
+          'Pending clipboard request claimed success',
+        );
+        copy.click();
+        assert(
+          (await window.fixtureHarness.calls()).filter((call) => call.method === 'copyText')
+            .length === 1,
+          'Pending clipboard request dispatched twice',
+        );
+        await window.fixtureHarness.resolveResponse('copyText', {
+          error: 'FIXTURE clipboard unavailable',
+        });
+        await until(
+          () =>
+            dialog.querySelector('.copy-feedback[role="alert"]')?.textContent ===
+            text.copyDetailsFailed,
+          'Clipboard failure was not reported inside Preferences',
+        );
+        assert(!copy.disabled, 'Clipboard failure prevented retry');
+        assert(
+          dialog.querySelector('.notice strong')?.textContent === outcome('Partial') &&
+            dialog.querySelector('.notice pre')?.textContent === detail &&
+            draft.value === 'FIXTURE startup diagnostic draft',
+          'Clipboard failure replaced the startup refusal or discarded the draft',
+        );
+        await window.fixtureHarness.setResponse('copyText', { value: undefined });
+        copy.click();
+        await until(
+          () => dialog.querySelector('.copy-feedback[role="status"]')?.textContent === text.copied,
+          'Confirmed clipboard retry did not report success',
+        );
+        const calls = await window.fixtureHarness.calls();
+        const copies = calls.filter((call) => call.method === 'copyText');
+        assert(
+          copies.length === 2 && copies.every((call) => call.args[0] === detail),
+          'Clipboard did not receive the complete unchanged startup details',
+        );
+        assert(
+          dialog.querySelector('.notice pre')?.textContent === detail &&
+            draft.value === 'FIXTURE startup diagnostic draft' &&
+            document.querySelectorAll('[role="dialog"]').length === 1 &&
+            calls.every((call) => call.method !== 'saveSettings' && call.method !== 'operate'),
+          'Copying details changed preferences, scripts or the existing diagnostic dialog',
+        );
+      } finally {
+        await window.fixtureHarness
+          .resolveResponse('copyText', { value: undefined })
+          .catch(() => {});
+        if (dialog.isConnected) button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+      }
+    },
+  );
+  await check('late preferences clipboard results do not leak into a reopened dialog', async () => {
+    try {
+      for (const response of [
+        { value: undefined },
+        { error: 'FIXTURE late clipboard rejection' },
+      ]) {
+        await window.fixtureHarness.setResponse('saveSettings', { value: failure });
+        await open('preferences');
+        let dialog = activeDialog();
+        button(text.save, dialog).click();
+        await until(() => !!dialog.querySelector('.notice pre'), 'Save failure detail missing');
+        (dialog.querySelector('.notice details') as HTMLDetailsElement).open = true;
+        await window.fixtureHarness.clearCalls();
+        await window.fixtureHarness.setResponse('copyText', { pending: true });
+        button(text.copyDetails, dialog).click();
+        await untilCall('copyText');
+        button(text.cancel, dialog).click();
+        await tick();
+        await open('preferences');
+        dialog = activeDialog();
+        await window.fixtureHarness.resolveResponse('copyText', response);
+        await tick();
+        assert(
+          dialog.isConnected &&
+            !dialog.querySelector('.notice') &&
+            !dialog.querySelector('.copy-feedback'),
+          'A late clipboard result changed the reopened Preferences dialog',
+        );
+        button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+      }
+    } finally {
+      await window.fixtureHarness.resolveResponse('copyText', { value: undefined }).catch(() => {});
+      const dialog = document.querySelector('[role="dialog"]');
+      if (dialog) button(text.cancel, dialog).click();
+      await tick();
+      await window.fixtureHarness.resetResponses();
+    }
+  });
+  await check(
+    'previous startup entry review requires explicit consent and saved preferences before one repair',
+    async () => {
+      const preview = startupRepairFixture();
+      await window.fixtureHarness.setResponse('getStorageState', { value: startupRepairStorage });
+      await window.fixtureHarness.setResponse('previewStartupRepair', { value: preview });
+      await window.fixtureHarness.clearCalls();
+      await open('preferences');
+      const dialog = activeDialog();
+      try {
+        await until(
+          () => !!dialog.querySelector('.startup-entry-review .startup-previous-executable'),
+          'Previous startup entry review missing',
+        );
+        const review = dialog.querySelector<HTMLElement>('.startup-entry-review')!;
+        assert(
+          review.querySelector('.startup-previous-executable')?.textContent ===
+            preview.previousExecutable &&
+            review.querySelector('.startup-current-executable')?.textContent ===
+              preview.currentExecutable &&
+            review.textContent?.includes(preview.detail!),
+          'Review omitted the verified paths or saved startup mode',
+        );
+        assert(
+          !(await window.fixtureHarness.calls()).some((call) => call.method === 'repairStartup'),
+          'Opening Preferences changed a startup entry',
+        );
+        const action = button(text.removePreviousStartup, review);
+        const draft = dialog.querySelector<HTMLTextAreaElement>('#settings-editor-arguments')!;
+        edit(draft, 'FIXTURE unsaved startup repair draft');
+        await tick();
+        assert(
+          action.disabled && review.textContent?.includes(text.startupRepairSaveFirst),
+          'Unsaved preferences did not block the saved-mode repair',
+        );
+        action.click();
+        await tick();
+        assert(
+          !(await window.fixtureHarness.calls()).some((call) => call.method === 'repairStartup'),
+          'Unsaved preferences dispatched startup repair',
+        );
+        edit(draft, '');
+        await until(() => !action.disabled, 'Discarding draft did not restore review action');
+        await window.fixtureHarness.setResponse('repairStartup', { pending: true });
+        await window.fixtureHarness.clearCalls();
+        action.click();
+        await untilCall('repairStartup');
+        await tick();
+        assert(
+          action.disabled &&
+            button(text.save, dialog).disabled &&
+            button(text.cancel, dialog).disabled &&
+            window.fixtureHarness.readGuard()?.pendingWork === true,
+          'Pending startup repair left mutation or dismissal controls active',
+        );
+        dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await tick();
+        assert(dialog.isConnected, 'Escape dismissed an in-flight startup repair');
+        action.click();
+        const pending = (await window.fixtureHarness.calls()).filter(
+          (call) => call.method === 'repairStartup',
+        );
+        assert(
+          pending.length === 1 && pending[0]!.args[0] === preview.fingerprint,
+          'Review did not bind exactly one repair to its returned fingerprint',
+        );
+        await window.fixtureHarness.setResponse('previewStartupRepair', {
+          value: unavailableStartupRepair,
+        });
+        const detail =
+          'The reviewed previous entry was removed. Saved startup preferences applied.';
+        await window.fixtureHarness.resolveResponse('repairStartup', {
+          value: { ...failure, outcome: 'Confirmed', code: 'None', detail },
+        });
+        await until(
+          () =>
+            !dialog.querySelector('.startup-entry-review') &&
+            !button(text.cancel, dialog).disabled &&
+            dialog.querySelector('.notice pre')?.textContent === detail,
+          'Confirmed repair did not refresh the review and show its exact result',
+        );
+        assert(dialog.isConnected && draft.value === '', 'Repair closed or replaced Preferences');
+        assert(
+          !(await window.fixtureHarness.calls()).some((call) =>
+            ['saveSettings', 'operate', 'requestAdministration'].includes(call.method),
+          ),
+          'Review added a save, script action or permission prompt',
+        );
+      } finally {
+        await window.fixtureHarness
+          .resolveResponse('repairStartup', { value: failure })
+          .catch(() => {});
+        if (dialog.isConnected) button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+      }
+    },
+  );
+  await check(
+    'stale or unconfirmed startup repair stays visible without replay and exposes copyable failure details',
+    async () => {
+      const preview = startupRepairFixture();
+      await window.fixtureHarness.setResponse('getStorageState', { value: startupRepairStorage });
+      await window.fixtureHarness.setResponse('previewStartupRepair', { value: preview });
+      await open('preferences');
+      const dialog = activeDialog();
+      try {
+        await until(
+          () => !!dialog.querySelector('.startup-previous-executable'),
+          'Startup review missing',
+        );
+        await window.fixtureHarness.clearCalls();
+        const changed = { ...preview, fingerprint: 'c'.repeat(64) };
+        await window.fixtureHarness.setResponse('previewStartupRepair', { value: changed });
+        const detail = 'Windows startup changed after review. The entry was preserved.';
+        await window.fixtureHarness.setResponse('repairStartup', {
+          value: { ...failure, code: 'StaleSelection', detail },
+        });
+        button(text.removePreviousStartup, dialog).click();
+        await until(
+          () =>
+            dialog.querySelector('.notice pre')?.textContent === detail &&
+            !button(text.removePreviousStartup, dialog).disabled,
+          'Stale review result did not retain Preferences and refresh the preview',
+        );
+        assert(
+          (await window.fixtureHarness.calls()).filter((call) => call.method === 'repairStartup')
+            .length === 1,
+          'A changed entry caused an automatic retry',
+        );
+        const rejection = 'FIXTURE startup repair result unavailable';
+        await window.fixtureHarness.setResponse('repairStartup', { error: rejection });
+        button(text.removePreviousStartup, dialog).click();
+        await until(
+          () =>
+            dialog.querySelector('.startup-entry-review .notice pre')?.textContent === rejection,
+          'Unconfirmed repair failure was hidden',
+        );
+        const review = dialog.querySelector<HTMLElement>('.startup-entry-review')!;
+        assert(
+          review.textContent?.includes(text.startupRepairUnconfirmed) &&
+            ![...review.querySelectorAll('button')].some(
+              (node) => node.textContent?.trim() === text.removePreviousStartup,
+            ),
+          'Unconfirmed repair still offers the old token or claims success',
+        );
+        (review.querySelector('.notice details') as HTMLDetailsElement).open = true;
+        await window.fixtureHarness.setResponse('copyText', { error: 'FIXTURE clipboard denied' });
+        button(text.copyDetails, review).click();
+        await until(
+          () => review.querySelector('.copy-feedback')?.textContent === text.copyDetailsFailed,
+          'Review error clipboard failure was not reported locally',
+        );
+        await window.fixtureHarness.setResponse('copyText', { value: undefined });
+        button(text.copyDetails, review).click();
+        await until(
+          () => review.querySelector('.copy-feedback')?.textContent === text.copied,
+          'Review error clipboard retry did not confirm success',
+        );
+        assert(
+          review.querySelector('.notice pre')?.textContent === rejection,
+          'Copying review error replaced its diagnostic context',
+        );
+        button(text.reviewStartup, review).click();
+        await until(
+          () => !!dialog.querySelector('.startup-previous-executable'),
+          'Readonly review retry did not restore the current preview',
+        );
+        assert(
+          (await window.fixtureHarness.calls()).filter((call) => call.method === 'repairStartup')
+            .length === 2,
+          'Readonly review retried the startup mutation',
+        );
+      } finally {
+        button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+      }
+    },
+  );
+  await check(
+    'unavailable, incomplete or late startup reviews never authorize an unreviewed removal',
+    async () => {
+      await window.fixtureHarness.setResponse('getStorageState', { value: startupRepairStorage });
+      try {
+        for (const value of [
+          unavailableStartupRepair,
+          { ...startupRepairFixture(), previousExecutable: null },
+        ]) {
+          await window.fixtureHarness.setResponse('previewStartupRepair', { value });
+          await window.fixtureHarness.clearCalls();
+          await open('preferences');
+          const dialog = activeDialog();
+          await untilCall('previewStartupRepair');
+          await tick();
+          assert(
+            ![...dialog.querySelectorAll('button')].some(
+              (node) => node.textContent?.trim() === text.removePreviousStartup,
+            ) &&
+              !(await window.fixtureHarness.calls()).some(
+                (call) => call.method === 'repairStartup',
+              ),
+            'An unavailable or incomplete preview authorized removal',
+          );
+          button(text.cancel, dialog).click();
+          await tick();
+          await window.fixtureHarness.resetResponses();
+        }
+        await window.fixtureHarness.setResponse('previewStartupRepair', { pending: true });
+        await window.fixtureHarness.clearCalls();
+        await open('preferences');
+        await untilCall('previewStartupRepair');
+        button(text.cancel, activeDialog()).click();
+        await tick();
+        await window.fixtureHarness.setResponse('previewStartupRepair', {
+          value: unavailableStartupRepair,
+        });
+        await open('preferences');
+        const current = activeDialog();
+        await window.fixtureHarness.resolveResponse('previewStartupRepair', {
+          value: startupRepairFixture(),
+        });
+        await tick();
+        assert(
+          !current.querySelector('.startup-entry-review') &&
+            !(await window.fixtureHarness.calls()).some((call) => call.method === 'repairStartup'),
+          'A late readonly review changed the reopened Preferences dialog',
+        );
+        button(text.cancel, current).click();
+        await tick();
+      } finally {
+        await window.fixtureHarness
+          .resolveResponse('previewStartupRepair', { value: unavailableStartupRepair })
+          .catch(() => {});
+        const dialog = document.querySelector('[role="dialog"]');
+        if (dialog) button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+      }
+    },
+  );
+  await check(
+    'prepared data moves and read-only preferences cannot dispatch startup repair',
+    async () => {
+      try {
+        await window.fixtureHarness.setResponse('getStorageState', {
+          value: {
+            ...startupRepairStorage,
+            pendingDataDirectory: 'D:\\ISOLATED FIXTURE\\Prepared Manager Data',
+            canChange: false,
+          },
+        });
+        await window.fixtureHarness.setResponse('previewStartupRepair', {
+          value: startupRepairFixture(),
+        });
+        await window.fixtureHarness.clearCalls();
+        await open('preferences');
+        let dialog = activeDialog();
+        await until(
+          () => !!dialog.querySelector('.startup-previous-executable'),
+          'Startup review did not load alongside prepared data state',
+        );
+        const action = button(text.removePreviousStartup, dialog);
+        assert(
+          action.disabled && dialog.textContent?.includes(text.startupRepairFinishDataMove),
+          'A prepared data move left startup repair enabled or unexplained',
+        );
+        action.click();
+        await tick();
+        assert(
+          !(await window.fixtureHarness.calls()).some((call) => call.method === 'repairStartup'),
+          'Prepared data state dispatched startup mutation',
+        );
+        button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+        await window.fixtureHarness.setState({
+          ...host,
+          snapshot: { ...host.snapshot!, readOnly: true },
+        });
+        await window.fixtureHarness.setResponse('previewStartupRepair', {
+          value: startupRepairFixture(),
+        });
+        await window.fixtureHarness.clearCalls();
+        await window.fixtureHarness.openPreferences();
+        await until(
+          () => !!document.querySelector('[role="dialog"]'),
+          'Read-only Preferences did not open',
+        );
+        await tick();
+        dialog = activeDialog();
+        assert(
+          !dialog.querySelector('.startup-entry-review') &&
+            button(text.save, dialog).disabled &&
+            !(await window.fixtureHarness.calls()).some((call) =>
+              ['previewStartupRepair', 'repairStartup'].includes(call.method),
+            ),
+          'Read-only preferences requested startup effects or presented a repair action',
+        );
+        button(text.cancel, dialog).click();
+        await tick();
+      } finally {
+        const dialog = document.querySelector('[role="dialog"]');
+        if (dialog) button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+        await window.fixtureHarness.setState(host);
+        await tick();
+      }
+    },
+  );
+  await check(
+    'startup repair waits for verified data state and remains blocked after a storage read failure',
+    async () => {
+      try {
+        await window.fixtureHarness.setResponse('getStorageState', { pending: true });
+        await window.fixtureHarness.setResponse('previewStartupRepair', {
+          value: startupRepairFixture(),
+        });
+        await window.fixtureHarness.clearCalls();
+        await open('preferences');
+        let dialog = activeDialog();
+        await until(
+          () => !!dialog.querySelector('.startup-previous-executable'),
+          'Readonly startup review did not load while data state was pending',
+        );
+        let action = button(text.removePreviousStartup, dialog);
+        assert(
+          action.disabled &&
+            dialog.querySelector('.startup-storage-state')?.textContent ===
+              text.startupRepairCheckingData,
+          'Unknown data state enabled repair or omitted the loading explanation',
+        );
+        action.click();
+        await tick();
+        assert(
+          !(await window.fixtureHarness.calls()).some((call) => call.method === 'repairStartup'),
+          'Unknown data state dispatched startup mutation',
+        );
+        await window.fixtureHarness.resolveResponse('getStorageState', {
+          value: startupRepairStorage,
+        });
+        await until(() => !action.disabled, 'Verified data state did not enable explicit repair');
+        assert(
+          !dialog.querySelector('.startup-storage-state') &&
+            !(await window.fixtureHarness.calls()).some((call) => call.method === 'repairStartup'),
+          'Storage verification replayed the disabled action automatically',
+        );
+        button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+        await window.fixtureHarness.setResponse('getStorageState', {
+          error: 'FIXTURE data location unavailable',
+        });
+        await window.fixtureHarness.setResponse('previewStartupRepair', {
+          value: startupRepairFixture(),
+        });
+        await window.fixtureHarness.clearCalls();
+        await open('preferences');
+        dialog = activeDialog();
+        await until(
+          () =>
+            !!dialog.querySelector('.startup-previous-executable') &&
+            dialog.querySelector('.startup-storage-state')?.textContent ===
+              text.startupRepairDataUnavailable,
+          'Rejected data state omitted its repair explanation',
+        );
+        action = button(text.removePreviousStartup, dialog);
+        assert(action.disabled, 'Failed data verification left startup repair enabled');
+        action.click();
+        await tick();
+        assert(
+          !(await window.fixtureHarness.calls()).some((call) => call.method === 'repairStartup'),
+          'Failed data verification dispatched startup mutation',
+        );
+        button(text.cancel, dialog).click();
+        await tick();
+      } finally {
+        await window.fixtureHarness
+          .resolveResponse('getStorageState', { value: startupRepairStorage })
+          .catch(() => {});
+        const dialog = document.querySelector('[role="dialog"]');
+        if (dialog) button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+      }
+    },
+  );
   await check(
     'picker, startup feedback and late completions respect preferences sessions',
     async () => {
@@ -2845,6 +3383,69 @@ export async function runStartInTrayScenario(): Promise<AssertionRecord[]> {
       },
     ];
   }
+}
+
+export async function previewStartupRepair(): Promise<AssertionRecord[]> {
+  const previous = document.querySelector('[role="dialog"]');
+  if (previous) {
+    const close = [...previous.querySelectorAll<HTMLButtonElement>('button')].find((node) =>
+      [text.close, text.cancel].some((label) => label === node.textContent?.trim()),
+    );
+    assert(close, 'Previous dialog cannot be closed');
+    close.click();
+    await tick();
+  }
+  await window.fixtureHarness.resetResponses();
+  await window.fixtureHarness.setResponse('getStorageState', { value: startupRepairStorage });
+  const host = state();
+  await window.fixtureHarness.setState({
+    ...host,
+    authorityMode: 'Administrator',
+    snapshot: {
+      ...host.snapshot!,
+      settings: {
+        ...host.snapshot!.settings,
+        launchManagerAtLogin: true,
+        launchManagerAsAdministrator: true,
+        startInTray: true,
+      },
+    },
+  });
+  const preview = {
+    ...startupRepairFixture(),
+    detail: 'Manager will start with Windows as administrator. The current task will be preserved.',
+  };
+  await window.fixtureHarness.setResponse('previewStartupRepair', { value: preview });
+  await window.fixtureHarness.clearCalls();
+  await tick();
+  button(text.preferences).click();
+  await until(
+    () => !!document.querySelector('.startup-entry-review .startup-previous-executable'),
+    'Startup entry review preview missing',
+  );
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  const review = dialog.querySelector<HTMLElement>('.startup-entry-review')!;
+  review.scrollIntoView({ block: 'center', behavior: 'instant' });
+  await tick();
+  const action = button(text.removePreviousStartup, review);
+  assert(
+    review.querySelector('.startup-previous-executable')?.textContent ===
+      preview.previousExecutable &&
+      review.querySelector('.startup-current-executable')?.textContent ===
+        preview.currentExecutable &&
+      review.textContent?.includes(preview.detail) &&
+      !action.disabled &&
+      dialog.scrollWidth <= dialog.clientWidth + 1 &&
+      document.documentElement.scrollWidth <= innerWidth &&
+      !(await window.fixtureHarness.calls()).some((call) => call.method === 'repairStartup'),
+    'Startup review omitted its evidence, overflowed or dispatched without explicit consent',
+  );
+  return [
+    {
+      name: 'startup review displays both verified paths and saved-mode consent without effects',
+      passed: true,
+    },
+  ];
 }
 
 export async function previewHelp(): Promise<AssertionRecord[]> {

@@ -120,6 +120,11 @@ public sealed record PerformPayload(Guid PlanId, SelectionContext CurrentSelecti
 
 public sealed record SettingsPayload(ManagerSettings Settings, bool StartupConsent);
 
+public sealed record StartupRepairPayload(
+    [property: JsonRequired] string Fingerprint,
+    [property: JsonRequired] bool Confirmed
+);
+
 public sealed record ActivityPayload(ActivityQuery Query);
 
 public sealed record ImportPathPayload(string SourcePath);

@@ -192,6 +192,7 @@ export function createDiagnosticArchive(
     scope: [
       'All available retained Manager command records, without a 200-record excerpt limit.',
       'Independent per-user startup failure reports, including failures before portable data becomes available.',
+      'Saved backups of explicitly reviewed previous startup entries.',
       'Activity history and recovery journal, startup-continuation evidence, and update-operation diagnostic files.',
       'Selected current runtime state, including backend/update errors and startup issue details when supplied.',
       'The summary is a bounded convenience. Evidence files contain their full readable records. No live Task Scheduler XML is collected.',
@@ -205,6 +206,7 @@ export function createDiagnosticArchive(
     retention: [
       'Command logs normally retain up to five files of 2 MiB each.',
       'Startup diagnostics retain up to ten verified reports of 64 KiB each outside the portable data folder.',
+      'Startup repair backups are preserved in the profile. New repairs stop at 32 entries; no previous backup is removed automatically.',
       'Activity normally retains its active file and three rotations of approximately 1 MiB each.',
       'Native updater helper logs are bounded to 32 KiB. New helpers explicitly mark message or file truncation.',
       'Previously rotated or deleted records cannot be recovered by this export.',
@@ -449,6 +451,11 @@ export function createDiagnosticArchive(
       entry.count,
     );
   const profile = input.deployment.profileDirectory;
+  const startupRepairs = path.join(profile, 'startup-repairs');
+  for (const name of list(startupRepairs, 'Profile/startup-repairs')) {
+    if (/^startup-repair-\d{8}T\d{9}Z-[0-9a-f-]{36}\.json$/.test(name))
+      read(path.join(startupRepairs, name), 'Profile/startup-repairs/' + name, 'json');
+  }
   for (let index = 0; index <= 10; index++) {
     const name = 'activity.jsonl' + (index ? '.' + index : '');
     read(path.join(profile, name), 'Profile/' + name, 'jsonl');

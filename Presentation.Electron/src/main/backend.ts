@@ -38,6 +38,8 @@ import {
   type Validator,
 } from '../shared/validation.js';
 
+import { startupRepairPreview } from '../shared/startup-repair-validation.js';
+
 export const MAX_FRAME = 8 * 1024 * 1024;
 export const MAX_PENDING = 32;
 const protocolCode = oneOf(
@@ -102,6 +104,8 @@ const results: Record<string, Validator> = {
   prepare: shape({ planId: guid, plan: operationPlan }),
   perform: operationResult,
   saveSettings: operationResult,
+  previewStartupRepair: startupRepairPreview,
+  repairStartup: operationResult,
   runLogin: operationResult,
   activity: array(activity),
   previewImport: shape({ previewId: guid, preview: importPreview }),

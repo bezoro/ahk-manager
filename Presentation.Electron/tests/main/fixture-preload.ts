@@ -54,6 +54,8 @@ const api: AhkManagerApi = {
     void invoke('updateSelection', selection);
   },
   saveSettings: (...args) => invoke('saveSettings', ...args),
+  previewStartupRepair: () => invoke('previewStartupRepair'),
+  repairStartup: (...args) => invoke('repairStartup', ...args),
   pickInterpreter: () => invoke('pickInterpreter'),
   pickEditor: () => invoke('pickEditor'),
   getActivity: (...args) => invoke('getActivity', ...args),

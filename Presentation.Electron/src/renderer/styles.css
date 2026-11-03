@@ -877,6 +877,35 @@ time {
 .preference-section h3 {
   margin-top: 5px;
 }
+.startup-entry-review {
+  display: grid;
+  gap: 9px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--colorNeutralStroke1);
+  border-left: 3px solid var(--colorStatusWarningForeground1);
+  border-radius: 4px;
+  background: var(--colorNeutralBackground2);
+}
+.startup-entry-review h4,
+.startup-entry-review dl,
+.startup-entry-review dd,
+.startup-entry-review pre {
+  margin: 0;
+}
+.startup-entry-review dl {
+  display: grid;
+  gap: 5px;
+}
+.startup-entry-review dt {
+  font-size: 12px;
+  font-weight: 600;
+}
+.startup-entry-review > button {
+  justify-self: start;
+  max-width: 100%;
+  white-space: normal;
+}
 .picker-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;

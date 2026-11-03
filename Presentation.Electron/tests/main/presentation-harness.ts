@@ -389,6 +389,17 @@ app
         return;
       }
       if (method === 'updateSelection' || method === 'copyText') return;
+      if (method === 'previewStartupRepair')
+        return {
+          canRepair: false,
+          previousExecutable: null,
+          currentExecutable: null,
+          fingerprint: null,
+          reason: 'None',
+          detail: null,
+        };
+      if (method === 'repairStartup')
+        throw new Error('The isolated fixture has no reviewed startup entry to repair.');
       if (method === 'getActivity') return state.snapshot?.activity ?? [];
       if (method === 'pickInterpreter') return 'C:\\FixtureIsolada\\AutoHotkey64.exe';
       if (method === 'pickEditor') return 'C:\\FixtureIsolada\\Editor.exe';
@@ -519,6 +530,12 @@ app
                   ')',
               );
               write('updates-' + command.id + '.json', { assertions, fixture: true });
+            } else if (command.action === 'startupReview' && scenarios) {
+              const assertions = await window.webContents.executeJavaScript(
+                scenarios + '\nAhkRendererScenarios.previewStartupRepair()',
+              );
+              write('startupReview-' + command.id + '.json', { assertions, fixture: true });
+              report();
             } else if (command.action === 'help' && scenarios) {
               const assertions = await window.webContents.executeJavaScript(
                 scenarios + '\nAhkRendererScenarios.previewHelp()',

@@ -235,6 +235,15 @@ try {
         Invoke-Assertions 'help' 'help'
         Save-Capture "$theme-help-diagnostics-narrow-740"
     }
+
+    foreach ($theme in @('light', 'dark')) {
+        Set-Presentation $theme 1240 820
+        Invoke-Assertions 'startupReview' 'startupReview'
+        Save-Capture "$theme-startup-review-1240"
+        Set-Presentation $theme 740 600
+        Invoke-Assertions 'startupReview' 'startupReview'
+        Save-Capture "$theme-startup-review-narrow-740"
+    }
 }
 catch { $script:failures.Add($_.Exception.Message); Write-Trace $_.Exception.Message }
 finally {

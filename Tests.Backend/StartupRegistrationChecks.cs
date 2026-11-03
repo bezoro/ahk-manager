@@ -484,6 +484,9 @@ internal static class StartupRegistrationChecks
         }
         await StartupTaskIdentityChecks.RunAsync(root, check);
         await StartupRelocationChecks.RunAsync(root, check);
+        await StartupWorkingDirectoryChecks.RunAsync(root, check);
+        StartupDiagnosticChecks.Run(check);
+        await StartupLegacyRepairChecks.RunAsync(root, check);
     }
 
     static void ValidateNativeTaskDefinition(

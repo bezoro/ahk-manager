@@ -26,6 +26,7 @@ import {
 } from '../shared/validation.js';
 import { updateState } from '../shared/update-validation.js';
 import { storageChangeResult, storageState } from '../shared/storage-validation.js';
+import { startupRepairPreview } from '../shared/startup-repair-validation.js';
 
 const hostState = shape({
   snapshot: nullable(snapshot),
@@ -164,6 +165,8 @@ const api: AhkManagerApi = {
     );
   },
   saveSettings: (settings) => checked('saveSettings', settings, operationResult),
+  previewStartupRepair: () => checked('previewStartupRepair', {}, startupRepairPreview),
+  repairStartup: (fingerprint) => checked('repairStartup', { fingerprint }, operationResult),
   pickInterpreter: () => checked('pickInterpreter', {}, nullable(text())),
   pickEditor: () => checked('pickEditor', {}, nullable(text())),
   getActivity: (query) => checked('getActivity', query, array(activity)),

@@ -25,6 +25,15 @@ public interface IUserStartupAdapter
     Task<StartupInspection> InspectAsync(CancellationToken ct);
 }
 
+public enum StartupTaskParseIssue
+{
+    None,
+    XmlShape,
+    PrincipalAccountUnresolved,
+    TriggerAccountUnresolved,
+    Executable,
+}
+
 public sealed record StartupTaskRegistration(
     string Command,
     string UserSid,
@@ -33,8 +42,15 @@ public sealed record StartupTaskRegistration(
     bool InteractiveToken,
     bool UserLogonOnly,
     string Source,
-    string Fingerprint = ""
-);
+    string Fingerprint = "",
+    string? NonstandardWorkingDirectory = null,
+    StartupTaskParseIssue ParseIssue = StartupTaskParseIssue.None
+)
+{
+    // Null represents the canonical generated state. Nonstandard observed text,
+    // including an empty value, remains available for faithful rollback.
+    public bool WorkingDirectoryMatches => NonstandardWorkingDirectory is null;
+}
 
 // Kept separate so existing read-only/fake registry adapters remain usable.
 public interface IUserStartupTaskAdapter

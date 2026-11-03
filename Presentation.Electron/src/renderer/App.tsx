@@ -220,6 +220,11 @@ export function App(): React.ReactElement {
         ready={ready}
         onSaveSettings={administration.saveSettings}
         onPick={actions.pickExecutable}
+        onCopy={operations.copy}
+        onRepairResult={(result) => operations.report(result, dialogs.session.current)}
+        onRepairStartup={(fingerprint) =>
+          operations.request(() => window.ahkManager.repairStartup(fingerprint))
+        }
         onTransferStartup={() =>
           operations.performDialog(() => window.ahkManager.transferStartup(), false)
         }

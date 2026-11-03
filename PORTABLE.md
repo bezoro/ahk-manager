@@ -24,6 +24,14 @@ After obtaining writable ownership of its profile, Manager creates a current-use
 
 After closing Manager normally, you can move the complete portable folder. Open the root launcher in its new location once: the application derives the relative `Data` paths again and repairs its owned Start Menu shortcut and configured Windows startup registration. An external absolute data location keeps its original meaning. External script paths are preserved; moving Manager does not move those scripts.
 
+If a correct current startup task coexists with an older Manager entry in the Windows Run registry key, **Preferences > Startup** offers a review of the previous and current executable locations. Choose **Remove previous entry and apply saved startup preferences** only after checking the old location. This action is explicit consent; ordinary preference saves never silently adopt a conflicting registry entry. Save any preference edits before using the repair.
+
+The repair requires a healthy current task with the Manager source marker, resolved account, exact launcher and arguments, interactive logon and expected privileges. It accepts only a standard previous Manager command for review. Its approval expires when the task, registry value or saved startup mode changes. Unknown programs, extra arguments and unproven tasks remain protected. The previous executable is never run.
+
+Before removing the exact reviewed registry value, Manager saves a durable backup in `Data/Profile/startup-repairs`, or the selected profile location. It then verifies the state again and applies the saved startup preferences. A changed or unconfirmed registration is reported without overwriting a concurrent replacement. Backups are included in the complete diagnostic archive and are preserved automatically; new repairs stop if that folder has 32 entries. This validates configuration, not execution at a later Windows logon.
+
+Owned tasks with missing or outdated working directories are repaired without treating them as foreign tasks. Equivalent path case and a trailing directory separator do not require rewriting the task. Its original working directory is retained for rollback if a registration change fails.
+
 ## Importing current settings
 
 Before the first portable launch, close the current Manager with **Exit and keep scripts running**. Existing AHK processes can stay active. The portable edition imports the current Electron profile from `%LOCALAPPDATA%/Bezoro/AhkManagerElectron` into `Data/Profile`. It preserves the source and a migration backup. Script files remain at their original paths.

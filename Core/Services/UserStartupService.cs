@@ -12,7 +12,10 @@ using Microsoft.Win32;
 
 namespace Bezoro.AhkManager.Core.Services;
 
-public sealed class UserStartupService(IUserStartupAdapter adapter, string managerExecutable)
+public sealed partial class UserStartupService(
+    IUserStartupAdapter adapter,
+    string managerExecutable
+)
 {
     public const string TaskSource = "Bezoro.AhkManager.Electron.Startup.v1";
     public string Command { get; } =
@@ -30,7 +33,8 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
     internal static bool OwnsTask(StartupTaskRegistration task, string command, string userSid)
     {
         if (
-            task.Source != TaskSource
+            task.ParseIssue != StartupTaskParseIssue.None
+            || task.Source != TaskSource
             || task.UserSid != userSid
             || !task.InteractiveToken
             || !task.UserLogonOnly
@@ -87,7 +91,10 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
     }
 
     bool Desired(StartupTaskRegistration task, IUserStartupTaskAdapter tasks) =>
-        task.Enabled && task.HighestPrivileges && OwnsTask(task, Command, tasks.UserSid);
+        task.Enabled
+        && task.HighestPrivileges
+        && task.WorkingDirectoryMatches
+        && OwnsTask(task, Command, tasks.UserSid);
 
     bool OwnedEntry(string entry, StartupTaskRegistration? task, IUserStartupTaskAdapter? tasks) =>
         entry == Command
@@ -155,12 +162,24 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                     ct.ThrowIfCancellationRequested();
                     originalEntry = adapter.ReadEntry();
                     originalTask = tasks?.ReadTask();
+                    bool entryConflict =
+                        originalEntry is not null
+                        && !OwnedEntry(originalEntry, originalTask, tasks);
                     if (
-                        originalEntry is not null && !OwnedEntry(originalEntry, originalTask, tasks)
+                        entryConflict
                         || originalTask is not null
                             && (tasks is null || !Owned(originalTask, tasks))
                     )
-                        return new OperationResult(Outcome.Failed, ReasonCode.StartupEntryConflict);
+                        return new OperationResult(
+                            Outcome.Failed,
+                            ReasonCode.StartupEntryConflict,
+                            StartupRegistrationDiagnostics.ConflictDetail(
+                                entryConflict,
+                                originalTask,
+                                Command,
+                                tasks?.UserSid
+                            )
+                        );
                     if (enabled && elevated && tasks is null)
                         return new(
                             Outcome.Failed,
@@ -185,7 +204,11 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                     if (originalEntry is not null && (!enabled || elevated || replaceEntry))
                     {
                         if (!adapter.CompareExchangeEntry(originalEntry, null))
-                            return new(Outcome.Unknown, ReasonCode.StartupEntryConflict);
+                            return new(
+                                Outcome.Unknown,
+                                ReasonCode.StartupEntryConflict,
+                                StartupRegistrationDiagnostics.Changed
+                            );
                         changed = true;
                     }
                     if (
@@ -249,10 +272,11 @@ public sealed class UserStartupService(IUserStartupAdapter adapter, string manag
                                     ? ReasonCode.ManualElevationRequired
                                 : ReasonCode.AccessDenied
                         : ReasonCode.StorageFailure;
-                    string detail = code
-                        is ReasonCode.AccessDenied
-                            or ReasonCode.ManualElevationRequired
-                        ? "Windows denied the automatic startup change. Reopen Manager as administrator to configure the task with elevated privileges."
+                    string detail =
+                        code is ReasonCode.AccessDenied or ReasonCode.ManualElevationRequired
+                            ? "Windows denied the automatic startup change. Reopen Manager as administrator to configure the task with elevated privileges."
+                        : code == ReasonCode.StartupEntryConflict
+                            ? StartupRegistrationDiagnostics.Changed
                         : "The automatic startup change could not be completed.";
                     detail += restored
                         ? " The previous registration was preserved."

@@ -48,6 +48,26 @@ const entries = (bytes: Buffer): Record<string, string> =>
     ]),
   );
 
+test('reviewed startup repair backups are retained in the full archive without collecting unrelated files', (t) => {
+  const f = fixture(t);
+  const name = `startup-repair-20261103T120000000Z-${operationId}.json`;
+  const value = {
+    schemaVersion: 1,
+    applicationId: 'Bezoro.AhkManager.Electron',
+    kind: 'startup-repair-backup',
+    previousRunEntry: '"V:\\Previous Manager\\Bezoro.AhkManager.exe" --login --background',
+    taskFingerprint: 'a'.repeat(64),
+  };
+  f.write('Profile/startup-repairs/' + name, JSON.stringify(value));
+  f.write('Profile/startup-repairs/notes.txt', 'Unrelated user notes');
+  const archive = createDiagnosticArchive(f.input);
+  assert.equal(archive.complete, true);
+  const files = entries(archive.bytes);
+  assert.deepEqual(JSON.parse(files['Profile/startup-repairs/' + name]!), value);
+  assert.equal(files['Profile/startup-repairs/notes.txt'], undefined);
+  assert.match(archive.manifest.scope.join(' '), /reviewed previous startup entries/);
+});
+
 test('the archive retains all available records beyond summary limits and every known diagnostic store', (t) => {
   const f = fixture(t);
   const commands =
