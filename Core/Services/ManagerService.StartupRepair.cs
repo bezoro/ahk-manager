@@ -52,6 +52,7 @@ public sealed partial class ManagerService
                 if (!await store.VerifyLoadedAsync(cancellationToken).ConfigureAwait(false))
                     return new(Outcome.Failed, ReasonCode.ConcurrentSettingsChange);
                 string? backupName = null;
+                string? reviewedTaskFingerprint = null;
                 OperationResult? backupFailure = null;
                 var backups = new StartupRepairBackupStore(DataRoot);
                 var repaired = await startup
@@ -69,7 +70,10 @@ public sealed partial class ManagerService
                                 );
                             var saved = await backups.SaveAsync(backup, ct).ConfigureAwait(false);
                             if (saved.Succeeded)
+                            {
                                 backupName = saved.Detail;
+                                reviewedTaskFingerprint = backup.TaskFingerprint;
+                            }
                             else
                                 backupFailure = saved;
                             if (
@@ -103,10 +107,10 @@ public sealed partial class ManagerService
                         {
                             // The review applies the durable preferences, never a renderer-owned draft.
                             var registered = await startup
-                                .SetEnabledAsync(
+                                .ReconcileReviewedRepairAsync(
                                     document.Settings.LaunchManagerAtLogin,
-                                    true,
                                     document.Settings.LaunchManagerAsAdministrator,
+                                    reviewedTaskFingerprint ?? "",
                                     CancellationToken.None
                                 )
                                 .ConfigureAwait(false);

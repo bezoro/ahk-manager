@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Xml.Linq;
 using Bezoro.AhkManager.Core.Infrastructure;
 using Bezoro.AhkManager.Core.Models;
 using Bezoro.AhkManager.Core.Services;
@@ -17,6 +18,7 @@ internal static class StartupRepairManagerChecks
         await CheckUnavailableBackup(root, check);
         await CheckSavedModes(root, check);
         await CheckConcurrentSettings(root, check);
+        await CheckReviewedRegistrationRaces(root, check);
     }
 
     static async Task CheckConfirmedRepair(string root, Action<bool, string> check)
@@ -298,6 +300,106 @@ internal static class StartupRepairManagerChecks
                     && File.ReadAllBytes(fixture.SettingsPath).AsSpan().SequenceEqual(changed)
                     && fixture.Processes.Effects == 0,
                 "a settings change during awaited reconciliation prevents confirmed success and preserves concurrent startup entries and backup"
+            );
+        }
+    }
+
+    static async Task CheckReviewedRegistrationRaces(string root, Action<bool, string> check)
+    {
+        XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+        foreach (
+            var mode in new[]
+            {
+                (Name: "disabled", Enabled: false, Elevated: false, DisableReplacement: false),
+                (Name: "standard", Enabled: true, Elevated: false, DisableReplacement: false),
+                (Name: "elevated", Enabled: true, Elevated: true, DisableReplacement: true),
+            }
+        )
+        {
+            await using var fixture = await Fixture.CreateAsync(
+                root,
+                "owned-task-replaced-" + mode.Name,
+                enabled: mode.Enabled,
+                elevated: mode.Elevated
+            );
+            var preview = await fixture.Manager.PreviewStartupRepairAsync();
+            var xml = XDocument.Parse(
+                WindowsStartupTaskStore.Xml(
+                    fixture.OriginalTask with
+                    {
+                        Enabled = !mode.DisableReplacement,
+                    }
+                )
+            );
+            xml.Root!.Element(ns + "RegistrationInfo")!
+                .Add(new XElement(ns + "Description", "Independent owned task replacement"));
+            var replacement = WindowsStartupTaskStore.Parse(
+                xml.ToString(SaveOptions.DisableFormatting)
+            );
+            bool replaced = false;
+            fixture.Adapter.AfterTaskRead = () =>
+            {
+                if (
+                    !replaced
+                    && fixture.Adapter.Entry is null
+                    && fixture.Adapter.Task == fixture.OriginalTask
+                )
+                {
+                    // The low-level repair has captured the reviewed task for
+                    // its last observation. A new task appears before facade reconciliation.
+                    fixture.Adapter.Task = replacement;
+                    replaced = true;
+                }
+            };
+            var result = await fixture.Manager.RepairStartupAsync(preview.Fingerprint!, true);
+            check(
+                replacement.Fingerprint != fixture.OriginalTask.Fingerprint
+                    && UserStartupService.OwnsTask(replacement, fixture.Startup.Command, Sid)
+                    && replaced
+                    && result.Outcome == Outcome.Partial
+                    && result.Code == ReasonCode.StartupEntryConflict
+                    && fixture.Adapter.Task == replacement
+                    && fixture.Adapter.TaskWrites == 0
+                    && fixture.Adapter.Entry is null
+                    && fixture.Adapter.Writes == 1
+                    && fixture.Adapter.RemovedRunEntries.SequenceEqual([fixture.PreviousEntry])
+                    && Directory.GetFiles(fixture.BackupDirectory, "*.json").Length == 1
+                    && fixture.Preserved()
+                    && fixture.Processes.Effects == 0,
+                "facade reconciliation preserves an owned task replacement outside the reviewed XML fingerprint: "
+                    + mode.Name
+            );
+        }
+        await using (var fixture = await Fixture.CreateAsync(root, "current-run-inserted"))
+        {
+            var preview = await fixture.Manager.PreviewStartupRepairAsync();
+            bool inserted = false;
+            fixture.Adapter.AfterTaskRead = () =>
+            {
+                if (
+                    !inserted
+                    && fixture.Adapter.Entry is null
+                    && fixture.Adapter.Task == fixture.OriginalTask
+                )
+                {
+                    fixture.Adapter.Entry = fixture.Startup.Command;
+                    inserted = true;
+                }
+            };
+            var result = await fixture.Manager.RepairStartupAsync(preview.Fingerprint!, true);
+            check(
+                inserted
+                    && result.Outcome == Outcome.Partial
+                    && result.Code == ReasonCode.StartupEntryConflict
+                    && fixture.Adapter.Entry == fixture.Startup.Command
+                    && fixture.Adapter.Task == fixture.OriginalTask
+                    && fixture.Adapter.TaskWrites == 0
+                    && fixture.Adapter.Writes == 1
+                    && fixture.Adapter.RemovedRunEntries.SequenceEqual([fixture.PreviousEntry])
+                    && Directory.GetFiles(fixture.BackupDirectory, "*.json").Length == 1
+                    && fixture.Preserved()
+                    && fixture.Processes.Effects == 0,
+                "facade reconciliation preserves a current-command Run value inserted after the reviewed old entry was removed"
             );
         }
     }

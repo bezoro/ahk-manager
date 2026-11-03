@@ -149,6 +149,24 @@ public sealed partial class UserStartupService(
         bool consent,
         bool elevated,
         CancellationToken ct = default
+    ) => SetEnabledCoreAsync(enabled, consent, elevated, null, ct);
+
+    internal Task<OperationResult> ReconcileReviewedRepairAsync(
+        bool enabled,
+        bool elevated,
+        string reviewedTaskFingerprint,
+        CancellationToken ct = default
+    ) =>
+        RepairFingerprint(reviewedTaskFingerprint)
+            ? SetEnabledCoreAsync(enabled, true, elevated, reviewedTaskFingerprint, ct)
+            : Task.FromResult(new OperationResult(Outcome.Failed, ReasonCode.StaleSelection));
+
+    Task<OperationResult> SetEnabledCoreAsync(
+        bool enabled,
+        bool consent,
+        bool elevated,
+        string? reviewedTaskFingerprint,
+        CancellationToken ct
     ) =>
         Task.Run(
             () =>
@@ -162,6 +180,21 @@ public sealed partial class UserStartupService(
                     ct.ThrowIfCancellationRequested();
                     originalEntry = adapter.ReadEntry();
                     originalTask = tasks?.ReadTask();
+                    // Continuation of explicit repair cannot adopt a new task or Run
+                    // value, even if the replacement separately looks product-owned.
+                    if (
+                        reviewedTaskFingerprint is not null
+                        && (
+                            originalEntry is not null
+                            || originalTask is null
+                            || originalTask.Fingerprint != reviewedTaskFingerprint
+                        )
+                    )
+                        return new OperationResult(
+                            Outcome.Failed,
+                            ReasonCode.StartupEntryConflict,
+                            "The startup task or Run value changed after review (registration-changed). No further registration changes were applied."
+                        );
                     bool entryConflict =
                         originalEntry is not null
                         && !OwnedEntry(originalEntry, originalTask, tasks);
