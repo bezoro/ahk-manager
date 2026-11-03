@@ -1649,10 +1649,13 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         button(text.removePreviousStartup, dialog).click();
         await until(
           () =>
-            dialog.querySelector('.startup-entry-review .notice pre')?.textContent === rejection,
+            dialog
+              .querySelector('.startup-entry-review .notice pre')
+              ?.textContent?.includes(rejection) === true,
           'Unconfirmed repair failure was hidden',
         );
         const review = dialog.querySelector<HTMLElement>('.startup-entry-review')!;
+        const renderedDetail = review.querySelector('.notice pre')!.textContent!;
         assert(
           review.textContent?.includes(text.startupRepairUnconfirmed) &&
             ![...review.querySelectorAll('button')].some(
@@ -1674,8 +1677,15 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
           'Review error clipboard retry did not confirm success',
         );
         assert(
-          review.querySelector('.notice pre')?.textContent === rejection,
+          review.querySelector('.notice pre')?.textContent === renderedDetail,
           'Copying review error replaced its diagnostic context',
+        );
+        const copies = (await window.fixtureHarness.calls()).filter(
+          (call) => call.method === 'copyText',
+        );
+        assert(
+          copies.length === 2 && copies.every((call) => call.args[0] === renderedDetail),
+          'Clipboard did not receive the complete rendered startup repair error',
         );
         button(text.reviewStartup, review).click();
         await until(
