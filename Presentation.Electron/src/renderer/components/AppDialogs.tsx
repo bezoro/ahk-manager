@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { ManagerSettings } from '../../shared/contracts.js';
+import type { ManagerSettings, OperationResult } from '../../shared/contracts.js';
 import type { Dialogs } from '../hooks/useDialogs.js';
 import { CollectionDialog, HelpDialog, ImportDialog } from './Dialogs.js';
 import { Preferences } from './Preferences.js';
@@ -13,6 +13,9 @@ interface Props {
   onSaveSettings(value: ManagerSettings): void;
   onPick(kind: 'editor' | 'interpreter'): Promise<string | null>;
   onTransferStartup(): void;
+  onCopy(value: string): Promise<boolean>;
+  onRepairResult(result: OperationResult): void;
+  onRepairStartup(fingerprint: string): Promise<OperationResult>;
   onImport(): void;
   onBackup(): void;
   onSaveCollection(id: string | null, name: string): void;
@@ -28,6 +31,9 @@ export function AppDialogs({
   onSaveSettings,
   onPick,
   onTransferStartup,
+  onCopy,
+  onRepairResult,
+  onRepairStartup,
   onImport,
   onBackup,
   onSaveCollection,
@@ -47,6 +53,9 @@ export function AppDialogs({
           onSave={onSaveSettings}
           onPick={onPick}
           onTransferStartup={onTransferStartup}
+          onCopy={onCopy}
+          onRepairResult={onRepairResult}
+          onRepairStartup={onRepairStartup}
         />
       )}
       {help && (

@@ -14,6 +14,7 @@ import type {
   ScriptMetadata,
   ScriptOperation,
   SelectionContext,
+  StartupRepairPreview,
 } from '../shared/contracts.js';
 import type { PreparedOperation, ProfileMigrationPreview } from './backend.js';
 import { MAX_PENDING } from './backend.js';
@@ -48,6 +49,12 @@ export class ManagerController {
   private selection: SelectionContext | null = null;
   private selectionEpoch = 0;
   private paths = new Set<string>();
+  private startupRepairReview: {
+    fingerprint: string;
+    mode: string;
+    expires: number;
+  } | null = null;
+  private startupRepairGeneration = 0;
   private previews = new Map<
     string,
     { previewId: string; preview: ImportPreview; expires: number }
@@ -73,6 +80,8 @@ export class ManagerController {
   setAuthority(authority: Authority): void {
     this.authority = authority;
     this.paths.clear();
+    this.startupRepairReview = null;
+    this.startupRepairGeneration++;
     this.previews.clear();
     this.updateSelection(null);
   }
@@ -91,6 +100,8 @@ export class ManagerController {
   setConnection(connection: HostState['connection'], error: string | null = null): void {
     this.state = { ...this.state, connection, error };
     if (connection !== 'ready') {
+      this.startupRepairReview = null;
+      this.startupRepairGeneration++;
       this.previews.clear();
       this.updateSelection(null);
     }
@@ -105,6 +116,11 @@ export class ManagerController {
   }
   private matches(revision: string): boolean {
     return this.requireReady().revision === revision;
+  }
+  private savedStartupMode(): string {
+    // Observation refreshes also advance snapshot revision without changing startup intent.
+    const settings = this.requireReady().settings;
+    return `${settings.launchManagerAtLogin}:${settings.launchManagerAsAdministrator}`;
   }
   private async serialize<T>(work: () => Promise<T>): Promise<T> {
     this.requireReady();
@@ -432,6 +448,48 @@ export class ManagerController {
         settings: { ...proposed, window: this.native.placement() },
         startupConsent,
       });
+    });
+  }
+  async previewStartupRepair(): Promise<StartupRepairPreview> {
+    const generation = ++this.startupRepairGeneration;
+    this.startupRepairReview = null;
+    const mode = this.savedStartupMode();
+    if (this.state.administrationPending) throw new Error(t.administrationPending);
+    if (this.stopExit.active) throw new Error(t.stopExitBusy);
+    if (!this.native.alive()) throw new Error(t.documentClosed);
+    const preview = await this.authority.request<StartupRepairPreview>('previewStartupRepair', {});
+    if (
+      generation !== this.startupRepairGeneration ||
+      !this.native.alive() ||
+      this.savedStartupMode() !== mode
+    )
+      throw new Error(t.documentChanged);
+    if (preview.canRepair && preview.fingerprint !== null) {
+      this.startupRepairReview = {
+        fingerprint: preview.fingerprint,
+        mode,
+        expires: Date.now() + 5 * 60 * 1000,
+      };
+    }
+    return preview;
+  }
+  async repairStartup(fingerprint: string): Promise<OperationResult> {
+    const review = this.startupRepairReview;
+    this.startupRepairReview = null;
+    const generation = ++this.startupRepairGeneration;
+    return this.serialize(async () => {
+      if (
+        !review ||
+        generation !== this.startupRepairGeneration ||
+        fingerprint !== review.fingerprint ||
+        review.expires <= Date.now() ||
+        this.savedStartupMode() !== review.mode
+      )
+        return stale();
+      // The inline review action supplies consent for this exact saved startup-mode preview.
+      // Core revalidates the Run value, task XML and saved preferences before any effect.
+      if (!this.native.alive()) return stale();
+      return this.authority.request('repairStartup', { fingerprint, confirmed: true });
     });
   }
   async activity(query: ActivityQuery): Promise<ActivitySnapshot[]> {

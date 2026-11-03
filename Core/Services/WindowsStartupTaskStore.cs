@@ -92,7 +92,8 @@ internal static class WindowsStartupTaskStore
             if (replacement is not null)
             {
                 if (
-                    replacement.UserSid != sid
+                    replacement.ParseIssue != StartupTaskParseIssue.None
+                    || replacement.UserSid != sid
                     || replacement.Source != UserStartupService.TaskSource
                     || !replacement.InteractiveToken
                     || !replacement.UserLogonOnly
@@ -174,11 +175,17 @@ internal static class WindowsStartupTaskStore
                     new XAttribute("Context", "CurrentUser"),
                     E(
                         "Exec",
-                        new object[]
+                        new object?[]
                         {
                             E("Command", executable),
                             E("Arguments", "--login --background"),
-                            E("WorkingDirectory", Path.GetDirectoryName(executable)),
+                            registration.NonstandardWorkingDirectory == ""
+                                ? null
+                                : E(
+                                    "WorkingDirectory",
+                                    registration.NonstandardWorkingDirectory
+                                        ?? Path.GetDirectoryName(executable)
+                                ),
                         }
                     )
                 )
@@ -195,9 +202,10 @@ internal static class WindowsStartupTaskStore
         string hash = Convert
             .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(xml)))
             .ToLowerInvariant();
-        StartupTaskRegistration foreign = new("", "", false, false, false, false, "", hash);
+        StartupTaskRegistration Foreign(StartupTaskParseIssue issue) =>
+            new("", "", false, false, false, false, "", hash, ParseIssue: issue);
         if (xml.Length > 65536)
-            return foreign;
+            return Foreign(StartupTaskParseIssue.XmlShape);
         try
         {
             using var reader = XmlReader.Create(
@@ -210,7 +218,7 @@ internal static class WindowsStartupTaskStore
             );
             var root = XDocument.Load(reader).Root;
             if (root?.Name != Ns + "Task")
-                return foreign;
+                return Foreign(StartupTaskParseIssue.XmlShape);
             var actions = root.Element(Ns + "Actions")?.Elements().ToArray();
             var principals = root.Element(Ns + "Principals")?.Elements().ToArray();
             var triggers = root.Element(Ns + "Triggers")?.Elements().ToArray();
@@ -222,7 +230,7 @@ internal static class WindowsStartupTaskStore
                 || triggers is not { Length: 1 }
                 || triggers[0].Name != Ns + "LogonTrigger"
             )
-                return foreign;
+                return Foreign(StartupTaskParseIssue.XmlShape);
             // Scheduler may persist the same user as a SID in the principal and
             // an NTAccount in the trigger. Ownership follows the resolved SID;
             // the fingerprint still binds the complete, unmodified XML.
@@ -231,23 +239,21 @@ internal static class WindowsStartupTaskStore
                 resolveAccountSid ?? AccountSid
             );
             if (sid is null)
-                return foreign;
+                return Foreign(StartupTaskParseIssue.PrincipalAccountUnresolved);
             string? triggerSid = ResolveSid(
                 triggers[0].Element(Ns + "UserId")?.Value,
                 resolveAccountSid ?? AccountSid
             );
             if (triggerSid is null)
-                return foreign;
-            string executable = actions[0].Element(Ns + "Command")?.Value ?? "";
+                return Foreign(StartupTaskParseIssue.TriggerAccountUnresolved);
+            string? executable = CanonicalExecutable(
+                actions[0].Element(Ns + "Command")?.Value ?? ""
+            );
             string arguments = actions[0].Element(Ns + "Arguments")?.Value ?? "";
             string work = actions[0].Element(Ns + "WorkingDirectory")?.Value ?? "";
-            bool validPath =
-                Path.IsPathFullyQualified(executable)
-                && ScriptPaths.Equal(executable, ScriptPaths.LocalPath(executable))
-                && ScriptPaths.Equal(Path.GetDirectoryName(executable), work);
-            string command = validPath
-                ? ScriptPaths.QuoteArgument(ScriptPaths.LocalPath(executable)) + " " + arguments
-                : "";
+            if (executable is null)
+                return Foreign(StartupTaskParseIssue.Executable);
+            string command = ScriptPaths.QuoteArgument(executable) + " " + arguments;
             static bool Enabled(XElement? value) => value?.Value is not ("false" or "0");
             bool enabled =
                 Enabled(root.Element(Ns + "Settings")?.Element(Ns + "Enabled"))
@@ -260,12 +266,45 @@ internal static class WindowsStartupTaskStore
                 principals[0].Element(Ns + "LogonType")?.Value == "InteractiveToken",
                 triggerSid == sid,
                 root.Element(Ns + "RegistrationInfo")?.Element(Ns + "Source")?.Value ?? "",
-                hash
+                hash,
+                MatchesWorkingDirectory(executable, work) ? null : work
             );
         }
         catch (Exception ex) when (ex is XmlException or IOException or ArgumentException)
         {
-            return foreign;
+            return Foreign(StartupTaskParseIssue.XmlShape);
+        }
+    }
+
+    static string? CanonicalExecutable(string executable)
+    {
+        try
+        {
+            string canonical = ScriptPaths.LocalPath(executable);
+            return ScriptPaths.Equal(executable, canonical) ? canonical : null;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    static bool MatchesWorkingDirectory(string executable, string directory)
+    {
+        try
+        {
+            string canonical = ScriptPaths.LocalPath(directory);
+            // A case change or trailing directory separator does not change the
+            // startup context. Dot segments, aliases and relative paths need repair.
+            return ScriptPaths.Equal(directory, canonical)
+                && ScriptPaths.Equal(
+                    Path.TrimEndingDirectorySeparator(canonical),
+                    Path.GetDirectoryName(executable)
+                );
+        }
+        catch (ArgumentException)
+        {
+            return false;
         }
     }
 

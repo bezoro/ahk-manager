@@ -181,6 +181,26 @@ export const text = {
   allOutcomes: 'All outcomes',
   copy: 'Copy',
   copyDetails: 'Copy details',
+  copyDetailsFailed:
+    'The details could not be copied. Try again or save a diagnostic archive from Help.',
+  startupPreviousEntry: 'Previous startup entry',
+  startupReviewTitle: 'Windows startup review',
+  startupPreviousEntryHint:
+    'A second Manager startup entry points to a previous location. Review both paths before removing the previous entry.',
+  previousManager: 'Previous Manager',
+  currentManager: 'Current Manager',
+  removePreviousStartup: 'Remove previous entry and apply saved startup preferences',
+  startupRepairSaveFirst: 'Save your preferences before removing the previous startup entry.',
+  startupRepairFinishDataMove: 'Finish or cancel the prepared data move before repairing startup.',
+  startupRepairCheckingData: 'Checking the data location before startup repair…',
+  startupRepairDataUnavailable:
+    'The data location could not be verified. Reopen Preferences to check it again.',
+  reviewStartup: 'Check startup entry again',
+  startupReviewPending: 'Checking the Windows startup entry…',
+  startupReviewFailed:
+    'The previous startup entry could not be reviewed. Check the details and try again.',
+  startupRepairUnconfirmed:
+    'The startup repair result could not be confirmed. Review the entry again before retrying.',
   technicalDetails: 'Diagnostic details',
   relatedActivity: 'Activity for this script',
   managerActivity: 'Manager',

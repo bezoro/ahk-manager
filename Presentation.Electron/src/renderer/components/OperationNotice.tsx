@@ -13,10 +13,12 @@ export function OperationNotice({
   notice,
   onDismiss,
   onCopy,
+  copyPending = false,
 }: {
   notice: Notice | null;
   onDismiss(): void;
   onCopy?(value: string): void;
+  copyPending?: boolean;
 }): React.ReactElement | null {
   if (!notice) return null;
   return (
@@ -33,7 +35,12 @@ export function OperationNotice({
             <summary>{text.technicalDetails}</summary>
             <pre className="selectable">{notice.detail}</pre>
             {onCopy && (
-              <Button size="small" onClick={() => onCopy(notice.detail!)}>
+              <Button
+                size="small"
+                disabled={copyPending}
+                aria-busy={copyPending || undefined}
+                onClick={() => onCopy(notice.detail!)}
+              >
                 {text.copyDetails}
               </Button>
             )}

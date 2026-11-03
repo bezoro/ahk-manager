@@ -514,3 +514,58 @@ test('an error after confirmed spawn is not exit evidence and cannot permit a re
   child.emit('exit', 1, null);
   assert.equal(client.exited, true);
 });
+
+test('startup repair preview and result cross the authenticated broker with their exact shapes', async () => {
+  const fingerprint = 'c'.repeat(64);
+  const preview = {
+    canRepair: true,
+    previousExecutable: 'V:\\Previous\\Bezoro.AhkManager.exe',
+    currentExecutable: 'C:\\Portable\\Bezoro.AhkManager.exe',
+    fingerprint,
+    reason: 'None',
+    detail: 'Review the previous startup entry.',
+  };
+  const result = {
+    outcome: 'Confirmed',
+    code: 'None',
+    detail: 'The reviewed previous entry was removed.',
+    correlationId: null,
+  };
+  const f = setup({
+    reply: (action) =>
+      action === 'previewStartupRepair' ? preview : action === 'repairStartup' ? result : undefined,
+  });
+  await f.client.start();
+  assert.deepEqual(await f.client.request('previewStartupRepair', {}), preview);
+  assert.deepEqual(
+    await f.client.request('repairStartup', { fingerprint, confirmed: true }),
+    result,
+  );
+  assert.deepEqual(f.calls.find((call) => call.action === 'repairStartup').payload, {
+    fingerprint,
+    confirmed: true,
+  });
+  await f.client.shutdown();
+});
+
+test('an unusable startup review fails the broker session and is never retried as an effect', async () => {
+  const f = setup({
+    reply: (action) =>
+      action === 'previewStartupRepair'
+        ? {
+            canRepair: true,
+            previousExecutable: 'V:\\Previous\\Bezoro.AhkManager.exe',
+            currentExecutable: 'C:\\Portable\\Bezoro.AhkManager.exe',
+            fingerprint: null,
+            reason: 'None',
+            detail: null,
+          }
+        : undefined,
+  });
+  await f.client.start();
+  await assert.rejects(f.client.request('previewStartupRepair', {}), UnknownAfterDispatchError);
+  assert.equal(f.client.ready, false);
+  assert.equal(f.calls.filter((call) => call.action === 'previewStartupRepair').length, 1);
+  assert.equal(f.calls.filter((call) => call.action === 'repairStartup').length, 0);
+  f.child.emit('exit', 1, null);
+});

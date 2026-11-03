@@ -146,6 +146,11 @@ internal sealed class FakeStartup : IUserStartupAdapter
 internal sealed class FakeManager : IManagerService
 {
     public ManagerSnapshot Snapshot { get; set; } = ManagerSnapshot.Empty;
+    public StartupRepairPreview StartupPreview { get; set; } =
+        new(false, null, null, null, ReasonCode.CapabilityUnverified);
+    public int StartupPreviewCalls,
+        StartupRepairEffects;
+    public readonly List<(string Fingerprint, bool Confirmed)> StartupRepairs = [];
     public int Performs,
         Disposals;
     public OperationPlan? LastPerformed;
@@ -234,6 +239,27 @@ internal sealed class FakeManager : IManagerService
     ) => Success();
 
     public Task<OperationResult> RunLoginAsync(CancellationToken ct = default) => Success();
+
+    public Task<StartupRepairPreview> PreviewStartupRepairAsync(CancellationToken ct = default)
+    {
+        StartupPreviewCalls++;
+        return Task.FromResult(StartupPreview);
+    }
+
+    public Task<OperationResult> RepairStartupAsync(
+        string fingerprint,
+        bool confirmed,
+        CancellationToken ct = default
+    )
+    {
+        StartupRepairs.Add((fingerprint, confirmed));
+        if (!confirmed)
+            return Task.FromResult(
+                new OperationResult(Outcome.Failed, ReasonCode.StartupConsentRequired)
+            );
+        StartupRepairEffects++;
+        return Success();
+    }
 
     public Task<ImmutableArray<ActivitySnapshot>> GetActivityAsync(
         ActivityQuery query,

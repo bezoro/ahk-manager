@@ -50,6 +50,21 @@ export function useOperations(host: HostState, dialogs: Dialogs) {
     [showNotice],
   );
 
+  const request = React.useCallback(
+    async <T>(task: () => Promise<T>): Promise<T> => {
+      if (inFlight.current || host.busy || host.administrationPending) throw new Error(text.busy);
+      inFlight.current = true;
+      setPending(true);
+      try {
+        return await task();
+      } finally {
+        inFlight.current = false;
+        setPending(false);
+      }
+    },
+    [host.busy, host.administrationPending],
+  );
+
   const run = React.useCallback(
     async <T>(
       task: () => Promise<T>,
@@ -58,19 +73,14 @@ export function useOperations(host: HostState, dialogs: Dialogs) {
     ): Promise<void> => {
       if (inFlight.current || host.busy || host.administrationPending) return;
       if (destination && session.current === destination) setDialogNotice(null);
-      inFlight.current = true;
-      setPending(true);
       try {
-        const value = await task();
+        const value = await request(task);
         complete?.(value);
       } catch (error) {
         onError(error, destination);
-      } finally {
-        inFlight.current = false;
-        setPending(false);
       }
     },
-    [onError, host.busy, host.administrationPending, session, setDialogNotice],
+    [onError, request, host.busy, host.administrationPending, session, setDialogNotice],
   );
 
   const perform = (
@@ -103,11 +113,15 @@ export function useOperations(host: HostState, dialogs: Dialogs) {
     );
   };
 
-  const copy = (value: string): void => {
-    void window.ahkManager
-      .copyText(value)
-      .then(() => setNotice({ title: text.copied, message: '', warning: false }))
-      .catch((error) => onError(error));
+  const copy = async (value: string): Promise<boolean> => {
+    try {
+      await window.ahkManager.copyText(value);
+      setNotice({ title: text.copied, message: '', warning: false });
+      return true;
+    } catch (error) {
+      onError(error);
+      return false;
+    }
   };
 
   return {
@@ -119,6 +133,7 @@ export function useOperations(host: HostState, dialogs: Dialogs) {
     onError,
     report,
     run,
+    request,
     perform,
     performDialog,
     copy,

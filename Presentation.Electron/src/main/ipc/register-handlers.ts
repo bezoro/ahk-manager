@@ -28,6 +28,7 @@ import {
   type Validator,
 } from '../../shared/validation.js';
 import { hostText as t } from '../../shared/host-en-US.js';
+import { startupRepairFingerprint } from '../../shared/startup-repair-validation.js';
 import type { ManagerController } from '../controller.js';
 import type { AdministrationPreflight } from '../elevation.js';
 import type { DocumentGuard, DocumentLease } from '../security.js';
@@ -189,6 +190,12 @@ export function registerHandlers(context: IpcContext): void {
     'saveSettings',
     () => true,
     (value) => controller.saveSettings(assertSettings(value)),
+  );
+  bind('previewStartupRepair', none, () => controller.previewStartupRepair());
+  bind<{ fingerprint: string }>(
+    'repairStartup',
+    shape({ fingerprint: startupRepairFingerprint }),
+    (value) => controller.repairStartup(value.fingerprint),
   );
   bind('pickInterpreter', none, () => controller.pick('interpreter'));
   bind('pickEditor', none, () => controller.pick('editor'));

@@ -78,6 +78,14 @@ internal static class BackendChecks
         await Suite("runtime", () => RuntimeServiceChecks.RunAsync(root, Check));
         await Suite("portable profiles", () => PortableProfileChecks.RunAsync(root, Check));
         await Suite("startup settings", () => StartupSettingsChecks.RunAsync(root, Check));
+        await Suite(
+            "startup repair transport",
+            () => StartupRepairTransportChecks.RunAsync(root, Check)
+        );
+        await Suite(
+            "startup repair settings",
+            () => StartupRepairManagerChecks.RunAsync(root, Check)
+        );
         await Suite("continuation", () => StartupContinuationChecks.RunAsync(root, Check));
         await Suite("visibility", () => StartupVisibilityFixturesAsync(root));
         Console.WriteLine("BACKEND checks=" + count);

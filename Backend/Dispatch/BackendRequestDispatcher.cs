@@ -186,6 +186,27 @@ internal sealed class BackendRequestDispatcher(
                         .ConfigureAwait(false),
                     Protocol.Json.OperationResult
                 );
+            case "previewStartupRepair":
+                Empty(payload);
+                return Pack(
+                    await manager.PreviewStartupRepairAsync(ct).ConfigureAwait(false),
+                    Protocol.Json.StartupRepairPreview
+                );
+            case "repairStartup":
+                var repair = Read(payload, Protocol.Json.StartupRepairPayload);
+                if (
+                    repair.Fingerprint is not { Length: 64 }
+                    || repair.Fingerprint.Any(c =>
+                        c is not (>= '0' and <= '9' or >= 'a' and <= 'f')
+                    )
+                )
+                    throw new ProtocolException("InvalidRequest");
+                return Pack(
+                    await manager
+                        .RepairStartupAsync(repair.Fingerprint, repair.Confirmed, ct)
+                        .ConfigureAwait(false),
+                    Protocol.Json.OperationResult
+                );
             case "initializeStartup":
                 Empty(payload);
                 return Pack(

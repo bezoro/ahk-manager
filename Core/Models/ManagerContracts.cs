@@ -448,6 +448,17 @@ public interface IManagerService : IAsyncDisposable
         bool startupConsent = false,
         CancellationToken cancellationToken = default
     );
+    Task<StartupRepairPreview> PreviewStartupRepairAsync(
+        CancellationToken cancellationToken = default
+    ) =>
+        Task.FromResult(
+            new StartupRepairPreview(false, null, null, null, ReasonCode.CapabilityUnverified)
+        );
+    Task<OperationResult> RepairStartupAsync(
+        string fingerprint,
+        bool confirmed,
+        CancellationToken cancellationToken = default
+    ) => Task.FromResult(new OperationResult(Outcome.Failed, ReasonCode.CapabilityUnverified));
     Task<OperationResult> RunLoginAsync(CancellationToken cancellationToken = default);
     Task<ImmutableArray<ActivitySnapshot>> GetActivityAsync(
         ActivityQuery query,

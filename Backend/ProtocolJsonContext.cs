@@ -40,6 +40,8 @@ namespace Bezoro.AhkManager.Backend;
 [JsonSerializable(typeof(PreparedResult))]
 [JsonSerializable(typeof(PerformPayload))]
 [JsonSerializable(typeof(SettingsPayload))]
+[JsonSerializable(typeof(StartupRepairPayload))]
+[JsonSerializable(typeof(StartupRepairPreview))]
 [JsonSerializable(typeof(ActivityPayload))]
 [JsonSerializable(typeof(ImportPathPayload))]
 [JsonSerializable(typeof(PreviewPayload))]

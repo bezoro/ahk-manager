@@ -134,6 +134,14 @@ export interface WindowPlacement {
   maximized: boolean;
   dpi: number;
 }
+export interface StartupRepairPreview {
+  canRepair: boolean;
+  previousExecutable: string | null;
+  currentExecutable: string | null;
+  fingerprint: string | null;
+  reason: string;
+  detail: string | null;
+}
 export interface ManagerSettings {
   interpreterPath: string | null;
   editorPath: string | null;
@@ -292,6 +300,8 @@ export interface AhkManagerApi {
   operate(operation: ScriptOperation, selection: SelectionContext): Promise<OperationResult>;
   updateSelection(selection: SelectionContext | null): void;
   saveSettings(settings: ManagerSettings): Promise<OperationResult>;
+  previewStartupRepair(): Promise<StartupRepairPreview>;
+  repairStartup(fingerprint: string): Promise<OperationResult>;
   pickInterpreter(): Promise<string | null>;
   pickEditor(): Promise<string | null>;
   getActivity(query: ActivityQuery): Promise<ActivitySnapshot[]>;

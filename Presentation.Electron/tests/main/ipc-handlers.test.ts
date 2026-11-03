@@ -551,3 +551,106 @@ test('the public updater does not register a GitHub credential endpoint', async 
   );
   assert.equal(f.ipc.handlers.has('manager:setUpdateToken'), false);
 });
+
+test('startup repair authenticates its document and permits only an exact preview fingerprint', async () => {
+  const f = fixture();
+  const fingerprints: string[] = [];
+  f.context.controller.repairStartup = async (value) => {
+    fingerprints.push(value);
+    return confirmed;
+  };
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  const fingerprint = 'c'.repeat(64);
+  await assert.rejects(
+    f.ipc.invoke('manager:repairStartup', f.event, {
+      token: 'forged',
+      body: { fingerprint },
+    }),
+    /Stale IPC document/,
+  );
+  for (const body of [
+    {},
+    { fingerprint: null },
+    { fingerprint: 'A'.repeat(64) },
+    { fingerprint: 'c'.repeat(63) },
+    { fingerprint: fingerprint + '\n' },
+    { fingerprint, confirmed: true },
+    { fingerprint, registryPath: 'another key' },
+    { fingerprint, previousCommand: 'unapproved command' },
+  ])
+    await assert.rejects(invoke('repairStartup', body), /Invalid/);
+  assert.deepEqual(fingerprints, []);
+  await invoke('repairStartup', { fingerprint });
+  assert.deepEqual(fingerprints, [fingerprint]);
+});
+
+test('startup repair preview and application cannot bypass an application transition', async () => {
+  for (const phase of [
+    'quitting',
+    'updateApplying',
+    'adoptionPending',
+    'administrationPending',
+  ] as const) {
+    const f = fixture();
+    let requests = 0;
+    f.context.controller.previewStartupRepair = async () => {
+      requests++;
+      return {
+        canRepair: false,
+        previousExecutable: null,
+        currentExecutable: null,
+        fingerprint: null,
+        reason: 'None',
+        detail: null,
+      };
+    };
+    f.context.controller.repairStartup = async () => {
+      requests++;
+      return confirmed;
+    };
+    f.setPolicy({ [phase]: true });
+    registerHandlers(f.context);
+    const invoke = await f.connect();
+    await assert.rejects(invoke('previewStartupRepair'));
+    await assert.rejects(invoke('repairStartup', { fingerprint: 'c'.repeat(64) }));
+    assert.equal(requests, 0);
+  }
+});
+
+test('startup repair commands retain outcomes without logging paths or review tokens', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-startup-repair-log-'));
+  const log = new CommandLog(directory);
+  t.after(() => {
+    log.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const f = fixture();
+  f.context.commandLog = log;
+  f.context.controller.previewStartupRepair = async () => ({
+    canRepair: true,
+    previousExecutable: 'V:\\private-previous-location\\Bezoro.AhkManager.exe',
+    currentExecutable: 'C:\\private-current-location\\Bezoro.AhkManager.exe',
+    fingerprint: 'c'.repeat(64),
+    reason: 'None',
+    detail: null,
+  });
+  f.context.controller.repairStartup = async () => ({
+    ...confirmed,
+    detail: 'private-repair-detail',
+  });
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  await invoke('previewStartupRepair');
+  await invoke('repairStartup', { fingerprint: 'c'.repeat(64) });
+  log.close();
+  const text = fs
+    .readdirSync(log.directory)
+    .map((file) => fs.readFileSync(path.join(log.directory, file), 'utf8'))
+    .join('');
+  assert.match(text, /"command":"previewStartupRepair"/);
+  assert.match(text, /"command":"repairStartup"/);
+  assert.match(text, /"outcome":"Confirmed"/);
+  assert.doesNotMatch(text, /private-previous|private-current|private-repair-detail/);
+  assert.equal(text.includes('c'.repeat(64)), false);
+});

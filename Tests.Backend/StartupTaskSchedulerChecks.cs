@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
@@ -93,6 +94,7 @@ internal static class StartupTaskSchedulerChecks
                 fixture.RemoveTask();
                 Check(!fixture.TaskPresent(), "only the exact observed temporary task was removed");
             }
+            CheckWorkingDirectories(root, fixture, specification, Check);
         }
         Check(true, "the exact empty temporary Task Scheduler folder was removed");
         Console.WriteLine("STARTUP TASK SCHEDULER checks=" + checks.Count);
@@ -100,6 +102,187 @@ internal static class StartupTaskSchedulerChecks
 
     static string Hash(string xml) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(xml)));
+
+    static void CheckWorkingDirectories(
+        string root,
+        TaskFixture fixture,
+        StartupTaskRegistration specification,
+        Action<bool, string> check
+    )
+    {
+        string directory = Path.GetDirectoryName(
+            ScriptPaths.SplitCommand(specification.Command)[0]
+        )!;
+        foreach (
+            var variant in new[]
+            {
+                (Name: "case", Directory: directory.ToUpperInvariant()),
+                (Name: "trailing", Directory: directory + Path.DirectorySeparatorChar),
+            }
+        )
+        {
+            var document = XDocument.Parse(fixture.Definition(specification));
+            document
+                .Root!.Element(Ns + "Actions")!
+                .Element(Ns + "Exec")!
+                .Element(Ns + "WorkingDirectory")!
+                .Value = variant.Directory;
+            string registered = fixture.Register(document.ToString(SaveOptions.DisableFormatting));
+            File.WriteAllText(
+                Path.Combine(root, $"cwd-{variant.Name}.xml"),
+                registered,
+                Encoding.Unicode
+            );
+            var observed = fixture.Observe();
+            check(
+                observed.Registration with { Fingerprint = "" } == specification
+                    && observed.Registration.WorkingDirectoryMatches
+                    && UserStartupService.OwnsTask(
+                        observed.Registration,
+                        specification.Command,
+                        specification.UserSid
+                    )
+                    && !fixture.Enabled,
+                "native Scheduler preserves owned disabled task identity for an equivalent working directory"
+            );
+            fixture.RemoveTask();
+            check(
+                !fixture.TaskPresent(),
+                "equivalent-directory fixture cleanup removes only its observed task"
+            );
+        }
+
+        string previousDirectory = Path.Combine(root, "previous App");
+        Directory.CreateDirectory(previousDirectory);
+        foreach (
+            var variant in new[]
+            {
+                (Name: "missing", Directory: (string?)null),
+                (Name: "stale", Directory: (string?)previousDirectory),
+            }
+        )
+        {
+            var document = XDocument.Parse(fixture.Definition(specification));
+            var working = document
+                .Root!.Element(Ns + "Actions")!
+                .Element(Ns + "Exec")!
+                .Element(Ns + "WorkingDirectory")!;
+            if (variant.Directory is null)
+                working.Remove();
+            else
+                working.Value = variant.Directory;
+            string registered = fixture.Register(document.ToString(SaveOptions.DisableFormatting));
+            File.WriteAllText(
+                Path.Combine(root, $"cwd-{variant.Name}-original.xml"),
+                registered,
+                Encoding.Unicode
+            );
+            var original = fixture.Observe();
+            string nativeDirectory =
+                XDocument
+                    .Parse(original.Xml)
+                    .Root!.Element(Ns + "Actions")!
+                    .Element(Ns + "Exec")!
+                    .Element(Ns + "WorkingDirectory")
+                    ?.Value
+                ?? "";
+            check(
+                original.Registration.NonstandardWorkingDirectory == nativeDirectory
+                    && !original.Registration.WorkingDirectoryMatches
+                    && UserStartupService.OwnsTask(
+                        original.Registration,
+                        specification.Command,
+                        specification.UserSid
+                    )
+                    && !fixture.Enabled,
+                "native missing or stale working directory remains a provably owned disabled task"
+            );
+            check(
+                fixture.CompareExchange(original.Registration, specification),
+                "native directory repair replaces only the exact observed XML fingerprint"
+            );
+            var repaired = fixture.Observe();
+            File.WriteAllText(
+                Path.Combine(root, $"cwd-{variant.Name}-repaired.xml"),
+                repaired.Xml,
+                Encoding.Unicode
+            );
+            check(
+                repaired.Registration with { Fingerprint = "" } == specification
+                    && repaired.Owner == original.Owner
+                    && repaired.Registration.WorkingDirectoryMatches
+                    && !fixture.Enabled,
+                "native directory repair preserves owner source account privileges and disabled state"
+            );
+            check(
+                fixture.CompareExchange(repaired.Registration, original.Registration),
+                "native rollback recreates the captured original nonstandard directory definition"
+            );
+            var restored = fixture.Observe();
+            File.WriteAllText(
+                Path.Combine(root, $"cwd-{variant.Name}-restored.xml"),
+                restored.Xml,
+                Encoding.Unicode
+            );
+            check(
+                restored.Registration with
+                {
+                    Fingerprint = original.Registration.Fingerprint,
+                } == original.Registration
+                    && restored.Owner == original.Owner
+                    && !fixture.Enabled,
+                "native rollback retains the original directory and task identity without claiming a canonical repair"
+            );
+            File.WriteAllLines(
+                Path.Combine(root, $"cwd-{variant.Name}-owners.txt"),
+                [
+                    "Original: " + original.Owner,
+                    "Repaired: " + repaired.Owner,
+                    "Restored: " + restored.Owner,
+                ]
+            );
+            fixture.RemoveTask();
+            check(
+                !fixture.TaskPresent(),
+                "nonstandard-directory fixture cleanup removes only its observed task"
+            );
+        }
+
+        fixture.Register(fixture.Definition(specification));
+        var before = fixture.Observe();
+        fixture.RemoveTask();
+        var concurrentDefinition = XDocument.Parse(fixture.Definition(specification));
+        concurrentDefinition
+            .Root!.Element(Ns + "RegistrationInfo")!
+            .Add(new XElement(Ns + "Documentation", "Controlled concurrent XML revision"));
+        fixture.Register(concurrentDefinition.ToString(SaveOptions.DisableFormatting));
+        var concurrent = fixture.Observe();
+        File.WriteAllText(
+            Path.Combine(root, "cwd-concurrent.xml"),
+            concurrent.Xml,
+            Encoding.Unicode
+        );
+        int writes = fixture.Writes;
+        check(
+            concurrent.Registration.Fingerprint != before.Registration.Fingerprint
+                && concurrent.Registration with
+                {
+                    Fingerprint = before.Registration.Fingerprint,
+                } == before.Registration
+                && !fixture.CompareExchange(before.Registration, specification)
+                && fixture.Writes == writes
+                && fixture.Observe().Xml == concurrent.Xml
+                && !fixture.Enabled,
+            "native compare exchange preserves concurrent XML even when its projected task identity is unchanged"
+        );
+        fixture.RemoveTask();
+        check(
+            !fixture.TaskPresent(),
+            "concurrent-definition fixture cleanup removes only the acknowledged replacement"
+        );
+    }
+
+    sealed record TaskObservation(string Xml, StartupTaskRegistration Registration, string Owner);
 
     sealed class TaskFixture : IDisposable
     {
@@ -116,6 +299,7 @@ internal static class StartupTaskSchedulerChecks
         internal string Path => "\\" + name;
         internal string Marker => "AHK Manager disabled identity fixture " + name;
         internal bool Enabled { get; private set; }
+        internal int Writes { get; private set; }
 
         internal TaskFixture(string sid, StartupTaskRegistration specification)
         {
@@ -145,6 +329,10 @@ internal static class StartupTaskSchedulerChecks
 
         internal string Register(string xml)
         {
+            if (!Owns(xml))
+                throw new InvalidOperationException(
+                    "Only this fixture's disabled task may be registered."
+                );
             if (observedHash is not null || TaskPresent())
                 throw new InvalidOperationException(
                     "The temporary task must be absent before creation."
@@ -154,6 +342,7 @@ internal static class StartupTaskSchedulerChecks
             {
                 // TASK_CREATE only. A task supplied concurrently is never overwritten.
                 task = ((dynamic)folder!).RegisterTask(TaskName, xml, 2, sid, null, 3, null);
+                Writes++;
                 string persisted = (string)((dynamic)task).Xml;
                 if ((string)((dynamic)task).Path != Path + "\\" + TaskName || !Owns(persisted))
                     throw new InvalidOperationException(
@@ -167,6 +356,52 @@ internal static class StartupTaskSchedulerChecks
             {
                 Release(task);
             }
+        }
+
+        internal string Definition(StartupTaskRegistration registration)
+        {
+            var document = XDocument.Parse(WindowsStartupTaskStore.Xml(registration));
+            document
+                .Root!.Element(Ns + "RegistrationInfo")!
+                .AddFirst(new XElement(Ns + "Description", Marker));
+            return document.ToString(SaveOptions.DisableFormatting);
+        }
+
+        internal TaskObservation Observe()
+        {
+            object? task = null;
+            try
+            {
+                task = ((dynamic)folder!).GetTask(TaskName);
+                string xml = (string)((dynamic)task).Xml;
+                if ((string)((dynamic)task).Path != Path + "\\" + TaskName || !Owns(xml))
+                    throw new InvalidOperationException(
+                        "The observed task is not this disabled fixture."
+                    );
+                Enabled = (bool)((dynamic)task).Enabled;
+                string owner =
+                    new RawSecurityDescriptor((string)((dynamic)task).GetSecurityDescriptor(1))
+                        .Owner
+                        ?.Value
+                    ?? throw new InvalidOperationException("Temporary task owner unavailable.");
+                return new(xml, WindowsStartupTaskStore.Parse(xml), owner);
+            }
+            finally
+            {
+                Release(task);
+            }
+        }
+
+        internal bool CompareExchange(
+            StartupTaskRegistration expected,
+            StartupTaskRegistration replacement
+        )
+        {
+            if (Observe().Registration != expected)
+                return false;
+            RemoveTask();
+            Register(Definition(replacement));
+            return true;
         }
 
         internal bool TaskPresent()
@@ -231,6 +466,7 @@ internal static class StartupTaskSchedulerChecks
                 Release(task);
                 task = null;
                 ((dynamic)folder!).DeleteTask(TaskName, 0);
+                Writes++;
                 observedHash = null;
             }
             finally

@@ -11,10 +11,12 @@ import {
   Input,
   Textarea,
 } from '@fluentui/react-components';
-import type { ManagerSettings } from '../../shared/contracts.js';
+import type { ManagerSettings, OperationResult } from '../../shared/contracts.js';
 import { text } from '../resources/en-US.js';
-import { OperationNotice, type Notice } from './OperationNotice.js';
+import type { Notice } from './OperationNotice.js';
+import { CopyableOperationNotice } from './CopyableOperationNotice.js';
 import { PreferencesDataLocation } from './PreferencesDataLocation.js';
+import { PreferencesStartupRepair } from './PreferencesStartupRepair.js';
 import { useDataLocation } from '../hooks/useDataLocation.js';
 
 interface Props {
@@ -27,6 +29,9 @@ interface Props {
   onSave(value: ManagerSettings): void;
   onPick(kind: 'interpreter' | 'editor'): Promise<string | null>;
   onTransferStartup(): void;
+  onCopy(value: string): Promise<boolean>;
+  onRepairResult(result: OperationResult): void;
+  onRepairStartup(fingerprint: string): Promise<OperationResult>;
 }
 
 export function Preferences({
@@ -39,6 +44,9 @@ export function Preferences({
   onSave,
   onPick,
   onTransferStartup,
+  onCopy,
+  onRepairResult,
+  onRepairStartup,
 }: Props): React.ReactElement {
   const [draft, setDraft] = React.useState(() => ({
     ...settings,
@@ -46,7 +54,10 @@ export function Preferences({
   }));
   const [argumentsText, setArgumentsText] = React.useState(settings.editorArguments.join('\n'));
   const [picking, setPicking] = React.useState(false);
+  const [repairingStartup, setRepairingStartup] = React.useState(false);
   const storage = useDataLocation(onClose);
+  const storageStatus =
+    storage.error || storage.state?.error ? 'failed' : storage.state ? 'ready' : 'loading';
   const settingsChanged =
     JSON.stringify({
       ...draft,
@@ -70,19 +81,20 @@ export function Preferences({
       window: settings.window,
       editorArguments: argumentsText.split(/\r?\n/).filter((value) => value.length > 0),
     });
+  const working = busy || repairingStartup;
   return (
     <Dialog
       open
       onOpenChange={(_, data) => {
-        if (!data.open && !busy) onClose();
+        if (!data.open && !working) onClose();
       }}
     >
       <DialogSurface className="preferences-dialog">
         <DialogBody>
           <DialogTitle>{text.preferences}</DialogTitle>
           <DialogContent>
-            <OperationNotice notice={notice} onDismiss={onDismissNotice} />
-            <fieldset disabled={readonly || busy || picking || storage.busy}>
+            <CopyableOperationNotice notice={notice} onDismiss={onDismissNotice} onCopy={onCopy} />
+            <fieldset disabled={readonly || working || picking || storage.busy}>
               <legend className="sr-only">{text.preferences}</legend>
               <section
                 className="preference-section startup-preferences"
@@ -119,12 +131,36 @@ export function Preferences({
                   label={text.showAtLogin}
                   onChange={(_, data) => change({ showWindowAtLogin: data.checked === true })}
                 />
+                <PreferencesStartupRepair
+                  enabled={!readonly}
+                  disabled={
+                    readonly ||
+                    busy ||
+                    picking ||
+                    storage.busy ||
+                    storageStatus !== 'ready' ||
+                    !!storage.state?.pendingDataDirectory ||
+                    settingsChanged
+                  }
+                  settingsChanged={settingsChanged}
+                  pendingDataMove={!!storage.state?.pendingDataDirectory}
+                  storageStatus={storageStatus}
+                  refreshKey={notice}
+                  savedMode={JSON.stringify([
+                    settings.launchManagerAtLogin,
+                    settings.launchManagerAsAdministrator,
+                  ])}
+                  onPending={setRepairingStartup}
+                  onResult={onRepairResult}
+                  onRepair={onRepairStartup}
+                  onCopy={onCopy}
+                />
               </section>
               {storage.state ? (
                 <>
                   <PreferencesDataLocation
                     state={storage.state}
-                    busy={busy || storage.busy || picking || settingsChanged}
+                    busy={working || storage.busy || picking || settingsChanged}
                     onChoose={storage.choose}
                     onOpen={storage.open}
                     onUseDefault={storage.useDefault}
@@ -221,10 +257,10 @@ export function Preferences({
             </fieldset>
           </DialogContent>
           <DialogActions>
-            <Button disabled={busy} onClick={onClose}>
+            <Button disabled={working} onClick={onClose}>
               {text.cancel}
             </Button>
-            <Button appearance="primary" disabled={readonly || busy || picking} onClick={save}>
+            <Button appearance="primary" disabled={readonly || working || picking} onClick={save}>
               {text.save}
             </Button>
           </DialogActions>

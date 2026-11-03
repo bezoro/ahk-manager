@@ -80,6 +80,8 @@ const commandNames = new Set([
   'removeCollection',
   'operate',
   'saveSettings',
+  'previewStartupRepair',
+  'repairStartup',
   'pickInterpreter',
   'pickEditor',
   'getActivity',
