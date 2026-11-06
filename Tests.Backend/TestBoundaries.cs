@@ -1,11 +1,43 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Bezoro.AhkManager.Backend;
+using Bezoro.AhkManager.Core.Infrastructure;
 using Bezoro.AhkManager.Core.Models;
 using Bezoro.AhkManager.Core.Services;
 
 namespace Tests.Backend;
+
+// A complete, inert portable layout for activation and profile-identity checks.
+// These files are never executed; production layout validation still reads the marker.
+internal static class PortableHostFixture
+{
+    internal static RuntimeProfileLayout Create(string fixtureRoot, string name)
+    {
+        string root = Path.Combine(fixtureRoot, name);
+        if (File.Exists(root) || Directory.Exists(root))
+            throw new InvalidOperationException("Use a fresh portable host fixture directory.");
+        string app = Path.Combine(root, "App");
+        Directory.CreateDirectory(app);
+        string host = Path.Combine(app, "Bezoro.AhkManager.exe");
+        File.WriteAllText(host, "Inert portable host fixture; never execute.");
+        File.WriteAllText(
+            Path.Combine(root, "Bezoro.AhkManager.exe"),
+            "Inert portable launcher fixture; never execute."
+        );
+        File.WriteAllText(
+            Path.Combine(root, "portable.json"),
+            new JsonObject
+            {
+                ["schemaVersion"] = 1,
+                ["applicationId"] = RuntimeProfileLayout.ApplicationId,
+                ["dataDirectory"] = "Data",
+            }.ToJsonString()
+        );
+        return RuntimeProfileLayout.ForHost(host, Path.Combine(root, "absent-previous-profile"));
+    }
+}
 
 internal sealed class BytePipe : Stream
 {
