@@ -8,9 +8,16 @@ import { updatePublisherNames } from '../src/main/updates/update-publisher-polic
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 /** Test-only metadata uses the same policy reader as the shipped application. */
-export async function writePortableTestPolicy({ candidate, baseline, output, commit }) {
+export async function writePortableTestPolicy({
+  candidate,
+  baseline,
+  output,
+  commit,
+  baselineCommit = commit,
+}) {
   if (
     !/^[a-f0-9]{40}$/.test(commit) ||
+    !/^[a-f0-9]{40}$/.test(baselineCommit) ||
     ![candidate, baseline, output].every(
       (value) => typeof value === 'string' && path.isAbsolute(value),
     )
@@ -28,18 +35,20 @@ export async function writePortableTestPolicy({ candidate, baseline, output, com
   ]);
   const after = await Promise.all([fs.readFile(candidate), fs.readFile(baseline)]);
   if (
-    !before[0].equals(before[1]) ||
     !before[0].equals(after[0]) ||
     !before[1].equals(after[1]) ||
     JSON.stringify(names) !== JSON.stringify(baselineNames)
   )
-    throw new Error('The candidate and baseline must retain the same unchanged publisher policy.');
+    throw new Error(
+      'The candidate and baseline must retain the same publisher policy names and unchanged individual policy bytes.',
+    );
   const result = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     names,
     candidatePolicySha256: sha256(before[0]),
     baselinePolicySha256: sha256(before[1]),
     sourceCommit: commit,
+    baselineSourceCommit: baselineCommit,
   };
   await fs.writeFile(output, JSON.stringify(result, null, 2) + '\n', {
     encoding: 'utf8',
@@ -55,9 +64,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       baseline: { type: 'string' },
       output: { type: 'string' },
       commit: { type: 'string' },
+      'baseline-commit': { type: 'string' },
     },
   });
-  await writePortableTestPolicy(values);
+  await writePortableTestPolicy({
+    ...values,
+    baselineCommit: values['baseline-commit'] ?? values.commit,
+  });
   console.log(
     'Recorded the exact application publisher policy for isolated portable signing tests.',
   );

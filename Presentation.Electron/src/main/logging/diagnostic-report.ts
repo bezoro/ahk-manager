@@ -9,7 +9,7 @@ export interface DiagnosticReportContext {
   platform: string;
   architecture: string;
   operatingSystemRelease: string;
-  deployment: 'portable' | 'installed';
+  deployment: 'portable';
   host: HostState | null;
   updates: UpdateState | null;
 }
@@ -118,7 +118,7 @@ export function createDiagnosticReport(
     application: {
       name: 'AHK Manager',
       version: version(context.version),
-      deployment: member(context.deployment, ['portable', 'installed']),
+      deployment: member(context.deployment, ['portable']),
       platform: member(context.platform, ['win32', 'linux', 'darwin']),
       architecture: member(context.architecture, ['x64', 'arm64', 'ia32']),
       operatingSystemRelease: /^\d{1,6}(?:\.\d{1,10}){0,4}$/.test(context.operatingSystemRelease)

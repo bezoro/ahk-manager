@@ -1,8 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$BuildRoot,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
-    [string]$NpmPath = '',
-    [switch]$DirectoryOnly
+    [string]$NpmPath = ''
 )
 $ErrorActionPreference = 'Stop'
 if (-not $NpmPath) { $NpmPath = (Get-Command npm.cmd -ErrorAction Stop).Source }
@@ -13,7 +12,7 @@ $backend = [IO.Path]::GetFullPath((Join-Path $BuildRoot 'backend'))
 $output = [IO.Path]::GetFullPath($OutputRoot)
 if (Test-Path -LiteralPath $output) { throw 'Use a fresh package output directory.' }
 $info = Get-Content -LiteralPath (Join-Path $frontend 'build-info.json') -Raw | ConvertFrom-Json
-if (-not (Test-ReleaseVersion $info.version) -or -not $info.commit -or $info.updateProtocol -ne 1) { throw 'Rebuild the bundle with its release version, source commit and update protocol.' }
+if (-not (Test-ReleaseVersion $info.version) -or -not $info.commit -or $info.updateProtocol -ne 2) { throw 'Rebuild the bundle with its release version, source commit and update protocol.' }
 $previous = @{}
 foreach ($name in @('AHK_FRONTEND_DIST', 'AHK_BACKEND_DIST', 'AHK_PACKAGE_OUT', 'AHK_RELEASE_VERSION', 'AHK_SOURCE_COMMIT')) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 Push-Location -LiteralPath (Join-Path $repoRoot 'Presentation.Electron')
@@ -23,8 +22,10 @@ try {
     $env:AHK_PACKAGE_OUT = $output
     $env:AHK_RELEASE_VERSION = $info.version
     $env:AHK_SOURCE_COMMIT = $info.commit
-    if ($DirectoryOnly) { & $NpmPath run package -- --dir --publish never } else { & $NpmPath run package -- --publish never }
+    & $NpmPath run package -- --dir --publish never
     if ($LASTEXITCODE -ne 0) { throw "Packaging failed: $LASTEXITCODE" }
+    & node.exe (Join-Path $repoRoot 'Presentation.Electron/scripts/verify-portable-executable.cjs') --file (Join-Path $output 'win-unpacked/Bezoro.AhkManager.exe') --version $info.version --out (Join-Path $output 'portable-executable.json')
+    if ($LASTEXITCODE -ne 0) { throw 'The packaged portable executable failed manifest or version verification.' }
 } finally {
     Pop-Location
     foreach ($name in $previous.Keys) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }

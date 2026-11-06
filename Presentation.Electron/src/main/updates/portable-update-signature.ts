@@ -106,7 +106,7 @@ async function verifyManifestHash(
 ): Promise<void> {
   await regular(signaturePath, 65536).catch(() => {
     throw new Error(
-      'This portable release has no valid publisher signature. No files were installed.',
+      'This portable release has no valid publisher signature. No application files were changed.',
     );
   });
   const verifiedSha256 = options.verify

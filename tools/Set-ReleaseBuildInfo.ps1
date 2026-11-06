@@ -13,7 +13,7 @@ $path = Join-Path $FrontendRoot 'build-info.json'
 $info = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
 $info['version'] = $Version
 $info['commit'] = $Commit.ToLowerInvariant()
-$info['updateProtocol'] = 1
+$info['updateProtocol'] = 2
 $temporary = $path + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
 [IO.File]::WriteAllText($temporary, ($info | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
 [IO.File]::Move($temporary, $path, $true)

@@ -6,20 +6,18 @@ import {
   versionAllowedInChannel,
 } from '../../shared/update-versions.js';
 import { compareVersions, type RemoteUpdateRelease } from './github-updates.js';
-import type { CachedInstaller } from './update-store.js';
-import type { UpdateDeployment } from './update-deployment.js';
+import type { CachedPackage } from './update-store.js';
 
 export interface UpdateStorePort {
   removeLegacyAccess(): Promise<void>;
   readChannel(): Promise<UpdateChannel>;
   saveChannel(channel: UpdateChannel): Promise<void>;
-  cached(): Promise<CachedInstaller[]>;
-  verify(installer: CachedInstaller): Promise<void>;
-  cache(version: string, source: string, sha256: string, bytes: number): Promise<CachedInstaller>;
+  cached(): Promise<CachedPackage[]>;
+  verify(packageEntry: CachedPackage): Promise<void>;
+  cache(version: string, source: string, sha256: string, bytes: number): Promise<CachedPackage>;
 }
 export interface UpdateBoundary {
   version: string;
-  deployment?: UpdateDeployment;
   preserveCurrent?(progress: (percent: number) => void): Promise<void>;
   store: UpdateStorePort;
   releases(channel: UpdateChannel): Promise<RemoteUpdateRelease[]>;
@@ -27,7 +25,7 @@ export interface UpdateBoundary {
   download(release: RemoteUpdateRelease, progress: (percent: number) => void): Promise<string>;
   preflight(operationId: string, phase: 'begin' | 'commit'): Promise<boolean>;
   confirm(release: UpdateRelease): Promise<boolean>;
-  apply(operationId: string, target: CachedInstaller): Promise<void>;
+  apply(operationId: string, target: CachedPackage): Promise<void>;
   changed(state: UpdateState): void;
   recovery?(): Promise<string | null>;
 }
@@ -43,7 +41,7 @@ const safeError = (error: unknown, fallback: string): string =>
 export class UpdateService {
   private state: UpdateState;
   private remote: RemoteUpdateRelease[] = [];
-  private local: CachedInstaller[] = [];
+  private local: CachedPackage[] = [];
   private installing = false;
   private configuringChannel = false;
   private explicitTestOptIn = false;
@@ -75,10 +73,7 @@ export class UpdateService {
         id: `local:${cached.version}`,
         version: cached.version,
         publishedAt: null,
-        notes:
-          this.boundary.deployment === 'portable'
-            ? 'Portable package preserved on this computer.'
-            : 'Installer preserved on this computer.',
+        notes: 'Portable package preserved on this computer.',
         commit: null,
         installed: cached.version === this.boundary.version,
         canInstall: cached.version !== this.boundary.version,
@@ -262,7 +257,9 @@ export class UpdateService {
       }
       if (!target) {
         if (!remote)
-          throw new Error('The installer for this version is not available on this computer.');
+          throw new Error(
+            'The portable package for this version is not available on this computer.',
+          );
         const file = await this.boundary.download(remote, (percent) =>
           this.publish({
             progress: Math.max(0, Math.min(100, preserving ? 50 + percent / 2 : percent)),
@@ -277,7 +274,7 @@ export class UpdateService {
           phase: 'error',
           progress: null,
           error:
-            'The installer has been preserved. Close any dialogs, save your changes, and try installing again.',
+            'The portable package has been preserved. Close any dialogs, save your changes, and try installing again.',
         });
       this.publish({ phase: 'installing', progress: 100 });
       await this.boundary.apply(operationId, target);
@@ -288,7 +285,7 @@ export class UpdateService {
         progress: null,
         error: safeError(
           error,
-          'The update did not finish. The installation and recovery records have been preserved.',
+          'The update did not finish. The portable application and recovery records have been preserved.',
         ),
       });
     } finally {

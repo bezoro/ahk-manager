@@ -2,24 +2,18 @@ namespace Bezoro.AhkManager.UpdateHost;
 
 internal sealed class PackageLease : IDisposable
 {
-    internal const long MaximumInstallerBytes = 1024L * 1024 * 1024;
-    internal readonly FileLease Installer;
+    internal const long MaximumArchiveBytes = 1024L * 1024 * 1024;
+    internal readonly FileLease Archive;
     readonly FileLease receipt;
 
-    internal PackageLease(
-        string path,
-        string version,
-        string sha256,
-        string updatesRoot,
-        bool portable = false
-    )
+    internal PackageLease(string path, string version, string sha256, string updatesRoot)
     {
-        UpdatePaths.ValidateInstallerLocation(path, version, updatesRoot, portable);
-        Installer = FileLease.Open(path, MaximumInstallerBytes);
+        UpdatePaths.ValidateArchiveLocation(path, version, updatesRoot);
+        Archive = FileLease.Open(path, MaximumArchiveBytes);
         try
         {
-            if (Installer.Length == 0 || Installer.Hash() != sha256)
-                throw new InvalidDataException("Installer checksum changed or installer is empty.");
+            if (Archive.Length == 0 || Archive.Hash() != sha256)
+                throw new InvalidDataException("Archive checksum changed or archive is empty.");
             receipt = FileLease.Open(
                 System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path)!, "receipt.json"),
                 UpdateProtocol.MaximumPlanBytes
@@ -31,13 +25,13 @@ internal sealed class PackageLease : IDisposable
                 );
                 if (
                     proof.SchemaVersion != 1
-                    || proof.UpdateProtocol != (portable ? 2 : 1)
+                    || proof.UpdateProtocol != 2
                     || proof.Version != version
                     || !UpdateProtocol.Hash(proof.Sha256, false)
                     || !proof.Sha256.Equals(sha256, StringComparison.OrdinalIgnoreCase)
-                    || proof.Bytes.HasValue && proof.Bytes.Value != Installer.Length
+                    || proof.Bytes.HasValue && proof.Bytes.Value != Archive.Length
                 )
-                    throw new InvalidDataException("Installer protocol receipt changed.");
+                    throw new InvalidDataException("Archive protocol receipt changed.");
             }
             catch
             {
@@ -47,20 +41,20 @@ internal sealed class PackageLease : IDisposable
         }
         catch
         {
-            Installer.Dispose();
+            Archive.Dispose();
             throw;
         }
     }
 
     internal void Verify(string hash)
     {
-        if (Installer.Hash() != hash)
-            throw new InvalidDataException("Pinned installer checksum changed.");
+        if (Archive.Hash() != hash)
+            throw new InvalidDataException("Pinned archive checksum changed.");
     }
 
     public void Dispose()
     {
         receipt.Dispose();
-        Installer.Dispose();
+        Archive.Dispose();
     }
 }

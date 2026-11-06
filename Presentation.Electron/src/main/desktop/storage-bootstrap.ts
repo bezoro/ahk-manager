@@ -277,7 +277,6 @@ export function initializePortableStorage(
   layout: DeploymentLayout,
   start: StartInitializer = spawnSync,
 ): void {
-  if (layout.mode !== 'portable') return;
   const helper = path.join(
     layout.applicationDirectory,
     'backend',

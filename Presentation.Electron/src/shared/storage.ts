@@ -1,4 +1,4 @@
-export type DeploymentMode = 'installed' | 'portable';
+export type DeploymentMode = 'portable';
 
 /** Paths shown to the user; no filesystem authority is granted to the renderer. */
 export interface StorageState {

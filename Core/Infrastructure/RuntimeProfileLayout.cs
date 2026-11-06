@@ -8,10 +8,10 @@ public sealed record RuntimeProfileLayout
 {
     public const string ApplicationId = "Bezoro.AhkManager.Electron";
     public const int MaximumMarkerBytes = 4096;
-    public bool Portable { get; private init; }
+    public bool Portable => true;
     public string HostExecutable { get; private init; } = "";
     public string StartupHostExecutable { get; private init; } = "";
-    public string? PortableRoot { get; private init; }
+    public string PortableRoot { get; private init; } = "";
     public string DataRoot { get; private init; } = "";
     public string ProfileRoot { get; private init; } = "";
     public string ChromiumRoot { get; private init; } = "";
@@ -21,44 +21,22 @@ public sealed record RuntimeProfileLayout
     public static RuntimeProfileLayout ForHost(string hostExecutable) =>
         ForHost(
             hostExecutable,
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
         );
 
-    internal static RuntimeProfileLayout ForHost(
-        string hostExecutable,
-        string localAppData,
-        string roamingAppData
-    )
+    internal static RuntimeProfileLayout ForHost(string hostExecutable, string localAppData)
     {
         string host = Local(hostExecutable);
         string directory = Path.GetDirectoryName(host)!;
         string legacy = Path.Combine(Local(localAppData), "Bezoro", "AhkManagerElectron");
-        var installed = new RuntimeProfileLayout
-        {
-            HostExecutable = host,
-            StartupHostExecutable = host,
-            DataRoot = legacy,
-            ProfileRoot = legacy,
-            ChromiumRoot = Path.Combine(
-                Local(roamingAppData),
-                "Bezoro",
-                "AhkManagerElectron",
-                "Chromium"
-            ),
-            UpdatesRoot = Path.Combine(legacy, "Updates"),
-            LegacyProfileRoot = legacy,
-        };
         if (!Path.GetFileName(directory).Equals("App", StringComparison.OrdinalIgnoreCase))
-            return installed;
+            throw new InvalidDataException(
+                "Manager must run from the App folder of a complete portable package."
+            );
         string root = Path.GetDirectoryName(directory)!;
         string marker = Path.Combine(root, "portable.json");
         if (!Exists(marker))
-        {
-            if (Exists(Path.Combine(root, "portable-package.json")))
-                throw new InvalidDataException("The portable data settings are missing.");
-            return installed;
-        }
+            throw new InvalidDataException("The portable data settings are missing.");
         NoRedirects(marker);
         WindowsStoragePath.RequireNtfs(root);
         if ((File.GetAttributes(marker) & FileAttributes.Directory) != 0)
@@ -105,9 +83,10 @@ public sealed record RuntimeProfileLayout
             root,
             json.RootElement.GetProperty("dataDirectory").GetString()!
         );
-        return installed with
+        return new RuntimeProfileLayout
         {
-            Portable = true,
+            HostExecutable = host,
+            LegacyProfileRoot = legacy,
             PortableRoot = root,
             StartupHostExecutable = Path.Combine(root, "Bezoro.AhkManager.exe"),
             DataRoot = data,

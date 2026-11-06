@@ -13,7 +13,7 @@ internal static partial class SelfTests
     )
     {
         // Native exit evidence and the production file reader run together.
-        // These fixed, inert cmd processes never start a Manager or installer.
+        // These fixed, inert cmd processes never start a Manager or payload promotion.
         using var normalParent = StartExitProbe(0);
         using var failedParent = StartExitProbe(7);
         using var liveParent = Process.GetCurrentProcess();
@@ -163,7 +163,7 @@ internal static partial class SelfTests
                     && effects.Backups == (scenario == "normal" ? 1 : 0)
                     && effects.Installs == 0
                     && effects.Restores == 0,
-                "production shutdown gate permits only committed normal exit before any snapshot or installer: "
+                "production shutdown gate permits only committed normal exit before any snapshot or payload promotion: "
                     + scenario
             );
             if (scenario is "cancel" or "cancel-abnormal-exit")

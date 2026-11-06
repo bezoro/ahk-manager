@@ -7,11 +7,11 @@ import {
 } from '../../src/main/desktop/storage-bootstrap.js';
 import type { DeploymentLayout } from '../../src/main/storage/deployment.js';
 
-function layout(mode: DeploymentLayout['mode'] = 'portable'): DeploymentLayout {
+function layout(): DeploymentLayout {
   const root = path.resolve('Portable manager');
   const data = path.join(root, 'Data');
   return {
-    mode,
+    mode: 'portable',
     applicationDirectory: path.join(root, 'App'),
     launchExecutable: path.join(root, 'Bezoro.AhkManager.exe'),
     portableRoot: root,
@@ -65,9 +65,6 @@ test('portable initialization uses only its packaged helper and bounds diagnosti
     return { status: 0, stderr: '' };
   });
   assert.equal(calls, 1);
-  initializePortableStorage(layout('installed'), () => {
-    throw new Error('Installed startup must not invoke portable preparation.');
-  });
 });
 
 test('portable initialization distinguishes NTFS requirements, unavailable cloud files, permissions and package failures', () => {

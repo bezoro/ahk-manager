@@ -27,7 +27,7 @@ internal static partial class SelfTests
                 "1.3.0-test.2.18.1+build",
                 "2147483648.0.0",
                 "1.3.0-test.2.2147483648.1",
-                preview + "/../installer.exe",
+                preview + "/../archive.zip",
                 preview + "\n",
             }
         )
@@ -65,9 +65,9 @@ internal static partial class SelfTests
         var testPlan = plan with
         {
             Version = preview,
-            InstallerPath = Path.Combine(root, "installers", preview, "installer.exe"),
-            Fallback = new CachedInstaller(
-                Path.Combine(root, "installers", "1.3.0", "installer.exe"),
+            ArchivePath = Path.Combine(root, "installers", preview, "archive.zip"),
+            Fallback = new CachedPackage(
+                Path.Combine(root, "installers", "1.3.0", "archive.zip"),
                 new string('b', 64),
                 "1.3.0"
             ),
@@ -82,8 +82,8 @@ internal static partial class SelfTests
         bool refused = false;
         try
         {
-            UpdatePaths.ValidateInstallerLocation(
-                Path.Combine(root, "installers", "1.3.0-test.2.18.2", "installer.exe"),
+            UpdatePaths.ValidateArchiveLocation(
+                Path.Combine(root, "installers", "1.3.0-test.2.18.2", "archive.zip"),
                 preview,
                 root
             );
@@ -92,28 +92,28 @@ internal static partial class SelfTests
         {
             refused = true;
         }
-        check(refused, "a different test build cache cannot supply this test release installer");
+        check(refused, "a different test build cache cannot supply this test release archive");
     }
 
-    static async Task CheckTestInstallerCache(string root, Action<bool, string> check)
+    static async Task CheckTestArchiveCache(string root, Action<bool, string> check)
     {
         const string preview = "1.3.0-test.18.1.2";
         string directory = Path.Combine(root, "installers", preview);
         Directory.CreateDirectory(directory);
-        string installer = Path.Combine(directory, "installer.exe");
+        string archive = Path.Combine(directory, "archive.zip");
         byte[] contents = "inert test package; never executed"u8.ToArray();
-        await File.WriteAllBytesAsync(installer, contents);
+        await File.WriteAllBytesAsync(archive, contents);
         string hash = Convert.ToHexString(SHA256.HashData(contents)).ToLowerInvariant();
         string receiptPath = Path.Combine(directory, "receipt.json");
-        var receipt = new UpdateReceipt(1, 1, preview, hash, contents.Length);
+        var receipt = new UpdateReceipt(1, 2, preview, hash, contents.Length);
         await File.WriteAllBytesAsync(
             receiptPath,
             JsonSerializer.SerializeToUtf8Bytes(receipt, UpdateProtocol.Json)
         );
-        using (var package = new PackageLease(installer, preview, hash, root))
+        using (var package = new PackageLease(archive, preview, hash, root))
             check(
-                package.Installer.Length == contents.Length,
-                "test installer cache accepts its exact complete version receipt"
+                package.Archive.Length == contents.Length,
+                "test archive cache accepts its exact complete version receipt"
             );
         foreach (string changedVersion in new[] { "1.3.0", "1.3.0-test.18.2.2" })
         {
@@ -130,7 +130,7 @@ internal static partial class SelfTests
             bool refused = false;
             try
             {
-                using var invalid = new PackageLease(installer, preview, hash, root);
+                using var invalid = new PackageLease(archive, preview, hash, root);
             }
             catch (InvalidDataException)
             {
@@ -138,7 +138,7 @@ internal static partial class SelfTests
             }
             check(
                 refused,
-                "stable or different test receipt cannot authorize the same numeric-base installer"
+                "stable or different test receipt cannot authorize the same numeric-base archive"
             );
         }
     }

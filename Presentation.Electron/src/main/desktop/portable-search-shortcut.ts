@@ -254,8 +254,7 @@ export async function ensurePortableSearchShortcut(
   let published = false;
   let phase: PortableShortcutPhase = 'validation';
   try {
-    if (boundary.platform !== 'win32' || layout.mode !== 'portable' || !boundary.permitted())
-      return 'not-applicable';
+    if (boundary.platform !== 'win32' || !boundary.permitted()) return 'not-applicable';
     if (
       !layout.portableRoot ||
       !samePath(layout.launchExecutable, path.join(layout.portableRoot, executableName)) ||

@@ -19,12 +19,86 @@ internal static partial class SelfTests
             ) == plan,
             "update plan strict JSON roundtrip preserves operation and parent identity"
         );
+        using (
+            var serialized = JsonDocument.Parse(
+                JsonSerializer.SerializeToUtf8Bytes(plan, UpdateProtocol.Json)
+            )
+        )
+        {
+            var wire = serialized.RootElement;
+            check(
+                wire.GetProperty("schemaVersion").GetInt32() == 2
+                    && wire.GetProperty("deployment").GetString() == "portable"
+                    && wire.GetProperty("installDirectory").GetString() == plan.ApplicationDirectory
+                    && wire.GetProperty("installerPath").GetString() == plan.ArchivePath
+                    && wire.GetProperty("installerSha256").GetString() == plan.ArchiveSha256
+                    && !wire.TryGetProperty("archivePath", out _),
+                "portable plans retain the deployed protocol 2 JSON keys without adding another format"
+            );
+        }
+        var withFallback = plan with
+        {
+            Fallback = new CachedPackage(
+                Path.Combine(root, "installers", "1.2.0", "archive.zip"),
+                new string('b', 64),
+                "1.2.0"
+            ),
+        };
+        UpdateProtocol.Validate(withFallback);
+        byte[] fallbackBytes = JsonSerializer.SerializeToUtf8Bytes(
+            withFallback,
+            UpdateProtocol.Json
+        );
+        using (var serialized = JsonDocument.Parse(fallbackBytes))
+        {
+            var fallback = serialized.RootElement.GetProperty("fallback");
+            check(
+                fallback.GetProperty("installerPath").GetString()
+                    == withFallback.Fallback!.ArchivePath
+                    && fallback.GetProperty("installerSha256").GetString()
+                        == withFallback.Fallback.ArchiveSha256
+                    && UpdateProtocol.Read<UpdatePlan>(fallbackBytes) == withFallback,
+                "existing portable fallback receipts retain their exact wire identity"
+            );
+        }
+        var outcome = new UpdateOutcome(
+            1,
+            plan.OperationId,
+            "Installed",
+            "Portable payload promoted.",
+            plan.Version,
+            0,
+            null,
+            DateTimeOffset.UtcNow
+        );
+        byte[] outcomeBytes = JsonSerializer.SerializeToUtf8Bytes(outcome, UpdateProtocol.Json);
+        using (var serialized = JsonDocument.Parse(outcomeBytes))
+            check(
+                serialized.RootElement.GetProperty("installerExitCode").GetInt32() == 0
+                    && !serialized.RootElement.TryGetProperty("applyExitCode", out _)
+                    && UpdateProtocol.Read<UpdateOutcome>(outcomeBytes) == outcome,
+                "existing portable clients can read the unchanged completed-operation JSON"
+            );
+        bool setupRefused = false;
+        try
+        {
+            UpdateProtocol.Validate(plan with { SchemaVersion = 1, Deployment = null });
+        }
+        catch (InvalidDataException)
+        {
+            setupRefused = true;
+        }
+        check(
+            setupRefused,
+            "the retired Setup update protocol is refused before any package or filesystem effect"
+        );
+
         foreach (
             var invalid in new[]
             {
                 plan with
                 {
-                    SchemaVersion = 2,
+                    SchemaVersion = 1,
                 },
                 plan with
                 {
@@ -40,15 +114,15 @@ internal static partial class SelfTests
                 },
                 plan with
                 {
-                    InstallerSha256 = new string('A', 64),
+                    ArchiveSha256 = new string('A', 64),
                 },
                 plan with
                 {
-                    InstallerPath = "https://example.invalid/installer.exe",
+                    ArchivePath = "https://example.invalid/installer.exe",
                 },
                 plan with
                 {
-                    InstallDirectory = @"\\host\share",
+                    ApplicationDirectory = @"\\host\share",
                 },
             }
         )
@@ -115,48 +189,14 @@ internal static partial class SelfTests
             bool refused = false;
             try
             {
-                UpdatePaths.ValidateInstallerLocation(path, plan.Version, root);
+                UpdatePaths.ValidateArchiveLocation(path, plan.Version, root);
             }
             catch (InvalidDataException)
             {
                 refused = true;
             }
 
-            check(refused, "only the exact immutable version cache can supply an installer");
-        }
-    }
-
-    static void CheckInstallerCommandLine(string root, UpdatePlan plan, Action<bool, string> check)
-    {
-        string spacedDestination = Path.Combine(root, "Manager with spaces");
-        var nsis = NativeApplyEffects.InstallerStartInfo(plan.InstallerPath, spacedDestination);
-        check(
-            !nsis.UseShellExecute
-                && nsis.ArgumentList.Count == 0
-                && nsis.Arguments == "/S --updated /D=" + spacedDestination,
-            "NSIS receives its final destination with spaces unquoted and without a shell"
-        );
-        foreach (
-            string invalid in new[]
-            {
-                spacedDestination + "\r/S",
-                spacedDestination + "\n/S",
-                spacedDestination + "\0/S",
-                spacedDestination + "\" /S",
-            }
-        )
-        {
-            bool refused = false;
-            try
-            {
-                _ = NativeApplyEffects.InstallerStartInfo(plan.InstallerPath, invalid);
-            }
-            catch (InvalidDataException)
-            {
-                refused = true;
-            }
-
-            check(refused, "NSIS destination refuses command line control characters and quotes");
+            check(refused, "only the exact immutable version cache can supply a portable archive");
         }
     }
 }

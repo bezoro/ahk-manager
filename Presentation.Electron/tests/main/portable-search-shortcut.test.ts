@@ -169,10 +169,9 @@ test('linked or unreadable shortcut entries and redirected Start Menu folders ne
   }
 });
 
-test('installed, non-Windows and unowned sessions do not register portable shortcuts', async (t) => {
+test('non-Windows and unowned sessions do not register portable shortcuts', async (t) => {
   const f = await fixture(t);
   for (const [layout, boundary] of [
-    [{ ...f.layout, mode: 'installed' as const }, f.boundary],
     [f.layout, { ...f.boundary, platform: 'linux' as const }],
     [f.layout, { ...f.boundary, permitted: () => false }],
   ] as const)

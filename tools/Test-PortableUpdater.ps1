@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
     [ValidateSet('default', 'custom-data', 'foreign-root')][string]$Scenario = 'default',
+    [switch]$PublishedBaseline,
     [ValidateRange(60, 900)][int]$TimeoutSeconds = 300
 )
 $ErrorActionPreference = 'Stop'
@@ -16,11 +17,11 @@ if (-not [IO.Path]::IsPathFullyQualified($OutputRoot) -or (Test-Path -LiteralPat
 Import-Module (Join-Path $PSScriptRoot 'PortableRelease.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'test-support/PortableUpdaterSession.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'test-support/PortableSigningFixture.psm1') -Force
-Add-Type -Path (Join-Path $PSScriptRoot 'test-support/InstalledUpdaterUi.cs')
+Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableUpdaterUi.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableStartupUi.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableDataPickerUi.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableShortcutSharingProbe.cs')
-$readStartupDialog = [Delegate]::CreateDelegate([Func[IntPtr, int, string, DateTime, string]], [AhkManager.TestSupport.InstalledUpdaterUi], 'AccessibleDialogText')
+$readStartupDialog = [Delegate]::CreateDelegate([Func[IntPtr, int, string, DateTime, string]], [AhkManager.TestSupport.PortableUpdaterUi], 'AccessibleDialogText')
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sid = $identity.User.Value
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -43,6 +44,7 @@ $complete = $false
 $outputCreated = $false
 $startupWritten = $false
 $updatesRoot = $null
+$baselineCommit = $null
 $searchShortcutPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'Microsoft/Windows/Start Menu/Programs/AHK Manager Portable.lnk'
 $searchShortcutBefore = $null
 $retiredDataHashes = @{}
@@ -67,7 +69,7 @@ function Check-SearchShortcut([string]$Phase) {
     $matched = $false
     $observation = $null
     do {
-        if ($session.Process.HasExited -or -not [AhkManager.TestSupport.InstalledUpdaterUi]::Matches($session.Process.Id, $session.Image, $session.Started)) { throw 'The owned portable session ended before its Search shortcut could be verified.' }
+        if ($session.Process.HasExited -or -not [AhkManager.TestSupport.PortableUpdaterUi]::Matches($session.Process.Id, $session.Image, $session.Started)) { throw 'The owned portable session ended before its Search shortcut could be verified.' }
         $shell = $null
         $shortcut = $null
         try {
@@ -369,7 +371,13 @@ function Wait-Ready($Current, [string]$ExpectedVersion) {
     Write-Json ("host-$ExpectedVersion.json") $state
     Check ($state -and $state.connection -eq 'ready' -and $state.authorityMode -eq 'Administrator' -and -not $state.snapshot.readOnly) 'the portable application has its real administrative backend and writable profile'
     Check ($state.snapshot.scripts.Count -eq 1 -and $state.snapshot.scripts[0].id -eq $scriptId -and $state.snapshot.scripts[0].path -eq $scriptFile -and $state.snapshot.scripts[0].runAtLogin -eq $false -and $state.snapshot.scripts[0].runAsAdministrator -eq $false) 'the imported external script identity, disabled automatic execution and standard privileges are preserved'
-    Check ($state.snapshot.settings.launchManagerAsAdministrator -eq $true -and $state.snapshot.settings.launchManagerAtLogin -eq $false) 'the legacy normal-Manager preference becomes administrative while Windows startup remains disabled'
+    $expectedAdministrator = $true
+    if ($PublishedBaseline -and $ExpectedVersion -ceq $baseline.Version) {
+        $persisted = Get-Content -LiteralPath (Join-Path $dataRoot 'Profile/settings.json') -Raw | ConvertFrom-Json
+        $expectedAdministrator = $persisted.Settings.LaunchManagerAsAdministrator
+        if ($expectedAdministrator -isnot [bool]) { throw 'The published baseline has no durable Manager privilege preference.' }
+    }
+    Check ($state.snapshot.settings.launchManagerAsAdministrator -eq $expectedAdministrator -and $state.snapshot.settings.launchManagerAtLogin -eq $false) 'the active version preserves Windows startup opt-out and its compatible Manager privilege policy'
     Check ($state.snapshot.settings.editorArguments.Count -eq 1 -and $state.snapshot.settings.editorArguments[0] -ceq 'portable-ci-preservation' -and $null -eq $state.snapshot.settings.interpreterPath -and $null -eq $state.snapshot.settings.editorPath -and $state.snapshot.settings.showWindowAtLogin -eq $true -and $state.snapshot.settings.startInTray -eq $false -and $state.snapshot.settings.theme -ceq 'Dark' -and $state.snapshot.settings.closeBehavior -ceq 'Exit') 'all unrelated imported user preferences survive the Manager-only administrator migration'
     $update = Invoke-PortableEvaluation $Current 'window.ahkManager.getUpdateState()'
     Check ($update.currentVersion -ceq $ExpectedVersion) 'the packaged app reports its exact coherent release version'
@@ -401,7 +409,7 @@ function Move-PortableData {
     $originalDataRoot = $dataRoot
     $originalUpdatesRoot = $updatesRoot
     Invoke-PortableCdp $session 'Page.bringToFront' | Out-Null
-    $null = [AhkManager.TestSupport.InstalledUpdaterUi]::Focus($session.Process.Id, $session.Image, $session.Started)
+    $null = [AhkManager.TestSupport.PortableUpdaterUi]::Focus($session.Process.Id, $session.Image, $session.Started)
     $opened = Invoke-PortableEvaluation $session '(() => { const button = Array.from(document.querySelectorAll("button")).find(value => value.textContent.trim() === "Preferences"); if (!button || button.disabled) return false; button.click(); return true; })()'
     Check $opened 'the real Preferences dialog opens for data relocation'
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -494,7 +502,7 @@ function Run-Update([string]$Phase, $Target) {
     Invoke-PortableCdp $session 'Page.bringToFront' | Out-Null
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
-        $null = [AhkManager.TestSupport.InstalledUpdaterUi]::Focus($session.Process.Id, $session.Image, $session.Started)
+        $null = [AhkManager.TestSupport.PortableUpdaterUi]::Focus($session.Process.Id, $session.Image, $session.Started)
         $ready = Invoke-PortableEvaluation $session '({ visible: document.visibilityState === "visible", focused: document.hasFocus(), mounted: !!document.querySelector("main"), dialog: !!document.querySelector("[role=dialog]") })'
         if ($ready.visible -and $ready.focused -and $ready.mounted -and -not $ready.dialog) { break }
         Start-Sleep -Milliseconds 100
@@ -510,7 +518,7 @@ function Run-Update([string]$Phase, $Target) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
         if ($session.Process.HasExited) { break }
-        if (-not $confirmed -and [AhkManager.TestSupport.InstalledUpdaterUi]::Confirm($session.Process.Id, $session.Image, $session.Started, $Target.Version)) { $confirmed = $true; Trace "$Phase native consent confirmed for $($Target.Version)." }
+        if (-not $confirmed -and [AhkManager.TestSupport.PortableUpdaterUi]::Confirm($session.Process.Id, $session.Image, $session.Started, $Target.Version)) { $confirmed = $true; Trace "$Phase native consent confirmed for $($Target.Version)." }
         try { $result = Invoke-PortableEvaluation $session 'globalThis.__portableUpdate' }
         catch { if ($confirmed -and $session.Socket.State -ne [Net.WebSockets.WebSocketState]::Open -and $session.Process.WaitForExit(30000)) { break }; throw }
         if ($result -and -not $result.pending) { break }
@@ -606,7 +614,7 @@ function Check-RelocatedHistory {
         $verified = ConvertFrom-PortableReleaseJson (Get-Content -LiteralPath $manifest -Raw)
         $signature = if ($release.Version -ceq $baseline.Version) { $signingFixture.BaselineSignaturePath } else { $signingFixture.CandidateSignaturePath }
         $receipt = Get-Content -LiteralPath (Join-Path $directory 'receipt.json') -Raw | ConvertFrom-Json
-        Check ($verified.Version -ceq $release.Version -and $verified.Commit -ceq $SourceCommit -and $verified.Sha256 -ceq $release.Sha256 -and $verified.ArchiveBytes -eq $release.ArchiveBytes -and (Hash $archive) -ceq $release.Sha256 -and (Get-Item -LiteralPath $archive).Length -eq $release.ArchiveBytes -and (Hash $manifest) -ceq $release.ManifestSha256 -and (Hash (Join-Path $directory 'release.json.p7s')) -ceq (Hash $signature) -and $receipt.schemaVersion -eq 1 -and $receipt.updateProtocol -eq 2 -and $receipt.version -ceq $release.Version -and $receipt.sha256 -ceq $release.Sha256 -and $receipt.bytes -eq $release.ArchiveBytes) 'the moved version history retains each exact verified package, manifest, cache receipt and authenticated signature'
+        Check ($verified.Version -ceq $release.Version -and $verified.Commit -ceq $release.Commit -and $verified.Sha256 -ceq $release.Sha256 -and $verified.ArchiveBytes -eq $release.ArchiveBytes -and (Hash $archive) -ceq $release.Sha256 -and (Get-Item -LiteralPath $archive).Length -eq $release.ArchiveBytes -and (Hash $manifest) -ceq $release.ManifestSha256 -and (Hash (Join-Path $directory 'release.json.p7s')) -ceq (Hash $signature) -and $receipt.schemaVersion -eq 1 -and $receipt.updateProtocol -eq 2 -and $receipt.version -ceq $release.Version -and $receipt.sha256 -ceq $release.Sha256 -and $receipt.bytes -eq $release.ArchiveBytes) 'the moved version history retains each exact verified package, manifest, cache receipt and authenticated signature'
     }
     $key = $registry.OpenSubKey($runPath)
     try { Check ($key -and $key.GetValue($runValue) -ceq $startupCommand) 'whole-folder relocation preserves the unrelated Windows startup entry' }
@@ -623,9 +631,12 @@ try {
         if ($Scenario -ne 'foreign-root') { throw 'An existing portable Search shortcut will not be replaced by this fixture.' }
         $searchShortcutBefore = Hash $searchShortcutPath
     }
-    $baseline = Read-PortableReleaseManifest -ArchivePath $BaselineArchive -ManifestPath $BaselineManifest -ExpectedCommit $SourceCommit
+    $baselineCommit = if ($PublishedBaseline) { '343553fd108220562883e1aa65c356d6cdcf7ee3' } else { $SourceCommit }
+    if ($PublishedBaseline -and $Scenario -cne 'default') { throw 'The pinned published baseline belongs only to the default migration scenario.' }
+    $baseline = Read-PortableReleaseManifest -ArchivePath $BaselineArchive -ManifestPath $BaselineManifest -ExpectedCommit $baselineCommit
+    if ($PublishedBaseline -and ($baseline.Version -cne '1.6.2' -or $baseline.ArchiveBytes -ne 234252955L -or $baseline.Sha256 -cne 'bee6fedaf2420bb5e63c34a83063b08b9f8f8b4f2562f0b5cacdafc7c732ed5c' -or $baseline.ManifestSha256 -cne '24c4b58edb4e49413f1e2bcad24c5ad2e48d7a1cb7b927d72937138164044fa0')) { throw 'The deployed baseline is not the pinned published portable package.' }
     $candidate = Read-PortableReleaseManifest -ArchivePath $CandidateArchive -ManifestPath $CandidateManifest -ExpectedCommit $SourceCommit
-    Check ($baseline.Version -cne $candidate.Version) 'both coherent fixture packages bind the same exact CI source and distinct versions'
+    Check ($baseline.Version -cne $candidate.Version) 'both exact portable package source identities and distinct versions are verified'
     [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
     $outputCreated = $true
     $parent = Join-Path $OutputRoot 'shared-parent'
@@ -636,6 +647,10 @@ try {
     $parentAcl = (Get-Acl -LiteralPath $parent).Sddl
     $portableRoot = Join-Path $parent 'Portable Manager'
     [IO.Compression.ZipFile]::ExtractToDirectory($BaselineArchive, $portableRoot)
+    $originalBaselineFiles = @{}
+    foreach ($relative in @('Bezoro.AhkManager.exe', 'portable-package.json', 'App/Bezoro.AhkManager.exe', 'App/backend/AhkManager.Backend.exe', 'App/backend/update/AhkManager.UpdateHost.exe', 'App/resources/app.asar', 'App/resources/app-update.yml')) {
+        $originalBaselineFiles[$relative] = Hash (Join-Path $portableRoot $relative)
+    }
     $publisherPolicyPath = Join-Path (Split-Path -Parent $BaselineManifest) 'publisher-policy.json'
     $policyFile = Get-Item -LiteralPath $publisherPolicyPath
     if ($policyFile -isnot [IO.FileInfo] -or $policyFile.Length -le 0 -or $policyFile.Length -gt 65536) { throw 'The test-only application publisher policy is absent or oversized.' }
@@ -658,8 +673,11 @@ try {
         finally { $buffer.Dispose(); $stream.Dispose() }
     }
     finally { $candidateZip.Dispose() }
-    Check ($policy.sourceCommit -ceq $SourceCommit -and $policy.candidatePolicySha256 -ceq $policyHash) 'the exact candidate archive publisher policy matches the source-bound production parser metadata'
+    Check ($policy.schemaVersion -eq 2 -and $policy.sourceCommit -ceq $SourceCommit -and $policy.baselineSourceCommit -ceq $baselineCommit -and $policy.candidatePolicySha256 -ceq $policyHash) 'the exact candidate archive publisher policy matches the source-bound production parser metadata'
     $signingFixture = New-PortableSigningFixture -ApplicationRoot (Join-Path $portableRoot 'App') -CandidateManifestPath $CandidateManifest -BaselineManifestPath $BaselineManifest -PublisherPolicyPath $publisherPolicyPath -OutputRoot (Join-Path $OutputRoot 'signing-fixture')
+    foreach ($relative in $originalBaselineFiles.Keys) { if ((Hash (Join-Path $portableRoot $relative)) -cne $originalBaselineFiles[$relative]) { throw 'Signing fixture preparation modified a baseline binary or configuration file.' } }
+    Write-Json 'baseline-payload-proof.json' ([ordered]@{ fixture = $true; published = [bool]$PublishedBaseline; version = $baseline.Version; commit = $baseline.Commit; archiveSha256 = $baseline.Sha256; manifestSha256 = $baseline.ManifestSha256; payloadFiles = $originalBaselineFiles; payloadModified = $false; administrativeTestHost = $true })
+    Check ($true) 'the baseline launcher, application, backend, helper, archive inventory and publisher policy remain byte-identical before launch'
     $signingFixtureCleanup = 'Pending'
     Write-Json 'portable-signing-proof.json' $signingFixture.Proof
     Check ($null -ne $signingFixture -and (Test-Path -LiteralPath $signingFixture.CandidateSignaturePath -PathType Leaf) -and (Test-Path -LiteralPath $signingFixture.BaselineSignaturePath -PathType Leaf)) 'both exact portable manifests have authenticated fixture signatures before any cache entry is seeded'
@@ -691,7 +709,7 @@ try {
             if ([AhkManager.TestSupport.PortableStartupUi]::DismissRefusal($session.Process.Id, $session.Image, $session.Started, $readStartupDialog)) { $dismissed = $true; break }
             Start-Sleep -Milliseconds 100
         } while (-not $session.Process.HasExited -and [DateTime]::UtcNow -lt $deadline)
-        Write-Json 'foreign-root-windows.json' ([AhkManager.TestSupport.InstalledUpdaterUi]::Describe($session.Process.Id, $session.Image, $session.Started))
+        Write-Json 'foreign-root-windows.json' ([AhkManager.TestSupport.PortableUpdaterUi]::Describe($session.Process.Id, $session.Image, $session.Started))
         Write-Json 'foreign-root-observation.json' ([ordered]@{ fixture = $true; dismissed = $dismissed; processExited = $session.Process.HasExited; observation = [AhkManager.TestSupport.PortableStartupUi]::LastObservation })
         Check ($dismissed -and $session.Process.WaitForExit(30000) -and $session.Process.ExitCode -eq 65) 'the actual portable app refuses an unknown root file and exits after its exact owned error dialog closes'
         Check (Test-Path -LiteralPath $startupReports -PathType Container) 'the actual refused portable launch preserves diagnostics in the independent per-user namespace'
@@ -745,6 +763,10 @@ try {
         $inert = [Diagnostics.Process]::Start($waiter)
         $session = Start-PortableSession -Root $portableRoot -EvidenceRoot $OutputRoot -ViaLauncher
         Wait-Ready $session $baseline.Version
+        if ($PublishedBaseline) {
+            $initial = Invoke-PortableEvaluation $session 'window.ahkManager.getState()'
+            Check ($initial.snapshot.settings.launchManagerAsAdministrator -eq $false) 'the actual published baseline exposes its seeded legacy false Manager privilege preference before migration'
+        }
         Check-SearchShortcut 'initial'
         Capture-Preferences
         Check ((Is-Private $portableRoot) -and (Is-Private (Join-Path $portableRoot 'App')) -and (Is-Private $dataRoot)) 'first real launch secures only the dedicated portable runtime and Data folders'
@@ -837,7 +859,7 @@ finally {
     $identity.Dispose()
     if ($outputCreated) {
         [IO.File]::WriteAllLines((Join-Path $OutputRoot 'portable-update.log'), $trace.ToArray(), $utf8)
-        Write-Json 'portable-update-summary.json' ([ordered]@{ fixture = $true; scenario = $Scenario; commit = $SourceCommit; complete = $complete; unknownHelperOutcome = $helperInFlight; signingFixtureCleanup = $signingFixtureCleanup; checks = $checks.ToArray(); failure = $failure })
+        Write-Json 'portable-update-summary.json' ([ordered]@{ fixture = $true; scenario = $Scenario; publishedBaseline = [bool]$PublishedBaseline; baselineCommit = $baselineCommit; commit = $SourceCommit; complete = $complete; unknownHelperOutcome = $helperInFlight; signingFixtureCleanup = $signingFixtureCleanup; checks = $checks.ToArray(); failure = $failure })
     }
 }
 if ($failure) { throw $failure }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { UpdateStore, type CachedInstaller } from '../../src/main/updates/update-store.js';
+import { UpdateStore, type CachedPackage } from '../../src/main/updates/update-store.js';
 
 const sha = (bytes: Buffer | string): string => createHash('sha256').update(bytes).digest('hex');
 
@@ -18,10 +18,39 @@ async function fixture(t: TestContext) {
     await fs.rm(root, { recursive: true, force: true });
   });
   const store = new UpdateStore(path.join(root, 'cache'));
-  const source = path.join(root, 'download with espaço.exe');
-  const body = Buffer.from('Owned installer fixture bytes. Never executed.');
+  const source = path.join(root, 'download with espaço.zip');
+  const body = Buffer.from('Owned archive fixture bytes. Never executed.');
   await fs.writeFile(source, body);
   return { root, store, source, body };
+}
+
+/** Construct the signed-manifest shape beside inert archive bytes before caching. */
+async function cache(
+  store: UpdateStore,
+  version: string,
+  source: string,
+  sha256: string,
+  bytes: number,
+) {
+  const body = await fs.readFile(source);
+  await fs.writeFile(
+    path.join(path.dirname(source), 'release.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      updateProtocol: 2,
+      version,
+      commit: 'a'.repeat(40),
+      publishedAt: '2026-11-06T00:00:00.000Z',
+      notes: 'Portable cache fixture.',
+      archive: {
+        name: `AHK-Manager-${version}-Portable-x64.zip`,
+        sha256: sha(body),
+        sha512: createHash('sha512').update(body).digest('base64'),
+        bytes: body.length,
+      },
+    }),
+  );
+  return store.cache(version, source, sha256, bytes);
 }
 
 async function linkOrSkip(t: TestContext, target: string, link: string): Promise<boolean> {
@@ -37,17 +66,17 @@ async function linkOrSkip(t: TestContext, target: string, link: string): Promise
   }
 }
 
-test('real installer bytes and receipt hashes are verified before becoming a cached version', async (t) => {
+test('real archive bytes and receipt hashes are verified before becoming a cached version', async (t) => {
   const { store, source, body } = await fixture(t);
-  const value = await store.cache('1.2.4', source, sha(body), body.length);
-  assert.deepEqual(await fs.readFile(value.installerPath), body);
+  const value = await cache(store, '1.2.4', source, sha(body), body.length);
+  assert.deepEqual(await fs.readFile(value.archivePath), body);
   await store.verify(value);
   const receipt = JSON.parse(
-    await fs.readFile(path.join(path.dirname(value.installerPath), 'receipt.json'), 'utf8'),
+    await fs.readFile(path.join(path.dirname(value.archivePath), 'receipt.json'), 'utf8'),
   );
   assert.deepEqual(receipt, {
     schemaVersion: 1,
-    updateProtocol: 1,
+    updateProtocol: 2,
     version: '1.2.4',
     sha256: sha(body),
     bytes: body.length,
@@ -56,63 +85,63 @@ test('real installer bytes and receipt hashes are verified before becoming a cac
   assert.deepEqual(await fs.readFile(source), body);
 });
 
-test('wrong hash, byte count, empty input and path-shaped version never produce an installer choice', async (t) => {
+test('wrong hash, byte count, empty input and path-shaped version never produce an archive choice', async (t) => {
   const { store, source, body, root } = await fixture(t);
-  await assert.rejects(store.cache('1.2.4', source, '0'.repeat(64), body.length), /integrity/);
-  await assert.rejects(store.cache('1.2.4', source, sha(body), body.length + 1), /integrity/);
+  await assert.rejects(cache(store, '1.2.4', source, '0'.repeat(64), body.length), /integrity/);
+  await assert.rejects(cache(store, '1.2.4', source, sha(body), body.length + 1), /integrity/);
   for (const version of ['../1.2.4', '1.2', '01.2.4', 'v1.2.4', '1.2.4\0', '1.2.4-beta'])
-    await assert.rejects(store.cache(version, source, sha(body), body.length), /invalid/);
-  const empty = path.join(root, 'empty.exe');
+    await assert.rejects(cache(store, version, source, sha(body), body.length), /invalid/);
+  const empty = path.join(root, 'empty.zip');
   await fs.writeFile(empty, '');
-  await assert.rejects(store.cache('1.2.4', empty, sha(''), 0), /invalid/);
+  await assert.rejects(cache(store, '1.2.4', empty, sha(''), 0), /invalid/);
   assert.deepEqual(await store.cached(), []);
   assert.deepEqual(await fs.readFile(source), body);
 });
 
 test('changed cached bytes are refused and a verified replacement preserves the corrupt evidence', async (t) => {
   const { store, source, body } = await fixture(t);
-  const value = await store.cache('1.2.4', source, sha(body), body.length);
+  const value = await cache(store, '1.2.4', source, sha(body), body.length);
   const corrupt = Buffer.alloc(body.length, 0x58);
-  await fs.writeFile(value.installerPath, corrupt);
+  await fs.writeFile(value.archivePath, corrupt);
   await assert.rejects(store.verify(value), /integrity/);
-  const repaired = await store.cache('1.2.4', source, sha(body), body.length);
+  const repaired = await cache(store, '1.2.4', source, sha(body), body.length);
   await store.verify(repaired);
-  const directory = path.dirname(value.installerPath);
+  const directory = path.dirname(value.archivePath);
   const preserved = (await fs.readdir(directory)).filter(
-    (name) => name.startsWith('preserved-') && name.endsWith('.exe'),
+    (name) => name.startsWith('preserved-') && name.endsWith('.zip'),
   );
   assert.equal(preserved.length, 1);
   assert.deepEqual(await fs.readFile(path.join(directory, preserved[0]!)), corrupt);
-  assert.deepEqual(await fs.readFile(repaired.installerPath), body);
+  assert.deepEqual(await fs.readFile(repaired.archivePath), body);
 });
 
 test('valid repeated cache operation is idempotent and offline verification refuses an out-of-history path', async (t) => {
   const { store, source, body, root } = await fixture(t);
-  const first = await store.cache('1.2.4', source, sha(body), body.length);
-  const before = await fs.stat(first.installerPath);
-  const second = await store.cache('1.2.4', source, sha(body), body.length);
+  const first = await cache(store, '1.2.4', source, sha(body), body.length);
+  const before = await fs.stat(first.archivePath);
+  const second = await cache(store, '1.2.4', source, sha(body), body.length);
   assert.deepEqual(second, first);
-  assert.equal((await fs.stat(first.installerPath)).mtimeMs, before.mtimeMs);
+  assert.equal((await fs.stat(first.archivePath)).mtimeMs, before.mtimeMs);
   assert.deepEqual(
-    (await fs.readdir(path.dirname(first.installerPath))).filter((name) =>
+    (await fs.readdir(path.dirname(first.archivePath))).filter((name) =>
       name.startsWith('preserved-'),
     ),
     [],
   );
-  const outside: CachedInstaller = { ...first, installerPath: path.join(root, 'outside.exe') };
-  await fs.writeFile(outside.installerPath, body);
+  const outside: CachedPackage = { ...first, archivePath: path.join(root, 'outside.zip') };
+  await fs.writeFile(outside.archivePath, body);
   await assert.rejects(store.verify(outside), /outside the version history/);
 });
 
 test('incomplete receipts and changed sizes are omitted from executable history', async (t) => {
   const { store, source, body } = await fixture(t);
-  const value = await store.cache('1.2.4', source, sha(body), body.length);
-  const receipt = path.join(path.dirname(value.installerPath), 'receipt.json');
+  const value = await cache(store, '1.2.4', source, sha(body), body.length);
+  const receipt = path.join(path.dirname(value.archivePath), 'receipt.json');
   for (const document of [
     'not-json',
     '{}',
     JSON.stringify({ schemaVersion: 1, updateProtocol: 2, version: '1.2.4', sha256: sha(body) }),
-    JSON.stringify({ schemaVersion: 1, updateProtocol: 1, version: '1.2.5', sha256: sha(body) }),
+    JSON.stringify({ schemaVersion: 1, updateProtocol: 2, version: '1.2.5', sha256: sha(body) }),
   ]) {
     await fs.writeFile(receipt, document);
     assert.deepEqual(await store.cached(), []);
@@ -121,7 +150,7 @@ test('incomplete receipts and changed sizes are omitted from executable history'
     receipt,
     JSON.stringify({
       schemaVersion: 1,
-      updateProtocol: 1,
+      updateProtocol: 2,
       version: '1.2.4',
       sha256: sha(body),
       bytes: body.length + 1,
@@ -139,7 +168,7 @@ test('redirected cache root or version directory is refused without writing thro
   const redirectedStore = new UpdateStore(redirect);
   await assert.rejects(redirectedStore.removeLegacyAccess(), /redirected/);
   await assert.rejects(
-    redirectedStore.cache('1.2.4', source, sha(body), body.length),
+    cache(redirectedStore, '1.2.4', source, sha(body), body.length),
     /redirected/,
   );
   assert.deepEqual(await fs.readdir(outside), []);
@@ -148,32 +177,32 @@ test('redirected cache root or version directory is refused without writing thro
   await fs.mkdir(path.join(store.root, 'installers'), { recursive: true });
   if (!(await linkOrSkip(t, outside, path.join(store.root, 'installers', '1.2.4')))) return;
   assert.deepEqual(await store.cached(), []);
-  await assert.rejects(store.cache('1.2.4', source, sha(body), body.length), /redirected/);
+  await assert.rejects(cache(store, '1.2.4', source, sha(body), body.length), /redirected/);
   assert.deepEqual(await fs.readdir(outside), []);
 });
 
-test('multiply linked source and cached installer cannot pass integrity verification or become an install choice', async (t) => {
+test('multiply linked source and cached archive cannot pass integrity verification or become an install choice', async (t) => {
   const { store, source, body, root } = await fixture(t);
-  const value = await store.cache('1.2.4', source, sha(body), body.length);
-  await fs.link(value.installerPath, path.join(root, 'retained-installer-link.exe'));
+  const value = await cache(store, '1.2.4', source, sha(body), body.length);
+  await fs.link(value.archivePath, path.join(root, 'retained-archive-link.zip'));
   await assert.rejects(store.verify(value), /invalid/);
   assert.deepEqual(await store.cached(), []);
-  await fs.link(source, path.join(root, 'retained-download-link.exe'));
-  await assert.rejects(store.cache('1.2.5', source, sha(body), body.length), /invalid/);
+  await fs.link(source, path.join(root, 'retained-download-link.zip'));
+  await assert.rejects(cache(store, '1.2.5', source, sha(body), body.length), /invalid/);
   assert.deepEqual(await fs.readFile(source), body);
 });
 
 test('multiply linked receipt files are never followed', async (t) => {
   const { store, source, body, root } = await fixture(t);
-  const value = await store.cache('1.2.4', source, sha(body), body.length);
+  const value = await cache(store, '1.2.4', source, sha(body), body.length);
   await fs.link(
-    path.join(path.dirname(value.installerPath), 'receipt.json'),
+    path.join(path.dirname(value.archivePath), 'receipt.json'),
     path.join(root, 'retained-receipt.json'),
   );
   assert.deepEqual(await store.cached(), []);
 });
 
-test('channel preference defaults to stable and persists atomically independently of installer history', async (t) => {
+test('channel preference defaults to stable and persists atomically independently of archive history', async (t) => {
   const { store } = await fixture(t);
   assert.equal(await store.readChannel(), 'stable');
   await store.saveChannel('test');
@@ -212,13 +241,13 @@ test('invalid, redirected or multiply linked channel preferences never enable te
   assert.deepEqual(await fs.readFile(retained), bytes);
 });
 
-test('test installers retain their complete version as independent cache and receipt identities', async (t) => {
+test('test archives retain their complete version as independent cache and receipt identities', async (t) => {
   const { store, source, body } = await fixture(t);
-  const first = await store.cache('1.3.0-test.2.9.1', source, sha(body), body.length);
-  const next = await store.cache('1.3.0-test.2.10.1', source, sha(body), body.length);
-  const stable = await store.cache('1.3.0', source, sha(body), body.length);
-  assert.notEqual(first.installerPath, next.installerPath);
-  assert.notEqual(next.installerPath, stable.installerPath);
+  const first = await cache(store, '1.3.0-test.2.9.1', source, sha(body), body.length);
+  const next = await cache(store, '1.3.0-test.2.10.1', source, sha(body), body.length);
+  const stable = await cache(store, '1.3.0', source, sha(body), body.length);
+  assert.notEqual(first.archivePath, next.archivePath);
+  assert.notEqual(next.archivePath, stable.archivePath);
   assert.deepEqual(
     new Set((await store.cached()).map((item) => item.version)),
     new Set(['1.3.0-test.2.9.1', '1.3.0-test.2.10.1', '1.3.0']),
@@ -282,4 +311,72 @@ test('retired credential cleanup never follows a redirected entry', async (t) =>
   await store.removeLegacyAccess();
   assert.deepEqual(await fs.readFile(retained), bytes);
   assert.equal((await fs.lstat(legacy)).isSymbolicLink(), true);
+});
+
+test('existing 1.6.x portable history keeps its exact directory, receipt and manifest without migration writes', async (t) => {
+  const { root, body, store } = await fixture(t);
+  const directory = path.join(store.root, 'installers', '1.6.2');
+  const archivePath = path.join(directory, 'archive.zip');
+  await fs.mkdir(directory, { recursive: true });
+  const manifest = JSON.stringify({
+    schemaVersion: 1,
+    updateProtocol: 2,
+    version: '1.6.2',
+    commit: 'a'.repeat(40),
+    publishedAt: '2026-11-03T00:00:00.000Z',
+    notes: 'Existing portable release.',
+    archive: {
+      name: 'AHK-Manager-1.6.2-Portable-x64.zip',
+      bytes: body.length,
+      sha256: sha(body),
+      sha512: createHash('sha512').update(body).digest('base64'),
+    },
+  });
+  const receipt = JSON.stringify({
+    schemaVersion: 1,
+    updateProtocol: 2,
+    version: '1.6.2',
+    sha256: sha(body),
+    bytes: body.length,
+  });
+  await fs.writeFile(archivePath, body);
+  await fs.writeFile(path.join(directory, 'release.json'), manifest);
+  await fs.writeFile(path.join(directory, 'receipt.json'), receipt);
+  const existing = new UpdateStore(path.join(root, 'cache'));
+  const cached = await existing.cached();
+  assert.equal(cached.length, 1);
+  assert.equal(cached[0]!.archivePath, archivePath);
+  await existing.verify(cached[0]!);
+  assert.equal(await fs.readFile(path.join(directory, 'receipt.json'), 'utf8'), receipt);
+  assert.equal(await fs.readFile(path.join(directory, 'release.json'), 'utf8'), manifest);
+});
+
+test('retired Setup protocol receipts are ignored without deleting their historical bytes', async (t) => {
+  const { store } = await fixture(t);
+  const directory = path.join(store.root, 'installers', '1.3.2');
+  await fs.mkdir(directory, { recursive: true });
+  const executable = path.join(directory, 'installer.exe');
+  const bytes = Buffer.from('Historical Setup bytes, never executed.');
+  await fs.writeFile(executable, bytes);
+  await fs.writeFile(
+    path.join(directory, 'receipt.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      updateProtocol: 1,
+      version: '1.3.2',
+      sha256: sha(bytes),
+      bytes: bytes.length,
+    }),
+  );
+  assert.deepEqual(await store.cached(), []);
+  await assert.rejects(
+    store.verify({
+      version: '1.3.2',
+      archivePath: executable,
+      sha256: sha(bytes),
+      bytes: bytes.length,
+    }),
+    /outside/,
+  );
+  assert.deepEqual(await fs.readFile(executable), bytes);
 });

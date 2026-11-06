@@ -33,10 +33,10 @@ function Get-TestReleaseContext {
     if ($pull.state -cne 'open' -or $null -eq $pull.head -or $null -eq $pull.head.repo -or $null -eq $pull.base -or $null -eq $pull.base.repo -or $pull.head.sha -cne $run.head_sha -or $pull.head.repo.id -ne $run.repository.id -or $pull.base.repo.id -ne $run.repository.id -or $pull.base.ref -cne 'main') { Stop-IneligibleTestRun 'The pull request changed during provenance inspection.' }
     $artifacts = & $Request "$base/actions/runs/$RunId/artifacts?per_page=100"
     if ($artifacts.total_count -gt 100) { throw 'The preview artifact listing exceeds its bound.' }
-    $artifactName = "windows-installer-test-$($run.run_attempt)"
-    $installers = @($artifacts.artifacts | Where-Object { $_.name -ceq $artifactName })
-    if ($installers.Count -ne 1 -or $installers[0].expired -ne $false -or $installers[0].id -le 0 -or $installers[0].size_in_bytes -le 0 -or $installers[0].size_in_bytes -gt 2GB) { Stop-IneligibleTestRun 'Exactly one current, bounded Windows installer artifact is required.' }
-    $artifact = $installers[0]
+    $artifactName = "windows-portable-test-$($run.run_attempt)"
+    $packages = @($artifacts.artifacts | Where-Object { $_.name -ceq $artifactName })
+    if ($packages.Count -ne 1 -or $packages[0].expired -ne $false -or $packages[0].id -le 0 -or $packages[0].size_in_bytes -le 0 -or $packages[0].size_in_bytes -gt 2GB) { Stop-IneligibleTestRun 'Exactly one current, bounded portable package artifact is required.' }
+    $artifact = $packages[0]
     if ($artifact.workflow_run.id -ne $RunId -or $artifact.workflow_run.head_sha -cne $run.head_sha -or $artifact.workflow_run.head_repository_id -ne $run.repository.id -or $artifact.digest -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'Artifact provenance does not match the tested source.' }
     return [pscustomobject]@{
         RunId = $RunId

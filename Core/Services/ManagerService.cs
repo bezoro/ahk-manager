@@ -31,31 +31,6 @@ public sealed partial class ManagerService : IManagerService
     public event EventHandler<ManagerSnapshot>? Changed;
     public string DataRoot { get; }
 
-    public static ManagerService CreateDefault(string? dataRoot = null)
-    {
-        var owner = new UserEffectOwner();
-        return new(
-            dataRoot
-                ?? Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Bezoro",
-                    "AhkManagerWinUI"
-                ),
-            owner,
-            new ProcessManager(owner, documentedControlsProven: true),
-            new UserStartupService(
-                new RegistryStartupAdapter(),
-                Environment.ProcessPath
-                    ?? throw new InvalidOperationException("Manager executable unavailable.")
-            ),
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Bezoro",
-                "AhkManager"
-            )
-        );
-    }
-
     // Trusted host composition only; no renderer or script input reaches this seam.
     public static ManagerService CreateForTrustedStartupHost(
         string dataRoot,

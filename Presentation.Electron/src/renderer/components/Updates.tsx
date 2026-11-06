@@ -261,7 +261,7 @@ export function Updates({
                       {release.cached
                         ? text.updateCached
                         : !release.canInstall && !release.installed
-                          ? text.updateInstallerUnavailable
+                          ? text.updatePackageUnavailable
                           : ''}
                     </span>
                   </div>

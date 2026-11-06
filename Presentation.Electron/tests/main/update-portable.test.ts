@@ -49,7 +49,7 @@ function portable(
     commit,
     notes: manifest.notes,
     assetId: id * 10 + 1,
-    installerName: manifest.archive.name,
+    archiveName: manifest.archive.name,
     bytes: body.length,
     sha256: manifest.archive.sha256,
     sha512: manifest.archive.sha512,
@@ -167,7 +167,7 @@ test('moving the complete portable folder preserves external script references a
   const history = await store.cached();
   assert.equal(history.length, 1);
   assert.equal(history[0]!.version, f.release.version);
-  assert.ok(history[0]!.installerPath.startsWith(after.updatesDirectory + path.sep));
+  assert.ok(history[0]!.archivePath.startsWith(after.updatesDirectory + path.sep));
   await store.verify(history[0]!);
   await store.saveChannel('stable');
   await assert.rejects(fs.lstat(original), { code: 'ENOENT' });
@@ -285,21 +285,21 @@ test('portable streaming validates both hashes, verifies signature first and cac
   });
   assert.deepEqual(await fs.readFile(source), f.body);
   const value = await store.cache(f.release.version, source, f.release.sha256, f.release.bytes);
-  assert.equal(path.basename(value.installerPath), 'archive.zip');
+  assert.equal(path.basename(value.archivePath), 'archive.zip');
   await store.verify(value);
   assert.equal(
-    await fs.readFile(path.join(path.dirname(value.installerPath), 'release.json'), 'utf8'),
+    await fs.readFile(path.join(path.dirname(value.archivePath), 'release.json'), 'utf8'),
     f.text,
   );
   assert.equal(
     (
       JSON.parse(
-        await fs.readFile(path.join(path.dirname(value.installerPath), 'receipt.json'), 'utf8'),
+        await fs.readFile(path.join(path.dirname(value.archivePath), 'receipt.json'), 'utf8'),
       ) as { updateProtocol: number }
     ).updateProtocol,
     2,
   );
-  assert.deepEqual(await new UpdateStore(store.root).cached(), []);
+  assert.deepEqual(await new UpdateStore(store.root).cached(), [value]);
   assert.deepEqual(await store.cached(), [value]);
   assert.equal(progress.at(-1), 100);
   assert.ok(progress.every((value, index) => index === 0 || value >= progress[index - 1]!));
@@ -428,18 +428,18 @@ test('signed cached rollback binds raw metadata, publisher policy and actual arc
       return digest(await fs.readFile(manifest));
     },
   };
-  await verifyCachedPortablePackageSignature(value.installerPath, options);
+  await verifyCachedPortablePackageSignature(value.archivePath, options);
   assert.equal(checked, 1);
-  await fs.writeFile(value.installerPath, Buffer.alloc(f.body.length, 1));
+  await fs.writeFile(value.archivePath, Buffer.alloc(f.body.length, 1));
   await assert.rejects(
-    verifyCachedPortablePackageSignature(value.installerPath, options),
+    verifyCachedPortablePackageSignature(value.archivePath, options),
     /signed release metadata/,
   );
   assert.equal(checked, 1);
-  await fs.writeFile(value.installerPath, f.body);
-  await fs.unlink(path.join(path.dirname(value.installerPath), 'release.json.p7s'));
+  await fs.writeFile(value.archivePath, f.body);
+  await fs.unlink(path.join(path.dirname(value.archivePath), 'release.json.p7s'));
   await assert.rejects(
-    verifyCachedPortablePackageSignature(value.installerPath, options),
+    verifyCachedPortablePackageSignature(value.archivePath, options),
     /signature/,
   );
 });
@@ -458,7 +458,7 @@ test('publisher verification must authenticate the exact manifest bytes bound to
     f.release.sha256,
     f.release.bytes,
   );
-  const directory = path.dirname(cached.installerPath);
+  const directory = path.dirname(cached.archivePath);
   const manifest = path.join(directory, 'release.json');
   const signature = path.join(directory, 'release.json.p7s');
   const policy = path.join(root, 'app-update.yml');
@@ -479,7 +479,7 @@ test('publisher verification must authenticate the exact manifest bytes bound to
     },
   };
   await assert.rejects(
-    verifyCachedPortablePackageSignature(cached.installerPath, options),
+    verifyCachedPortablePackageSignature(cached.archivePath, options),
     /metadata changed during publisher verification/,
   );
   await assert.rejects(
@@ -500,7 +500,7 @@ test('portable caches reject changed proof, setup receipts and proofless archive
   await assert.rejects(store.cache(f.release.version, file, f.release.sha256, f.release.bytes));
   await fs.writeFile(path.join(source, 'release.json'), f.text);
   const value = await store.cache(f.release.version, file, f.release.sha256, f.release.bytes);
-  const directory = path.dirname(value.installerPath);
+  const directory = path.dirname(value.archivePath);
   const proof = JSON.parse(f.text) as typeof f.manifest;
   proof.archive.sha256 = 'b'.repeat(64);
   await fs.writeFile(path.join(directory, 'release.json'), JSON.stringify(proof));
@@ -539,11 +539,11 @@ test('downloading a signed replacement repairs proof for an already cached porta
       return digest(await fs.readFile(manifest));
     },
   };
-  const directory = path.dirname(cached.installerPath);
+  const directory = path.dirname(cached.archivePath);
   for (const damaged of ['missing', 'corrupt'] as const) {
     if (damaged === 'corrupt')
       await fs.writeFile(path.join(directory, 'release.json.p7s'), 'Corrupt fixture signature.');
-    await assert.rejects(verifyCachedPortablePackageSignature(cached.installerPath, options));
+    await assert.rejects(verifyCachedPortablePackageSignature(cached.archivePath, options));
     const downloaded = await downloadPortableRelease(f.release, () => {}, {
       store,
       fetcher: fixtureFetch(f, () => new Response(f.body)),
@@ -558,7 +558,7 @@ test('downloading a signed replacement repairs proof for an already cached porta
     );
     assert.deepEqual(repaired, cached);
     await store.verify(repaired);
-    await verifyCachedPortablePackageSignature(repaired.installerPath, options);
+    await verifyCachedPortablePackageSignature(repaired.archivePath, options);
     assert.equal(
       (await fs.readdir(directory)).some((name) => name.startsWith('preserved-')),
       false,

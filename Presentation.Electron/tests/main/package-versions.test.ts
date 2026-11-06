@@ -75,8 +75,26 @@ test('the production Windows resource editor requires administrator while preser
     process.env.AHK_PUBLISHER_NAME = 'AHK Manager Test Publisher';
     delete process.env.CSC_LINK;
     const config = require(path.resolve('electron-builder.cjs')) as Record<string, unknown>;
-    const windows = config.win as { requestedExecutionLevel: string };
+    const windows = config.win as {
+      requestedExecutionLevel: string;
+      target: Array<{ target: string }>;
+    };
     assert.equal(windows.requestedExecutionLevel, 'requireAdministrator');
+    assert.deepEqual(windows.target, [{ target: 'dir', arch: ['x64'] }]);
+    assert.equal(Object.hasOwn(config, 'nsis'), false);
+    assert.equal((config.extraMetadata as { updateProtocol: number }).updateProtocol, 2);
+    const payload = path.join(root, 'portable-application');
+    (config.afterPack as (context: { appOutDir: string }) => void)({ appOutDir: payload });
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(payload, 'resources/app-update.yml'), 'utf8')),
+      {
+        provider: 'github',
+        owner: 'bezoro',
+        repo: 'ahk-manager',
+        private: false,
+        publisherName: ['AHK Manager Test Publisher'],
+      },
+    );
     const appInfo = new AppInfo({
       config,
       metadata: { name: 'ahk-manager', version, author: 'Bezoro' },
