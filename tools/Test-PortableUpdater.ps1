@@ -630,17 +630,27 @@ function Run-Update([string]$Phase, $Target, [switch]$RemoteCancel) {
     do {
         if ($session.Process.HasExited) { break }
         if (-not $confirmed -and [AhkManager.TestSupport.PortableUpdaterUi]::Confirm($session.Process.Id, $session.Image, $session.Started, $Target.Version)) { $confirmed = $true; Trace "$Phase native consent confirmed for $($Target.Version)." }
-        try {
-            if ($RemoteCancel) {
-                $result = Invoke-PortableEvaluation $session 'window.ahkManager.getUpdateState()'
-                if ($result.phase -ceq 'error') { throw "The portable retry failed: $($result.error)" }
-            } else { $result = Invoke-PortableEvaluation $session 'globalThis.__portableUpdate' }
+        if ($RemoteCancel) {
+            # The native handoff deliberately blocks IPC before the window closes.
+            # Observe this exact process instead; receipts below must still prove
+            # one authenticated transaction and the complete verified retry.
+            if ($confirmed -and $session.Process.WaitForExit(100)) { break }
+        } else {
+            try { $result = Invoke-PortableEvaluation $session 'globalThis.__portableUpdate' }
+            catch { if ($confirmed -and $session.Socket.State -ne [Net.WebSockets.WebSocketState]::Open -and $session.Process.WaitForExit(30000)) { break }; throw }
+            if ($result -and -not $result.pending) { break }
         }
-        catch { if ($confirmed -and $session.Socket.State -ne [Net.WebSockets.WebSocketState]::Open -and $session.Process.WaitForExit(30000)) { break }; throw }
-        if (-not $RemoteCancel -and $result -and -not $result.pending) { break }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     Check $confirmed 'the actual portable update received exact-version native consent'
+    if ($RemoteCancel) {
+        $result = [ordered]@{
+            observation = 'native-consent-and-process-exit'
+            nativeConsentConfirmed = $confirmed
+            ipcPolledAfterRetry = $false
+            processExitedAtObservation = $session.Process.HasExited
+        }
+    }
     Write-Json ("$Phase-result.json") $result
     Check ($session.Process.WaitForExit(30000) -and $session.Process.ExitCode -eq 0) 'the authenticated portable application exits normally before payload replacement'
     $operations = @(Get-ChildItem -LiteralPath (Join-Path $updatesRoot 'operations') -Directory | Where-Object { $_.Name -notin $before })
