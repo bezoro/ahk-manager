@@ -16,7 +16,7 @@ internal sealed class PortableProfileSession(
 
     internal async Task<OperationResult> InitializeAsync(CancellationToken ct)
     {
-        if (initialized || !layout.Portable)
+        if (initialized)
             return new(Outcome.Confirmed);
         try
         {
@@ -97,12 +97,6 @@ internal sealed class PortableProfileSession(
 
     internal OperationResult PrepareDataDirectory(string path)
     {
-        if (!layout.Portable)
-            return new(
-                Outcome.Failed,
-                ReasonCode.InvalidPath,
-                "Data relocation is available in the portable edition."
-            );
         var state = snapshot();
         if (!effectsAllowed() || !state.EffectsAvailable)
             return new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable);

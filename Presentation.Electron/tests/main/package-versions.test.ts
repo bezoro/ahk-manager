@@ -26,7 +26,7 @@ test('packaging accepts bounded test identities and rejects ambiguous versions b
     assert.equal(validUpdateVersion(version), false, version);
 });
 
-test('the production Windows resource editor preserves full test FileVersion with numeric ProductVersion', async () => {
+test('the production Windows resource editor requires administrator while preserving full test FileVersion and numeric ProductVersion', async () => {
   const { Platform } = require(path.resolve('node_modules/app-builder-lib')) as {
     Platform: { WINDOWS: unknown };
   };
@@ -75,6 +75,26 @@ test('the production Windows resource editor preserves full test FileVersion wit
     process.env.AHK_PUBLISHER_NAME = 'AHK Manager Test Publisher';
     delete process.env.CSC_LINK;
     const config = require(path.resolve('electron-builder.cjs')) as Record<string, unknown>;
+    const windows = config.win as {
+      requestedExecutionLevel: string;
+      target: Array<{ target: string }>;
+    };
+    assert.equal(windows.requestedExecutionLevel, 'requireAdministrator');
+    assert.deepEqual(windows.target, [{ target: 'dir', arch: ['x64'] }]);
+    assert.equal(Object.hasOwn(config, 'nsis'), false);
+    assert.equal((config.extraMetadata as { updateProtocol: number }).updateProtocol, 2);
+    const payload = path.join(root, 'portable-application');
+    (config.afterPack as (context: { appOutDir: string }) => void)({ appOutDir: payload });
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(payload, 'resources/app-update.yml'), 'utf8')),
+      {
+        provider: 'github',
+        owner: 'bezoro',
+        repo: 'ahk-manager',
+        private: false,
+        publisherName: ['AHK Manager Test Publisher'],
+      },
+    );
     const appInfo = new AppInfo({
       config,
       metadata: { name: 'ahk-manager', version, author: 'Bezoro' },
@@ -113,6 +133,19 @@ test('the production Windows resource editor preserves full test FileVersion wit
         },
       ],
     }).outputToResourceEntries(initialResources.entries);
+    const initialManifest =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">' +
+      '<trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"><security><requestedPrivileges>' +
+      '<requestedExecutionLevel level="asInvoker" uiAccess="false" />' +
+      '</requestedPrivileges></security></trustInfo></assembly>';
+    initialResources.entries.push({
+      type: 24,
+      id: 1,
+      lang: 0x0409,
+      codepage: 65001,
+      bin: Uint8Array.from(Buffer.from(initialManifest, 'utf8')).buffer,
+    });
     initialResources.outputResource(initialImage);
     fs.writeFileSync(image, Buffer.from(initialImage.generate()));
     await WinPackager.prototype.signAndEditResources.call(
@@ -127,13 +160,18 @@ test('the production Windows resource editor preserves full test FileVersion wit
       1,
       root,
       'Bezoro.AhkManager',
-      'asInvoker',
+      windows.requestedExecutionLevel,
     );
     const resources = NtExecutableResource.from(NtExecutable.from(fs.readFileSync(image)));
     const info = Resource.VersionInfo.fromEntries(resources.entries)[0]!;
     const strings = info.getStringValues({ lang: 0x0409, codepage: 1200 });
     assert.equal(strings.FileVersion, version);
     assert.equal(strings.ProductVersion, '1.3.0.0');
+    const manifests = resources.entries.filter((entry) => entry.type === 24 && entry.id === 1);
+    assert.equal(manifests.length, 1);
+    const manifest = Buffer.from(manifests[0]!.bin).toString('utf8');
+    assert.match(manifest, /<requestedExecutionLevel\b[^>]*\blevel="requireAdministrator"/);
+    assert.match(manifest, /<requestedExecutionLevel\b[^>]*\buiAccess="false"/);
   } finally {
     for (const [name, value] of previous) {
       if (value === undefined) delete process.env[name];

@@ -2,7 +2,7 @@
 
 Use English for code, comments, application text, documentation, commit messages, issues, and pull requests. Preserve user-authored script contents, names, paths, historical records, and compatibility identifiers in their original form.
 
-Start with [ARCHITECTURE.md](ARCHITECTURE.md). Current product changes belong in `Core/`, `Backend/`, `UpdateHost/`, `PortableLauncher/`, and `Presentation.Electron/`. Archived WinUI/WPF projects do not validate the Electron interface.
+Start with [ARCHITECTURE.md](ARCHITECTURE.md). The portable product lives in `Core/`, `Backend/`, `UpdateHost/`, `PortableLauncher/`, and `Presentation.Electron/`. Keep one runtime and one portable release family.
 
 ## Environment
 
@@ -43,7 +43,7 @@ npm.cmd run build -- --out "$work/frontend"
 Pop-Location
 ```
 
-`npm.cmd run format` applies Prettier according to `.prettierrc.json` and `.prettierignore`. `.editorconfig` covers other source files. `architecture:check` validates layer dependencies and isolation from historical sources.
+`npm.cmd run format` applies Prettier according to `.prettierrc.json` and `.prettierignore`. `.editorconfig` covers other source files. `architecture:check` validates layer dependencies and the limited standalone storage-policy source link.
 
 Node checks use adapters and temporary profiles. The Windows file-identity check is explicitly skipped on other operating systems. Three integration checks require snapshots from the .NET backend suite; CI supplies these inputs:
 
@@ -78,7 +78,7 @@ npm.cmd run release:identity
 
 `release:identity` reads Git without changing tags. `node scripts/compute-release.cjs --json` exposes the same identity for tools. `package.json.version` is a development template and does not determine official versions.
 
-Stable publication runs on `main` after Windows CI passes. Approved open PRs from this repository produce previews named `X.Y.Z-test.<run>.<attempt>.<PR>`. The publisher runs trusted code from `main`, rejects fork or stale-head builds, and never replaces existing release assets. PR builds do not receive signing or publication credentials. See [UPDATES.md](UPDATES.md) for channel selection, retries, signing, and older-client recovery.
+Stable publication runs on `main` after Windows CI passes. Approved open PRs from this repository produce previews named `X.Y.Z-test.<run>.<attempt>.<PR>`. The publisher runs trusted code from `main`, rejects fork or stale-head builds, and never replaces existing release assets. PR builds do not receive signing or publication credentials. See [UPDATES.md](UPDATES.md) for channel selection, retries, signing, and portable-client compatibility.
 
 ## Backend and Core
 
@@ -125,13 +125,21 @@ Build the complete distribution with fresh paths:
 ./tools/Package-Electron.ps1 -BuildRoot "$work/build" -OutputRoot "$work/package"
 ```
 
-The build uses Electron's official runtime installer, checks types, runs Node tests, and publishes Backend and UpdateHost. Packaging creates NSIS and an exact owned-file inventory. `-DirectoryOnly` produces an unpacked app directory.
+The build downloads the pinned official Electron runtime, checks types, runs Node tests, and publishes Backend and UpdateHost. Packaging produces `win-unpacked` and its exact payload inventory. There is no executable installer target.
 
-Portable packaging also requires the Visual Studio x64 C++ build tools and Windows SDK. Build its launcher with `tools/Build-PortableLauncher.ps1`, then pass the unpacked application directory and launcher to `tools/Build-PortablePackage.ps1`. Use `tools/New-PortableReleaseManifest.ps1` to generate the separate release manifest. All inputs must use the same release version and source commit. The ZIP contains `App`, a root launcher and package descriptors, never `Data`. See the Windows workflow for the exact build sequence.
+Portable packaging requires the Visual Studio x64 C++ build tools and Windows SDK. After the commands above, build the root launcher and ZIP from the same release identity:
 
-`tools/Test-PortableLauncher.ps1` checks native argument forwarding and process behavior. `tools/Test-PortablePackage.ps1` checks archive inventory and release identity. `tools/Test-PortableUpdater.ps1` runs the real baseline/candidate update and rollback in a disposable Windows environment. Its separately built baseline is a test fixture and must not be published as a release asset. Changes to portable layout must keep the native helper, `RuntimeProfileLayout`, TypeScript deployment resolver, packaging script and their tests consistent.
+```powershell
+$info = Get-Content -LiteralPath "$work/build/frontend/build-info.json" -Raw | ConvertFrom-Json
+./tools/Build-PortableLauncher.ps1 -OutputRoot "$work/launcher" -Version $info.version -IconPath "$work/build/frontend/app.ico"
+./tools/Build-PortablePackage.ps1 -ApplicationRoot "$work/package/win-unpacked" -LauncherPath "$work/launcher/Bezoro.AhkManager.exe" -OutputRoot "$work/portable" -Version $info.version -Commit $info.commit
+```
 
-`tools/Test-UpdateInstallation.ps1` installs, updates, and rolls back between real packages. Use a disposable Windows environment without a prior installation/profile, as described in [SAFE-TESTS.md](SAFE-TESTS.md). CI prepares that environment. A local package build never publishes a GitHub release.
+Use `tools/New-PortableReleaseManifest.ps1` to generate the protocol-2 release manifest. All inputs must use the same version and source commit. The ZIP contains `App`, a root launcher and package descriptors, never `Data`. See the Windows workflow for publication and signature preparation.
+
+`tools/Test-PortableLauncher.ps1` checks the embedded execution-level manifest, actual elevated child token, argument forwarding and process behavior. `tools/Test-PortablePackage.ps1` checks archive inventory and release identity. `tools/Test-PortableUpdater.ps1` runs the real baseline/candidate update and rollback in a disposable Windows environment. Its separately built baseline is a test fixture and must not be published as a release asset. Changes to portable layout must keep the native helper, `RuntimeProfileLayout`, TypeScript deployment resolver, packaging script and their tests consistent.
+
+Use a disposable Windows environment without an existing Manager or personal profile for packaged integration tests, as described in [SAFE-TESTS.md](SAFE-TESTS.md). CI prepares that environment. A local package build never publishes a GitHub release.
 
 ## Preparing a change
 
@@ -139,4 +147,4 @@ Keep process/persistence rules in Core, protocol validation in Backend, native i
 
 When contracts change, review `Core/Models`, `Backend/Protocol.cs`, `Presentation.Electron/src/shared`, JSON contexts, and runtime validators together. Preserve existing profile, registry, and mutex identifiers. Format changes need prior-profile and invalid-data coverage.
 
-Describe the reproduction, resulting behavior, and relevant validation in the PR. Inspect harness screenshots for visual changes. CI preserves logs and artifacts on failure. Historical native-test limits remain documented in [VALIDATION.md](VALIDATION.md).
+Describe the reproduction, resulting behavior, and relevant validation in the PR. Inspect harness screenshots for visual changes. CI preserves logs and artifacts on failure. [VALIDATION.md](VALIDATION.md) describes the evidence required to support a result and its limits.

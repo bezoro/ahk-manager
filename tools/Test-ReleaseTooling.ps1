@@ -2,18 +2,17 @@
 param([Parameter(Mandatory = $true)][string]$OutputRoot)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-Import-Module (Join-Path $PSScriptRoot 'Release-Limits.psm1') -Force
 if (-not [IO.Path]::IsPathFullyQualified($OutputRoot) -or (Test-Path -LiteralPath $OutputRoot)) { throw 'Use an absolute, fresh test output directory.' }
 [IO.Directory]::CreateDirectory($OutputRoot) | Out-Null
 $checks = [Collections.Generic.List[string]]::new()
 $commit = 'a' * 40
-$installer = Join-Path $OutputRoot 'AHK-Manager-1.2.99-Setup-x64.exe'
-$manifestPath = Join-Path $OutputRoot 'ahk-manager-release.json'
+$archivePath = Join-Path $OutputRoot 'AHK-Manager-1.2.99-Portable-x64.zip'
+$manifestPath = Join-Path $OutputRoot 'ahk-manager-portable-release.json'
 $publisher = Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1'
 $publicationStatus = Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1'
 $savedEnvironment = @{}
 foreach ($name in @('GITHUB_ACTIONS','GITHUB_EVENT_NAME','GITHUB_REF','GITHUB_REPOSITORY','GITHUB_SHA','GITHUB_TOKEN')) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
-$global:AhkReleaseToolingFixture = @{ Release = $null; Tag = $null; AnnotatedTags = @{}; TagCreateRaceCommit = $null; TagAfterReleaseGet = $null; PublicationRequest = $null; StatusCode = 0; FailManifestUpload = $false; Calls = [Collections.Generic.List[string]]::new() }
+$global:AhkReleaseToolingFixture = @{ Release = $null; Tag = $null; AnnotatedTags = @{}; TagCreateRaceCommit = $null; TagAfterReleaseGet = $null; PublicationRequest = $null; StatusCode = 0; FailManifestUpload = $false; InjectAssetOnFinalRead = $false; Calls = [Collections.Generic.List[string]]::new() }
 
 function Assert-Check([bool]$Value, [string]$Name) { if (-not $Value) { throw $Name }; $checks.Add($Name); Write-Host "PASS $Name" }
 function New-FixtureGitTag([string]$Sha, [string]$Type = 'commit') { return [pscustomobject]@{ ref = 'refs/tags/v1.2.99'; object = [pscustomobject]@{ type = $Type; sha = $Sha } } }
@@ -71,45 +70,48 @@ function Invoke-RestMethod {
         $fixture.Release.draft = $false
         return $fixture.Release
     }
-    if ($Method -eq 'Get') { return $fixture.Release }
+    if ($Method -eq 'Get') {
+        if ($fixture.InjectAssetOnFinalRead) {
+            $fixture.InjectAssetOnFinalRead = $false
+            $fixture.Release.assets += [pscustomobject]@{ name = 'unexpected.exe'; size = 1; state = 'uploaded'; digest = ('sha256:' + ('0' * 64)) }
+        }
+        return $fixture.Release
+    }
     throw 'Unexpected mock API request. No network fallback is allowed.'
 }
 
 try {
     Write-Host 'Release tooling checks use in-process HTTP mocks. No GitHub release is created.'
-    foreach ($boundary in @(@{ bytes = -1L; accepted = $false }, @{ bytes = 0L; accepted = $false }, @{ bytes = 1L; accepted = $true }, @{ bytes = 1GB; accepted = $true }, @{ bytes = 1GB + 1L; accepted = $false })) {
-        Assert-Check ((Test-ReleaseInstallerLength $boundary.bytes) -eq $boundary.accepted) "shared installer length bound: $($boundary.bytes) bytes"
-    }
     $frontend = Join-Path $OutputRoot 'frontend'
     [IO.Directory]::CreateDirectory($frontend) | Out-Null
     [IO.File]::WriteAllText((Join-Path $frontend 'build-info.json'), '{"versions":{"node":"fixture"},"build":"production"}')
     & (Join-Path $PSScriptRoot 'Set-ReleaseBuildInfo.ps1') -FrontendRoot $frontend -Version '1.2.99' -Commit $commit
     $info = Get-Content -LiteralPath (Join-Path $frontend 'build-info.json') -Raw | ConvertFrom-Json
-    Assert-Check ($info.version -eq '1.2.99' -and $info.commit -eq $commit -and $info.updateProtocol -eq 1 -and $info.versions.node -eq 'fixture') 'build provenance preserves version commit protocol and existing fields'
-    [IO.File]::WriteAllBytes($installer, [byte[]](1..255))
-    & (Join-Path $PSScriptRoot 'New-ReleaseManifest.ps1') -InstallerPath $installer -OutputPath $manifestPath -Version '1.2.99' -Commit $commit -Notes 'Teste: atualização e recuperação.'
-    & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository 'bezoro/ahk-manager' -Commit $commit -ValidateOnly
+    Assert-Check ($info.version -eq '1.2.99' -and $info.commit -eq $commit -and $info.updateProtocol -eq 2 -and $info.versions.node -eq 'fixture') 'build provenance preserves version commit protocol and existing fields'
+    [IO.File]::WriteAllBytes($archivePath, [byte[]](1..255))
+    & (Join-Path $PSScriptRoot 'New-PortableReleaseManifest.ps1') -ArchivePath $archivePath -OutputPath $manifestPath -Version '1.2.99' -Commit $commit -Notes 'Update and recovery fixture.'
+    & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository 'bezoro/ahk-manager' -Commit $commit -ValidateOnly
     Assert-Check ($global:AhkReleaseToolingFixture.Calls.Count -eq 0) 'manifest validation checks SHA256 SHA512 and size without network access'
-    $isoManifest = Join-Path $OutputRoot 'iso-notes/ahk-manager-release.json'
-    & (Join-Path $PSScriptRoot 'New-ReleaseManifest.ps1') -InstallerPath $installer -OutputPath $isoManifest -Version '1.2.99' -Commit $commit -Notes '2026-10-28T00:00:00Z'
-    & $publisher -InstallerPath $installer -ManifestPath $isoManifest -Repository 'bezoro/ahk-manager' -Commit $commit -ValidateOnly
+    $isoManifest = Join-Path $OutputRoot 'iso-notes/ahk-manager-portable-release.json'
+    & (Join-Path $PSScriptRoot 'New-PortableReleaseManifest.ps1') -ArchivePath $archivePath -OutputPath $isoManifest -Version '1.2.99' -Commit $commit -Notes '2026-10-28T00:00:00Z'
+    & $publisher -PortableArchivePath $archivePath -PortableManifestPath $isoManifest -Repository 'bezoro/ahk-manager' -Commit $commit -ValidateOnly
     Assert-Check ($global:AhkReleaseToolingFixture.Calls.Count -eq 0) 'ISO-looking release notes retain their JSON string type'
-    $original = [IO.File]::ReadAllBytes($installer)
-    [IO.File]::WriteAllBytes($installer, [byte[]](1,2,3))
+    $original = [IO.File]::ReadAllBytes($archivePath)
+    [IO.File]::WriteAllBytes($archivePath, [byte[]](1,2,3))
     $refused = $false
-    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository 'bezoro/ahk-manager' -Commit $commit -ValidateOnly } catch { $refused = $true }
-    Assert-Check $refused 'modified installer is rejected before publication'
-    [IO.File]::WriteAllBytes($installer, $original)
+    try { & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository 'bezoro/ahk-manager' -Commit $commit -ValidateOnly } catch { $refused = $true }
+    Assert-Check $refused 'modified portable archive is rejected before publication'
+    [IO.File]::WriteAllBytes($archivePath, $original)
 
     $env:GITHUB_ACTIONS = 'true'; $env:GITHUB_EVENT_NAME = 'pull_request'; $env:GITHUB_REF = 'refs/heads/main'
     $env:GITHUB_REPOSITORY = 'bezoro/ahk-manager'; $env:GITHUB_SHA = $commit
     $env:GITHUB_TOKEN = 'fixture-only-not-a-credential'
     $refused = $false
-    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
+    try { & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
     Assert-Check ($refused -and $global:AhkReleaseToolingFixture.Calls.Count -eq 0) 'pull requests cannot publish even with a supplied token'
 
     $fixture = $global:AhkReleaseToolingFixture
-    $fixture.Release = [pscustomobject]@{ tag_name = 'v1.2.99'; target_commitish = $commit; draft = $false; prerelease = $false; assets = @([pscustomobject]@{ name = [IO.Path]::GetFileName($installer); state = 'uploaded' }, [pscustomobject]@{ name = 'ahk-manager-release.json'; state = 'uploaded' }) }
+    $fixture.Release = [pscustomobject]@{ tag_name = 'v1.2.99'; target_commitish = $commit; draft = $false; prerelease = $false; assets = @([pscustomobject]@{ name = [IO.Path]::GetFileName($archivePath); state = 'uploaded' }, [pscustomobject]@{ name = 'ahk-manager-portable-release.json'; state = 'uploaded' }) }
     $completeRelease = $fixture.Release | ConvertTo-Json -Depth 5
     $fixture.Tag = New-FixtureGitTag $commit
     $before = $fixture.Calls.Count
@@ -138,7 +140,7 @@ try {
     $fixture.Release.draft = $false
     $fixture.Tag = New-FixtureGitTag $commit
     $assetsRefused = $true
-    foreach ($assets in @(@(), @([pscustomobject]@{ name = [IO.Path]::GetFileName($installer); state = 'uploaded' }, [pscustomobject]@{ name = 'ahk-manager-release.json'; state = 'new' }), @([pscustomobject]@{ name = [IO.Path]::GetFileName($installer); state = 'uploaded' }, [pscustomobject]@{ name = 'unexpected-manifest.json'; state = 'uploaded' }))) {
+    foreach ($assets in @(@(), @([pscustomobject]@{ name = [IO.Path]::GetFileName($archivePath); state = 'uploaded' }, [pscustomobject]@{ name = 'ahk-manager-portable-release.json'; state = 'new' }), @([pscustomobject]@{ name = [IO.Path]::GetFileName($archivePath); state = 'uploaded' }, [pscustomobject]@{ name = 'unexpected-manifest.json'; state = 'uploaded' }))) {
         $fixture.Release.assets = $assets
         $before = $fixture.Calls.Count
         $refused = $false
@@ -224,17 +226,24 @@ try {
     $env:GITHUB_EVENT_NAME = 'push'
     $global:AhkReleaseToolingFixture.FailManifestUpload = $true
     $refused = $false
-    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
+    try { & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
     Assert-Check ($refused -and $global:AhkReleaseToolingFixture.Release.draft -and $global:AhkReleaseToolingFixture.Release.assets.Count -eq 1 -and $global:AhkReleaseToolingFixture.Calls[-1] -notmatch '^Patch') 'interrupted upload leaves an unpublished draft'
     $global:AhkReleaseToolingFixture.FailManifestUpload = $false
-    & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit
+    & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit
     Assert-Check (-not $fixture.Release.draft -and $fixture.Release.assets.Count -eq 2 -and $fixture.Calls[-1] -match '^Patch' -and $fixture.PublicationRequest.draft -eq $false -and $fixture.PublicationRequest.make_latest -ceq 'legacy') 'draft receives both assets before publication with GitHub semantic-version latest selection'
     $before = $global:AhkReleaseToolingFixture.Calls.Count
-    & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit
+    & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit
     Assert-Check ($fixture.Calls.Count -eq $before + 3 -and @($fixture.Calls.GetRange($before, 3) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'identical published release verifies its real Git ref without mutation'
+    $originalAssets = @($fixture.Release.assets)
+    $fixture.Release.assets += [pscustomobject]@{ name = 'unexpected.exe'; state = 'uploaded' }
+    $before = $fixture.Calls.Count
+    $refused = $false
+    try { & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
+    Assert-Check ($refused -and @($fixture.Calls.GetRange($before, $fixture.Calls.Count - $before) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'unexpected assets never authorize mutation of a published portable release'
+    $fixture.Release.assets = $originalAssets
     $fixture.Release.prerelease = $true
     $refused = $false
-    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
+    try { & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
     Assert-Check $refused 'a prerelease cannot be reused or promoted as the stable release'
     $refused = $false
     try { & $publicationStatus -Repository $env:GITHUB_REPOSITORY -Version '1.2.99' -Commit $commit } catch { $refused = $true }
@@ -243,14 +252,14 @@ try {
     $global:AhkReleaseToolingFixture.Release.assets[0].digest = 'sha256:' + ('0' * 64)
     $before = $global:AhkReleaseToolingFixture.Calls.Count
     $refused = $false
-    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
+    try { & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
     Assert-Check ($refused -and $fixture.Calls.Count -eq $before + 2 -and @($fixture.Calls.GetRange($before, 2) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'published assets with different hashes are never overwritten'
 
     $fixture.Release = $null
     $fixture.Tag = New-FixtureGitTag ('b' * 40)
     $before = $fixture.Calls.Count
     $refused = $false
-    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
+    try { & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
     $requestCount = $fixture.Calls.Count - $before
     Assert-Check ($refused -and $null -eq $fixture.Release -and $fixture.Tag.object.sha -ceq ('b' * 40) -and $requestCount -ge 1 -and @($fixture.Calls.GetRange($before, $requestCount) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'an existing Git tag on another commit cannot be published or overwritten'
 
@@ -258,16 +267,23 @@ try {
     $fixture.TagCreateRaceCommit = 'b' * 40
     $before = $fixture.Calls.Count
     $refused = $false
-    try { & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
+    try { & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
     $raceCalls = @($fixture.Calls.GetRange($before, $fixture.Calls.Count - $before))
     Assert-Check ($refused -and $null -eq $fixture.Release -and $fixture.Tag.object.sha -ceq ('b' * 40) -and @($raceCalls | Where-Object { $_ -match '^Post .*/git/refs$' }).Count -eq 1 -and @($raceCalls | Where-Object { $_ -match '^Post ' -and $_ -notmatch '/git/refs$' }).Count -eq 0 -and $raceCalls[-1] -match '^Get .*/git/ref/') 'concurrent tag creation with another commit is rechecked after HTTP 422 before any release is created'
 
     $fixture.Tag = $null
     $fixture.TagCreateRaceCommit = $commit
     $before = $fixture.Calls.Count
-    & $publisher -InstallerPath $installer -ManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit
+    & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit
     $raceCalls = @($fixture.Calls.GetRange($before, $fixture.Calls.Count - $before))
     Assert-Check (-not $fixture.Release.draft -and $fixture.Tag.object.sha -ceq $commit -and @($raceCalls | Where-Object { $_ -match '^Post .*/git/refs$' }).Count -eq 1 -and $raceCalls[-1] -match '^Patch ') 'concurrent creation of the exact same Git tag is verified and publication completes once'
+    $fixture.Release = $null
+    $fixture.Tag = $null
+    $fixture.PublicationRequest = $null
+    $fixture.InjectAssetOnFinalRead = $true
+    $refused = $false
+    try { & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit } catch { $refused = $true }
+    Assert-Check ($refused -and $fixture.Release.draft -and $null -eq $fixture.PublicationRequest) 'a concurrently added asset leaves the portable release unpublished'
     [IO.File]::WriteAllText((Join-Path $OutputRoot 'summary.json'), (@{ passed = $true; checks = $checks.ToArray(); network = 'mocked'; published = $false } | ConvertTo-Json -Depth 4))
 }
 finally {

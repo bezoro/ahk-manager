@@ -7,9 +7,6 @@ namespace Bezoro.AhkManager.UpdateHost;
 internal static class UpdateProtocol
 {
     internal const int MaximumPlanBytes = 64 * 1024;
-    internal const string RegistryPath = @"Software\62d1c352-a9c4-556f-981c-2237ce4d0b68";
-    internal const string UninstallRegistryPath =
-        @"Software\Microsoft\Windows\CurrentVersion\Uninstall\62d1c352-a9c4-556f-981c-2237ce4d0b68";
     internal static readonly JsonSerializerOptions Json = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -120,29 +117,27 @@ internal static class UpdateProtocol
     internal static void Validate(UpdatePlan plan)
     {
         if (
-            !(
-                plan.SchemaVersion == 1 && plan.Deployment is null
-                || plan.SchemaVersion == 2 && plan.Deployment == "portable"
-            )
+            plan.SchemaVersion != 2
+            || plan.Deployment != "portable"
             || plan.OperationId == Guid.Empty
             || plan.ParentPid <= 0
             || plan.ParentStartedAtUtc.Offset != TimeSpan.Zero
             || plan.ParentStartedAtUtc.ToUnixTimeMilliseconds() <= 0
             || !ReleaseVersion(plan.Version)
-            || !Hash(plan.InstallerSha256)
+            || !Hash(plan.ArchiveSha256)
         )
             throw new InvalidDataException("Invalid update protocol or identity.");
-        _ = UpdatePaths.Local(plan.InstallDirectory);
-        _ = UpdatePaths.Local(plan.InstallerPath);
+        _ = UpdatePaths.Local(plan.ApplicationDirectory);
+        _ = UpdatePaths.Local(plan.ArchivePath);
         if (plan.Fallback is { } fallback)
         {
             if (
                 !ReleaseVersion(fallback.Version)
-                || !Hash(fallback.InstallerSha256)
+                || !Hash(fallback.ArchiveSha256)
                 || SameVersion(fallback.Version, plan.Version)
             )
                 throw new InvalidDataException("Invalid fallback identity.");
-            _ = UpdatePaths.Local(fallback.InstallerPath);
+            _ = UpdatePaths.Local(fallback.ArchivePath);
         }
     }
 

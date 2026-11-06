@@ -50,7 +50,7 @@ export const text = {
   updateNew: 'New version',
   updateNoNotes: 'This version has no release notes.',
   updateCached: 'Available on this computer',
-  updateInstallerUnavailable: 'Installer unavailable',
+  updatePackageUnavailable: 'Package unavailable',
   updateNoHistory: 'No versions were found. Check for updates again later.',
   updateOpen: 'View update',
   authorityNormal: 'Standard',
@@ -63,9 +63,9 @@ export const text = {
   editorAdvanced: 'Advanced arguments',
   startupAdvanced: 'Previous installation',
   descriptionSource: 'Description in file',
-  launchManagerAsAdministrator: 'Run Manager as administrator',
+  managerAdministratorRequired: 'Manager always runs as administrator.',
   managerAdministratorHint:
-    'Administrator scripts start at sign-in only when this option is enabled. Windows requests permission to configure elevated startup.',
+    'Windows may request UAC approval when Manager opens. Each script keeps its own administrator preference.',
   requestAdministration: 'Reopen as administrator',
   checkAdministration: 'Check transfer',
   administrationPending:

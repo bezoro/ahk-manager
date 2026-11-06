@@ -129,7 +129,7 @@ function state(): HostState {
       editorPath: null,
       editorArguments: [],
       launchManagerAtLogin: false,
-      launchManagerAsAdministrator: false,
+      launchManagerAsAdministrator: true,
       showWindowAtLogin: false,
       startInTray: false,
       theme: 'System',
@@ -288,7 +288,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     },
   );
   await check(
-    'startup and administrator preferences remain independent drafts through cancel, failure and confirmed save',
+    'startup remains configurable through cancel, failure and confirmed save while Manager administration is required',
     async () => {
       const initial = {
         ...host,
@@ -308,20 +308,21 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       const openSettings = async (): Promise<HTMLElement> => {
         button(text.preferences).click();
         await until(
-          () => !!document.getElementById('settings-administrator'),
-          'Administrator preference missing',
+          () => !!document.getElementById('settings-administrator-policy'),
+          'Administrator policy missing',
         );
         await tick();
         return document.querySelector<HTMLElement>('[role="dialog"]')!;
       };
-      const administrator = (): HTMLInputElement =>
-        document.getElementById('settings-administrator') as HTMLInputElement;
+      const administrationRequired = (): boolean =>
+        dialog.textContent?.includes(text.managerAdministratorRequired) === true &&
+        !dialog.querySelector('#settings-administrator');
       const login = (): HTMLInputElement =>
         document.getElementById('settings-launch-at-login') as HTMLInputElement;
       let dialog = await openSettings();
       assert(
         dialog.querySelector('.preference-section h3')?.textContent === text.startup &&
-          administrator().checked &&
+          administrationRequired() &&
           login().checked,
         'Startup priority or default preferences lost',
       );
@@ -333,18 +334,18 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
             ?.includes('VS Code'),
         'Advanced arguments or automatic editor default lost',
       );
-      administrator().click();
+      login().click();
       await tick();
       assert(
-        login().checked &&
+        !login().checked &&
+          administrationRequired() &&
           !(await window.fixtureHarness.calls()).some((call) => call.method === 'saveSettings'),
-        'Administrator toggle changed login or persisted before save',
+        'Startup draft changed administrator policy or persisted before save',
       );
       button(text.cancel, dialog).click();
       await tick();
       dialog = await openSettings();
-      assert(administrator().checked && login().checked, 'Cancelled draft persisted');
-      administrator().click();
+      assert(administrationRequired() && login().checked, 'Cancelled startup draft persisted');
       login().click();
       await tick();
       await window.fixtureHarness.setResponse('saveSettings', {
@@ -357,7 +358,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       });
       button(text.save, dialog).click();
       await until(() => !!dialog.querySelector('.notice'), 'Save failure missing');
-      assert(!administrator().checked && !login().checked, 'Failure discarded startup draft');
+      assert(administrationRequired() && !login().checked, 'Failure discarded startup draft');
       await window.fixtureHarness.setResponse('saveSettings', {
         value: { outcome: 'Confirmed', code: 'None', detail: null, correlationId: null },
       });
@@ -371,9 +372,9 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
         .at(-1)!.args[0] as ManagerSnapshot['settings'];
       assert(
         !saved.launchManagerAtLogin &&
-          !saved.launchManagerAsAdministrator &&
+          saved.launchManagerAsAdministrator &&
           saved.startInTray === initial.snapshot.settings.startInTray,
-        'Saved startup flags were coupled or missing',
+        'Saved startup choice or mandatory administrator policy was lost',
       );
       await window.fixtureHarness.setState({
         ...initial,
@@ -381,7 +382,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       });
       await tick();
       dialog = await openSettings();
-      assert(!administrator().checked && !login().checked, 'Reopened persisted preferences differ');
+      assert(administrationRequired() && !login().checked, 'Reopened persisted preferences differ');
       button(text.cancel, dialog).click();
       await tick();
       await window.fixtureHarness.resetResponses();
@@ -390,7 +391,7 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     },
   );
   await check(
-    'saving administrator preference waits for the closed dialog before requesting Windows approval',
+    'a startup save requiring Windows approval closes its dialog before requesting administration',
     async () => {
       await window.fixtureHarness.setState(host);
       await tick();
@@ -398,16 +399,16 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       await window.fixtureHarness.clearCalls();
       button(text.preferences).click();
       await until(
-        () => !!document.getElementById('settings-administrator'),
-        'Administrator preference missing',
+        () => !!document.getElementById('settings-launch-at-login'),
+        'Startup preference missing',
       );
-      (document.getElementById('settings-administrator') as HTMLInputElement).click();
+      (document.getElementById('settings-launch-at-login') as HTMLInputElement).click();
       await tick();
       assert(
         !(await window.fixtureHarness.calls()).some(
           (call) => call.method === 'requestAdministration',
         ),
-        'Toggling preference requested UAC',
+        'Editing the startup draft requested UAC',
       );
       await window.fixtureHarness.setResponse('saveSettings', {
         value: {
@@ -449,6 +450,78 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       await window.fixtureHarness.resetResponses();
       await window.fixtureHarness.setState(host);
       await tick();
+    },
+  );
+  await check(
+    'legacy standard-Manager settings save the required administrator mode without enabling Windows startup',
+    async () => {
+      const legacy = {
+        ...host,
+        snapshot: {
+          ...host.snapshot!,
+          settings: {
+            ...host.snapshot!.settings,
+            launchManagerAtLogin: false,
+            launchManagerAsAdministrator: false,
+          },
+        },
+      };
+      await window.fixtureHarness.setState(legacy);
+      await tick();
+      await window.fixtureHarness.resetResponses();
+      await window.fixtureHarness.clearCalls();
+      button(text.preferences).click();
+      await until(
+        () => !!document.getElementById('settings-administrator-policy'),
+        'Required administration explanation missing for a legacy profile',
+      );
+      const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+      assert(dialog, 'Legacy profile Preferences dialog missing');
+      try {
+        assert(
+          dialog.textContent?.includes(text.managerAdministratorRequired) === true &&
+            dialog.textContent?.includes(text.managerAdministratorHint) === true &&
+            !dialog.querySelector('#settings-administrator') &&
+            !(document.getElementById('settings-launch-at-login') as HTMLInputElement).checked,
+          'A legacy standard preference exposed an impossible mode or enabled startup',
+        );
+        assert(
+          !(await window.fixtureHarness.calls()).some((call) =>
+            ['saveSettings', 'requestAdministration', 'operate', 'saveMetadata'].includes(
+              call.method,
+            ),
+          ),
+          'Opening Preferences caused an effect before an explicit save',
+        );
+        await window.fixtureHarness.setResponse('saveSettings', {
+          value: { outcome: 'Confirmed', code: 'None', detail: null, correlationId: null },
+        });
+        button(text.save, dialog).click();
+        await until(() => !dialog.isConnected, 'Saving required administration did not finish');
+        const calls = await window.fixtureHarness.calls();
+        const saves = calls.filter((call) => call.method === 'saveSettings');
+        const saved = saves[0]?.args[0] as ManagerSnapshot['settings'];
+        assert(
+          saves.length === 1 &&
+            saved.launchManagerAsAdministrator &&
+            !saved.launchManagerAtLogin &&
+            JSON.stringify({ ...saved, launchManagerAsAdministrator: false }) ===
+              JSON.stringify(legacy.snapshot.settings),
+          'Required administration changed unrelated preferences or enabled Windows startup',
+        );
+        assert(
+          !calls.some((call) =>
+            ['requestAdministration', 'operate', 'saveMetadata'].includes(call.method),
+          ),
+          'Saving required administration replayed a launch or edited a script',
+        );
+      } finally {
+        if (dialog.isConnected) button(text.cancel, dialog).click();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+        await window.fixtureHarness.setState(host);
+        await tick();
+      }
     },
   );
   await check(
@@ -3526,8 +3599,10 @@ export async function previewPreferences(): Promise<AssertionRecord[]> {
     'Startup preferences not first',
   );
   assert(
-    (document.getElementById('settings-administrator') as HTMLInputElement).checked,
-    'Default administrator preference absent',
+    !!document.getElementById('settings-administrator-policy') &&
+      dialog.textContent?.includes(text.managerAdministratorRequired) === true &&
+      !document.getElementById('settings-administrator'),
+    'Mandatory administrator policy absent or still configurable',
   );
   const content = dialog.querySelector<HTMLElement>('.fui-DialogContent');
   if (content) content.scrollTop = 0;

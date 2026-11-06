@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { writeOwnedFiles } = require('./scripts/owned-files.cjs');
+const { writePortablePublisherPolicy } = require('./scripts/lib/portable-publisher-policy.cjs');
 const { validUpdateVersion } = require('./scripts/lib/update-versions.cjs');
 function stage(name) {
   const value = process.env[name];
@@ -61,7 +61,7 @@ module.exports = {
   extraResources: [{ from: path.join(frontend, 'tray.png'), to: 'tray.png' }],
   extraMetadata: {
     version: releaseVersion,
-    updateProtocol: 1,
+    updateProtocol: 2,
     sourceCommit,
     dependencies: {},
     devDependencies: {},
@@ -75,28 +75,12 @@ module.exports = {
   },
   forceCodeSigning: signed,
   win: {
-    target: [{ target: 'nsis', arch: ['x64'] }],
+    target: [{ target: 'dir', arch: ['x64'] }],
     icon: path.join(frontend, 'app.ico'),
-    requestedExecutionLevel: 'asInvoker',
+    requestedExecutionLevel: 'requireAdministrator',
     signAndEditExecutable: true,
     verifyUpdateCodeSignature: signed || publisherName !== null,
     ...(publisherName !== null ? { signtoolOptions: { publisherName: [publisherName] } } : {}),
-  },
-  nsis: {
-    oneClick: false,
-    perMachine: false,
-    packElevateHelper: false,
-    allowElevation: false,
-    allowToChangeInstallationDirectory: true,
-    deleteAppDataOnUninstall: false,
-    createDesktopShortcut: false,
-    createStartMenuShortcut: true,
-    runAfterFinish: false,
-    uninstallerIcon: path.join(frontend, 'app.ico'),
-    include: path.join(__dirname, 'scripts/installer.nsh'),
-    artifactName: 'AHK-Manager-${version}-Setup-x64.${ext}',
-    installerLanguages: ['en_US'],
-    language: '1033',
   },
   publish: {
     provider: 'github',
@@ -105,5 +89,5 @@ module.exports = {
     private: false,
     ...(publisherName !== null ? { publisherName: [publisherName] } : {}),
   },
-  afterSign: (context) => writeOwnedFiles(context, output, path.join(frontend, 'app.ico')),
+  afterPack: (context) => writePortablePublisherPolicy(context.appOutDir, publisherName),
 };

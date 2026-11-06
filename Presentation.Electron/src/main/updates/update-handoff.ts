@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import type { CachedInstaller, UpdateStore } from './update-store.js';
+import type { CachedPackage, UpdateStore } from './update-store.js';
 import { observeUpdateHost, updateHostRefusalMessage } from './update-host-diagnostics.js';
 
 const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -99,7 +99,7 @@ export async function updateRecoveryStatus(store: UpdateStore): Promise<string |
         latest = completed;
         notice =
           data.outcome === 'RolledBack'
-            ? 'A previous update failed and the previous installation was restored. Your version history is still available.'
+            ? 'A previous update failed and the previous portable application was restored. Your version history is still available.'
             : null;
       }
     } catch (error) {
@@ -125,7 +125,7 @@ export async function updateRecoveryStatus(store: UpdateStore): Promise<string |
 export async function prepareUpdate(
   store: UpdateStore,
   operationId: string,
-  target: CachedInstaller,
+  target: CachedPackage,
   installDirectory: string,
   parentStartedAtUtc: string,
 ): Promise<PreparedUpdate> {
@@ -156,13 +156,14 @@ export async function prepareUpdate(
   await store.safeDirectory(path.dirname(directory), true);
   await fs.mkdir(directory, { mode: 0o700 });
   const plan = {
-    schemaVersion: store.deployment === 'portable' ? 2 : 1,
-    ...(store.deployment === 'portable' ? { deployment: 'portable' } : {}),
+    schemaVersion: 2,
+    deployment: 'portable',
     operationId,
     parentPid: process.pid,
     parentStartedAtUtc,
     installDirectory,
-    installerPath: target.installerPath,
+    // Protocol 2 keys are retained for existing portable clients and helper receipts.
+    installerPath: target.archivePath,
     installerSha256: target.sha256,
     version: target.version,
   };

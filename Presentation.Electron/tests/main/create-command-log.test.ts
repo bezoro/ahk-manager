@@ -5,17 +5,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { createCommandLog } from '../../src/main/logging/create-command-log.js';
 
-test('installed startup diagnostics retain early commands and failure without populating the migration destination', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-installed-log-'));
-  const profile = path.join(root, 'Bezoro', 'AhkManagerElectron');
+test('portable diagnostics retain early commands and failures without populating the profile', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-portable-log-'));
+  const data = path.join(root, 'Data');
+  const profile = path.join(data, 'Profile');
   fs.mkdirSync(profile, { recursive: true });
-  const log = createCommandLog({ mode: 'installed', dataDirectory: profile }, root);
+  const log = createCommandLog({ dataDirectory: data });
   t.after(() => {
     log.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
   assert.equal(log.status().available, true);
-  assert.equal(log.directory, path.join(root, 'Bezoro', 'AhkManagerElectronDiagnostics', 'Logs'));
+  assert.equal(log.directory, path.join(data, 'Logs'));
   assert.deepEqual(fs.readdirSync(profile), []);
   let starts = 0;
   const error = Object.assign(new Error('private startup error'), { code: 'ENOENT' });
@@ -59,7 +60,7 @@ test('portable logging stays with Data and leaves a fresh profile empty', (t) =>
   const data = path.join(root, 'Data');
   const profile = path.join(data, 'Profile');
   fs.mkdirSync(profile, { recursive: true });
-  const log = createCommandLog({ mode: 'portable', dataDirectory: data }, root);
+  const log = createCommandLog({ dataDirectory: data });
   t.after(() => {
     log.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -69,8 +70,8 @@ test('portable logging stays with Data and leaves a fresh profile empty', (t) =>
   assert.deepEqual(fs.readdirSync(profile), []);
 });
 
-test('installed startup diagnostics reject redirected ancestors and preserve unrelated files without blocking commands', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-installed-log-unsafe-'));
+test('portable diagnostics reject redirected ancestors and preserve unrelated files without blocking commands', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-portable-log-unsafe-'));
   const outside = path.join(root, 'external');
   const local = path.join(root, 'Local');
   fs.mkdirSync(outside);
@@ -82,10 +83,7 @@ test('installed startup diagnostics reject redirected ancestors and preserve unr
     path.join(local, 'Bezoro'),
     process.platform === 'win32' ? 'junction' : 'dir',
   );
-  const log = createCommandLog(
-    { mode: 'installed', dataDirectory: path.join(local, 'Profile') },
-    local,
-  );
+  const log = createCommandLog({ dataDirectory: path.join(local, 'Bezoro', 'Data') });
   t.after(() => {
     log.close();
     fs.rmSync(root, { recursive: true, force: true });

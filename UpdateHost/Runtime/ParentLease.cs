@@ -46,7 +46,7 @@ internal sealed class ParentLease : IDisposable, IParentProcess
                 !Native.QueryFullProcessImageName(process.SafeHandle, 0, image, ref length)
                 || !UpdatePaths.Equal(
                     image.ToString(),
-                    System.IO.Path.Combine(plan.InstallDirectory, "Bezoro.AhkManager.exe")
+                    System.IO.Path.Combine(plan.ApplicationDirectory, "Bezoro.AhkManager.exe")
                 )
             )
                 throw new InvalidDataException("Manager image changed.");

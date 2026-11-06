@@ -50,9 +50,8 @@ import type {
   WindowPlacement,
 } from '../shared/contracts.js';
 import type { UpdateService } from './updates/update-service.js';
-import type { UpdateStore, CachedInstaller } from './updates/update-store.js';
+import type { UpdateStore, CachedPackage } from './updates/update-store.js';
 import { compareVersions } from './updates/github-updates.js';
-import { verifyCachedInstallerSignature } from './updates/electron-update-download.js';
 import { prepareUpdate, type PreparedUpdate } from './updates/update-handoff.js';
 import { shutdownAndCommitUpdate } from './updates/update-shutdown.js';
 
@@ -131,11 +130,7 @@ export function startManager(): void {
     return;
   }
   // Chromium storage never opens or copies a framework's previous operational profile.
-  app.setPath(
-    'userData',
-    deployment.chromiumDirectory ??
-      path.join(app.getPath('appData'), 'Bezoro', 'AhkManagerElectron', 'Chromium'),
-  );
+  app.setPath('userData', deployment.chromiumDirectory);
   let window: BrowserWindow | null = null;
   let guard: DocumentGuard | null = null;
   let backend: BackendClient | null = null;
@@ -364,13 +359,12 @@ export function startManager(): void {
       const current = resolveDeployment(app.getPath('exe'), localAppData);
       if (!samePath(current.dataDirectory, deployment.dataDirectory))
         throw new Error('The data location changed during startup. Open Manager again.');
-      if (deployment.mode === 'portable')
-        storageLease = await acquirePortableStorageLease(deployment, (error) => {
-          // Losing namespace protection must stop writes and cannot authorize an update.
-          controller?.setConnection('failed', safeError(error));
-          quitting = true;
-          app.exit(65);
-        });
+      storageLease = await acquirePortableStorageLease(deployment, (error) => {
+        // Losing namespace protection must stop writes and cannot authorize an update.
+        controller?.setConnection('failed', safeError(error));
+        quitting = true;
+        app.exit(65);
+      });
       try {
         await importLegacyUpdateChannel(deployment);
       } catch (error) {
@@ -378,7 +372,7 @@ export function startManager(): void {
       }
       // Logging avoids migration destinations. A pending data move is completed above
       // before any log files are opened or written.
-      commandLog = createCommandLog(deployment, localAppData);
+      commandLog = createCommandLog(deployment);
       process.on('uncaughtExceptionMonitor', (error) => recordFailure('uncaughtException', error));
     } catch (error) {
       storageError = safeError(error);
@@ -548,7 +542,7 @@ export function startManager(): void {
       throw error;
     }
   }
-  async function applyUpdate(operationId: string, target: CachedInstaller): Promise<void> {
+  async function applyUpdate(operationId: string, target: CachedPackage): Promise<void> {
     if (
       !updateStore ||
       !window ||
@@ -566,9 +560,7 @@ export function startManager(): void {
     let prepared: PreparedUpdate | null = null;
     let shutdownStarted = false;
     try {
-      if (deployment.mode === 'portable')
-        await verifyCachedPortablePackageSignature(target.installerPath);
-      else await verifyCachedInstallerSignature(target.installerPath);
+      await verifyCachedPortablePackageSignature(target.archivePath);
       const created = app
         .getAppMetrics()
         .find((metric) => metric.pid === process.pid)?.creationTime;
@@ -888,30 +880,6 @@ export function startManager(): void {
       const initialized = await backend.request<OperationResult>('initializeProfile', {});
       if (initialized.outcome !== 'Confirmed')
         throw new Error(initialized.detail ?? 'The application profile could not be prepared.');
-      if (
-        deployment.mode !== 'portable' &&
-        backend.profileRoot &&
-        !lifecycle.loginRequested &&
-        !lifecycle.quietStartup
-      ) {
-        const exists = await fs.access(path.join(backend.profileRoot, 'settings.json')).then(
-          () => true,
-          () => false,
-        );
-        if (!exists && window) {
-          const choice = await dialog.showMessageBox(window, {
-            type: 'question',
-            title: t.welcomeTitle,
-            message: t.welcomeQuestion,
-            detail: t.welcomeDetail,
-            buttons: [t.newProfile, t.chooseWinUiProfile],
-            defaultId: 0,
-            cancelId: 0,
-            noLink: true,
-          });
-          if (choice.response === 1) await controller.migrateProfile(true);
-        }
-      }
       controller.setSnapshot(await backend.request<ManagerSnapshot>('load', {}));
       controller.setConnection('ready');
       if (initialAdoption.descriptor) {
@@ -942,7 +910,7 @@ export function startManager(): void {
     }
   }
   function registerPortableApplication(owner: BackendClient): void {
-    if (!app.isPackaged || process.platform !== 'win32' || deployment.mode !== 'portable') return;
+    if (!app.isPackaged || process.platform !== 'win32') return;
     let appDataDirectory: string;
     try {
       appDataDirectory = app.getPath('appData');

@@ -31,31 +31,6 @@ public sealed partial class ManagerService : IManagerService
     public event EventHandler<ManagerSnapshot>? Changed;
     public string DataRoot { get; }
 
-    public static ManagerService CreateDefault(string? dataRoot = null)
-    {
-        var owner = new UserEffectOwner();
-        return new(
-            dataRoot
-                ?? Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Bezoro",
-                    "AhkManagerWinUI"
-                ),
-            owner,
-            new ProcessManager(owner, documentedControlsProven: true),
-            new UserStartupService(
-                new RegistryStartupAdapter(),
-                Environment.ProcessPath
-                    ?? throw new InvalidOperationException("Manager executable unavailable.")
-            ),
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Bezoro",
-                "AhkManager"
-            )
-        );
-    }
-
     // Trusted host composition only; no renderer or script input reaches this seam.
     public static ManagerService CreateForTrustedStartupHost(
         string dataRoot,
@@ -81,7 +56,8 @@ public sealed partial class ManagerService : IManagerService
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Bezoro",
                 "AhkManager"
-            )
+            ),
+            managerRequiresAdministrator: true
         );
     }
 
@@ -90,14 +66,15 @@ public sealed partial class ManagerService : IManagerService
         IEffectOwner owner,
         IProcessManager processes,
         UserStartupService startup,
-        string? legacyAuthorityDirectory = null
+        string? legacyAuthorityDirectory = null,
+        bool managerRequiresAdministrator = false
     )
     {
         DataRoot = ScriptPaths.LocalPath(dataRoot);
         this.owner = owner;
         this.processes = processes;
         this.startup = startup;
-        store = new(Path.Combine(DataRoot, "settings.json"));
+        store = new(Path.Combine(DataRoot, "settings.json"), managerRequiresAdministrator);
         journal = new(Path.Combine(DataRoot, "operations.json"));
         activity = new(DataRoot);
         importer = new(DataRoot, owner, legacyAuthorityDirectory);
@@ -216,6 +193,7 @@ public sealed partial class ManagerService : IManagerService
 
     async Task<OperationResult> Commit(SettingsDocument next, Guid? scriptId, CancellationToken ct)
     {
+        next = store.ApplyHostPolicy(next);
         var result = await store.SaveAsync(next, ct).ConfigureAwait(false);
         if (result.Succeeded)
         {

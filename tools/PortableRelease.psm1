@@ -48,7 +48,7 @@ function Read-PortableReleaseManifest {
     $identity = ConvertFrom-PortableReleaseJson $text
     foreach ($field in @('Version', 'Commit', 'PublishedAt', 'Notes')) {
         $parameter = 'Expected' + $field
-        if ($PSBoundParameters.ContainsKey($parameter) -and $identity.$field -cne $PSBoundParameters[$parameter]) { throw "The portable $field does not match the installer release." }
+        if ($PSBoundParameters.ContainsKey($parameter) -and $identity.$field -cne $PSBoundParameters[$parameter]) { throw "The portable $field does not match the approved portable release." }
     }
     if ($archive.Name -cne $identity.ArchiveName -or $archive.Length -ne $identity.ArchiveBytes) { throw 'The portable archive name or length does not match its manifest.' }
     $sha256 = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()

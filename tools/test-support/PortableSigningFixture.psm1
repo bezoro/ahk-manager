@@ -219,9 +219,9 @@ function Get-FixturePolicy([string]$ApplicationRoot, [string]$PublisherPolicyPat
     $baseline = $null
     try {
         $root = $policy.RootElement
-        $expected = @('schemaVersion', 'names', 'candidatePolicySha256', 'baselinePolicySha256', 'sourceCommit')
+        $expected = @('schemaVersion', 'names', 'candidatePolicySha256', 'baselinePolicySha256', 'sourceCommit', 'baselineSourceCommit')
         $names = @($root.EnumerateObject() | ForEach-Object Name)
-        if ($root.ValueKind -ne [Text.Json.JsonValueKind]::Object -or $names.Count -ne $expected.Count -or @($names | Where-Object { $_ -cnotin $expected }).Count -ne 0 -or $root.GetProperty('schemaVersion').GetInt32() -ne 1) { throw 'The test-only publisher policy schema is invalid.' }
+        if ($root.ValueKind -ne [Text.Json.JsonValueKind]::Object -or $names.Count -ne $expected.Count -or @($names | Where-Object { $_ -cnotin $expected }).Count -ne 0 -or $root.GetProperty('schemaVersion').GetInt32() -ne 2) { throw 'The test-only publisher policy schema is invalid.' }
         $publishers = $root.GetProperty('names')
         if ($publishers.ValueKind -ne [Text.Json.JsonValueKind]::Array -or $publishers.GetArrayLength() -gt 32) { throw 'The test-only publisher names are invalid.' }
         $values = [Collections.Generic.List[string]]::new()
@@ -234,13 +234,14 @@ function Get-FixturePolicy([string]$ApplicationRoot, [string]$PublisherPolicyPat
         $actual = (Get-FileHash -LiteralPath (Join-Path $ApplicationRoot 'resources/app-update.yml') -Algorithm SHA256).Hash.ToLowerInvariant()
         foreach ($field in @('candidatePolicySha256', 'baselinePolicySha256')) {
             $hash = $root.GetProperty($field).GetString()
-            if ($hash -cnotmatch '\A[0-9a-f]{64}\z' -or $hash -cne $actual) { throw 'The packaged publisher policy differs from the verified test-only policy.' }
+            if ($hash -cnotmatch '\A[0-9a-f]{64}\z' -or ($field -ceq 'baselinePolicySha256' -and $hash -cne $actual)) { throw 'The packaged publisher policy differs from the verified test-only policy.' }
         }
         $commit = $root.GetProperty('sourceCommit').GetString()
+        $baselineCommit = $root.GetProperty('baselineSourceCommit').GetString()
         $candidate = Read-FixtureJson $CandidateManifestPath
         $baseline = Read-FixtureJson $BaselineManifestPath
-        if ($commit -cnotmatch '\A[0-9a-f]{40}\z' -or $candidate.RootElement.GetProperty('commit').GetString() -cne $commit -or $baseline.RootElement.GetProperty('commit').GetString() -cne $commit) { throw 'Publisher fixture provenance differs from the exact tested manifests.' }
-        return [pscustomobject]@{ Names = $values.ToArray(); SourceCommit = $commit; PolicySha256 = $actual }
+        if ($commit -cnotmatch '\A[0-9a-f]{40}\z' -or $candidate.RootElement.GetProperty('commit').GetString() -cne $commit -or $baselineCommit -cnotmatch '\A[0-9a-f]{40}\z' -or $baseline.RootElement.GetProperty('commit').GetString() -cne $baselineCommit) { throw 'Publisher fixture provenance differs from the exact tested manifests.' }
+        return [pscustomobject]@{ Names = $values.ToArray(); SourceCommit = $commit; BaselineCommit = $baselineCommit; PolicySha256 = $actual }
     }
     finally { if ($baseline) { $baseline.Dispose() }; if ($candidate) { $candidate.Dispose() }; $policy.Dispose() }
 }
@@ -449,7 +450,7 @@ function New-PortableSigningFixture {
         Write-FixtureStage $state 'production-native-signature-proofs-complete'
         return [pscustomobject]@{
             Id = $id; OutputRoot = $output; CandidateSignaturePath = $candidateSignature; BaselineSignaturePath = $baselineSignature; PublisherNames = $policy.Names; ProbePublisherName = $publisher
-            Proof = [ordered]@{ fixture = $true; productionNativeCli = $true; publisherPolicyConfigured = $policy.Names.Count -gt 0; sourceCommit = $policy.SourceCommit; publisherPolicySha256 = $policy.PolicySha256; candidateManifestSha256 = $candidateHash; baselineManifestSha256 = $baselineHash; candidateVerified = $true; baselineVerified = $true; alteredManifestRefused = $true; differentPublisherRefused = $true; onlineRevocation = $true; crlDistribution = 'http-loopback'; crlRequests = $state.CrlServer.Requests; trustScope = 'LocalMachine/Root'; trustGuard = 'github-hosted-elevated-disposable-runner'; privateKeysPersisted = $false }
+            Proof = [ordered]@{ fixture = $true; productionNativeCli = $true; publisherPolicyConfigured = $policy.Names.Count -gt 0; sourceCommit = $policy.SourceCommit; baselineCommit = $policy.BaselineCommit; publisherPolicySha256 = $policy.PolicySha256; candidateManifestSha256 = $candidateHash; baselineManifestSha256 = $baselineHash; candidateVerified = $true; baselineVerified = $true; alteredManifestRefused = $true; differentPublisherRefused = $true; onlineRevocation = $true; crlDistribution = 'http-loopback'; crlRequests = $state.CrlServer.Requests; trustScope = 'LocalMachine/Root'; trustGuard = 'github-hosted-elevated-disposable-runner'; privateKeysPersisted = $false }
         }
     }
     catch {

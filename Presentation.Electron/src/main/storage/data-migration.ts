@@ -64,8 +64,8 @@ function requirePortable(layout: DeploymentLayout): asserts layout is Deployment
   portableRoot: string;
   configurationPath: string;
 } {
-  if (layout.mode !== 'portable' || !layout.portableRoot || !layout.configurationPath)
-    throw fail('The data location can be changed in the portable edition.');
+  if (!layout.portableRoot || !layout.configurationPath)
+    throw fail('The portable data layout is incomplete.');
 }
 
 function directoryIdentity(value: unknown): value is DirectoryIdentity {
@@ -147,13 +147,13 @@ export function getStorageState(
   layout: DeploymentLayout,
   error: string | null = null,
 ): StorageState {
-  const pending = layout.mode === 'portable' ? readPending(layout) : null;
+  const pending = readPending(layout);
   return {
     mode: layout.mode,
     currentDataDirectory: layout.dataDirectory,
     defaultDataDirectory: layout.defaultDataDirectory,
     pendingDataDirectory: pending?.destinationDataDirectory ?? null,
-    canChange: layout.mode === 'portable' && pending === null,
+    canChange: pending === null,
     error,
   };
 }
@@ -294,7 +294,6 @@ export async function cancelPendingMove(layout: DeploymentLayout): Promise<Stora
 
 /** A failed move may reopen only the same existing profile, never a new empty location. */
 export async function canKeepCurrentData(layout: DeploymentLayout): Promise<boolean> {
-  if (layout.mode !== 'portable') return false;
   try {
     const pending = readPending(layout);
     if (!pending) return false;
@@ -317,7 +316,6 @@ export async function completePendingDataMove(
   layout: DeploymentLayout,
   boundary?: DataMoveBoundary,
 ): Promise<DeploymentLayout> {
-  if (layout.mode !== 'portable') return layout;
   requirePortable(layout);
   const pending = readPending(layout);
   if (!pending) return layout;
@@ -441,10 +439,9 @@ export async function completePendingDataMove(
   return result;
 }
 
-/** Preserve only the public channel preference; Setup packages are not portable rollback packages. */
+/** Import only a previous profile's public update channel, never its package cache. */
 export async function importLegacyUpdateChannel(layout: DeploymentLayout): Promise<void> {
-  if (layout.mode !== 'portable' || samePath(layout.dataDirectory, layout.legacyDataDirectory))
-    return;
+  if (samePath(layout.dataDirectory, layout.legacyDataDirectory)) return;
   await readDirectoryIdentity(layout.dataDirectory);
   const target = path.join(layout.updatesDirectory, 'update-channel.json');
   if (await dataDirectoryExists(target)) return;

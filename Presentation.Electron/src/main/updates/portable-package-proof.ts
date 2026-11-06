@@ -49,7 +49,7 @@ export function readPortablePackageProof(text: string): PortablePackageProof {
   if (
     !object(archive) ||
     !keys(archive, ['name', 'bytes', 'sha256', 'sha512']) ||
-    archive.name !== releasePackageName(value.version, 'portable') ||
+    archive.name !== releasePackageName(value.version) ||
     typeof archive.bytes !== 'number' ||
     !Number.isSafeInteger(archive.bytes) ||
     archive.bytes < 1 ||

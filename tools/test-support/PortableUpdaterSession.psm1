@@ -72,23 +72,23 @@ function Start-PortableSession {
         if (-not $process) { throw 'The root launcher did not create its exact portable application session.' }
     }
     $null = $process.SafeHandle
-    $created = [AhkManager.TestSupport.InstalledUpdaterUi]::CreationTime($process)
+    $created = [AhkManager.TestSupport.PortableUpdaterUi]::CreationTime($process)
     $identityDeadline = [DateTime]::UtcNow.AddSeconds(5)
     $identityAttempts = 0
     do {
         $identityAttempts++
-        $matches = [AhkManager.TestSupport.InstalledUpdaterUi]::Matches($process.Id, $application, $created)
+        $matches = [AhkManager.TestSupport.PortableUpdaterUi]::Matches($process.Id, $application, $created)
         if ($matches -or $process.HasExited) { break }
         Start-Sleep -Milliseconds 50
     } while ([DateTime]::UtcNow -lt $identityDeadline)
     # Kernel process creation timestamps can precede precise UtcNow by a clock
     # tick. Identity still requires this retained PID, exact image and creation.
     $inCreationWindow = $created -ge $startedBefore.AddSeconds(-1) -and $created -le [DateTime]::UtcNow.AddSeconds(1)
-    $identity = [ordered]@{ fixture = $true; pid = $process.Id; image = $application; launchRequestedAtUtc = $startedBefore.ToString('O'); processCreatedAtUtc = $created.ToString('O'); creationDeltaMilliseconds = ($created - $startedBefore).TotalMilliseconds; exactIdentityMatches = $matches; withinCreationWindow = $inCreationWindow; identityAttempts = $identityAttempts; kernelIdentity = [AhkManager.TestSupport.InstalledUpdaterUi]::IdentityDetails($process) }
+    $identity = [ordered]@{ fixture = $true; pid = $process.Id; image = $application; launchRequestedAtUtc = $startedBefore.ToString('O'); processCreatedAtUtc = $created.ToString('O'); creationDeltaMilliseconds = ($created - $startedBefore).TotalMilliseconds; exactIdentityMatches = $matches; withinCreationWindow = $inCreationWindow; identityAttempts = $identityAttempts; kernelIdentity = [AhkManager.TestSupport.PortableUpdaterUi]::IdentityDetails($process) }
     [IO.File]::WriteAllText((Join-Path $EvidenceRoot 'session-identity.json'), ($identity | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     if (-not $inCreationWindow -or -not $matches) { throw 'The portable application session identity changed.' }
     $session = [pscustomobject]@{ Process = $process; Started = $created; Image = $application; Socket = $null; Sequence = 0; Capture = $null; Port = $port }
-    if (-not $ViaLauncher) { $session.Capture = [AhkManager.TestSupport.InstalledUpdaterUi]::Capture($process, (Join-Path $EvidenceRoot 'manager.stdout.log'), (Join-Path $EvidenceRoot 'manager.stderr.log')) }
+    if (-not $ViaLauncher) { $session.Capture = [AhkManager.TestSupport.PortableUpdaterUi]::Capture($process, (Join-Path $EvidenceRoot 'manager.stdout.log'), (Join-Path $EvidenceRoot 'manager.stderr.log')) }
     if ($ExpectStartupRefusal) { return $session }
     $handler = [Net.Http.HttpClientHandler]::new()
     $handler.UseProxy = $false
@@ -121,7 +121,7 @@ function Start-PortableSession {
 function Close-PortableSession {
     param($Session)
     if ($Session.Socket) { $Session.Socket.Dispose() }
-    if (-not $Session.Process.HasExited) { $null = [AhkManager.TestSupport.InstalledUpdaterUi]::CloseAndWait($Session.Process.Id, $Session.Image, $Session.Started) }
+    if (-not $Session.Process.HasExited) { $null = [AhkManager.TestSupport.PortableUpdaterUi]::CloseAndWait($Session.Process.Id, $Session.Image, $Session.Started) }
     if (-not $Session.Process.WaitForExit(30000) -or $Session.Process.ExitCode -ne 0) { throw 'The owned portable application did not close normally.' }
     if ($Session.Capture) { $Session.Capture.Dispose() }
     $Session.Process.Dispose()
@@ -146,8 +146,8 @@ function Close-ReopenedPortableSession {
                 catch [InvalidOperationException] { continue }
                 catch [ComponentModel.Win32Exception] { if ($_.Exception.NativeErrorCode -eq 87) { continue }; throw }
                 if ($created -lt $Earliest) { continue }
-                if ([AhkManager.TestSupport.InstalledUpdaterUi]::Matches($candidate.Id, $launcher, $created)) { $running++; if (-not $candidate.WaitForExit(10000) -or $candidate.ExitCode -ne 0) { throw 'The reopened portable launcher did not dispatch normally.' } }
-                elseif ([AhkManager.TestSupport.InstalledUpdaterUi]::Matches($candidate.Id, $application, $created)) { $running++; $null = [AhkManager.TestSupport.InstalledUpdaterUi]::CloseAndWait($candidate.Id, $application, $created) }
+                if ([AhkManager.TestSupport.PortableUpdaterUi]::Matches($candidate.Id, $launcher, $created)) { $running++; if (-not $candidate.WaitForExit(10000) -or $candidate.ExitCode -ne 0) { throw 'The reopened portable launcher did not dispatch normally.' } }
+                elseif ([AhkManager.TestSupport.PortableUpdaterUi]::Matches($candidate.Id, $application, $created)) { $running++; $null = [AhkManager.TestSupport.PortableUpdaterUi]::CloseAndWait($candidate.Id, $application, $created) }
             }
             finally { $candidate.Dispose() }
         }

@@ -15,8 +15,7 @@ export async function withDataMoveLease<T>(
   action: (boundary: DataMoveBoundary) => Promise<T>,
   start?: StartStorageLease,
 ): Promise<T> {
-  if (layout.mode !== 'portable' || !getStorageState(layout).pendingDataDirectory)
-    return action(noLease);
+  if (!getStorageState(layout).pendingDataDirectory) return action(noLease);
   const lease = await openNativeStorageLease(layout, '--lease-portable-data-move', start);
   try {
     const result = await action({ check: lease.check, beforePromotion: lease.releaseStage });

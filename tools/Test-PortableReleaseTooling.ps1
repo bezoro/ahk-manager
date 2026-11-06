@@ -5,9 +5,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$Commit,
     [Parameter(Mandatory = $true)][hashtable]$RequestFixture,
-    [Parameter(Mandatory = $true)][string]$SourceManifestPath,
-    [Parameter(Mandatory = $true)][string]$InstallerPath,
-    [Parameter(Mandatory = $true)][object[]]$LegacyEntries
+    [Parameter(Mandatory = $true)][string]$SourceManifestPath
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -70,24 +68,24 @@ foreach ($field in @('Version', 'Commit', 'PublishedAt', 'Notes')) {
 [IO.File]::WriteAllBytes($archivePath, [byte[]](3, 1, 4, 1, 5, 8))
 Assert-PortableRefused { Read-PortableReleaseManifest -ManifestPath $portableManifestPath -ArchivePath $archivePath } 'modified portable archive bytes are rejected before publication'
 [IO.File]::WriteAllBytes($archivePath, [byte[]](3, 1, 4, 1, 5, 9))
-$entries = @($LegacyEntries) + @(@{ name = $archiveName; value = [IO.File]::ReadAllBytes($archivePath) }, @{ name = 'ahk-manager-portable-release.json'; value = [Text.Encoding]::UTF8.GetBytes($portableText) })
+$entries = @(@{ name = $archiveName; value = [IO.File]::ReadAllBytes($archivePath) }, @{ name = 'ahk-manager-portable-release.json'; value = [Text.Encoding]::UTF8.GetBytes($portableText) }, @{ name = 'SHA256.txt'; value = [Text.Encoding]::UTF8.GetBytes('fixture') })
 $familyZip = New-PortableArtifactFixture (Join-Path $OutputRoot 'family.zip') $entries
 $familyIdentity = Read-TestReleaseArtifactIdentity $familyZip
 $extracted = Join-Path $OutputRoot 'extracted'
 Expand-TestReleaseArtifact -ArchivePath $familyZip -OutputRoot $extracted -Version $Version
 $null = Read-PortableReleaseManifest -ManifestPath (Join-Path $extracted 'ahk-manager-portable-release.json') -ArchivePath (Join-Path $extracted $archiveName) -ExpectedCommit $Commit
-Assert-PortableCheck ($familyIdentity.HasPortable -and $familyIdentity.Version -ceq $Version -and (Get-ChildItem -LiteralPath $extracted -File).Count -eq 5) 'the five-file Actions artifact binds both editions and extracts only the complete expected family'
-foreach ($bad in @(@($entries[0], $entries[1], $entries[2], $entries[3]), @($entries[0], $entries[1], $entries[2], $entries[3], @{ name = 'ahk-manager-portable-release.json'; value = [Text.Encoding]::UTF8.GetBytes($portableText.Replace($Commit, ('b' * 40))) }), @($entries[0], $entries[1], $entries[2], @{ name = '../escape.zip'; value = [byte[]](1) }, $entries[4]), @($entries[0], $entries[1], $entries[2], $entries[3], $entries[4], @{ name = 'extra'; value = [byte[]](1) }))) {
+Assert-PortableCheck ($familyIdentity.Version -ceq $Version -and (Get-ChildItem -LiteralPath $extracted -File).Count -eq 3) 'the three-file Actions artifact binds the portable package and extracts only its expected family'
+foreach ($bad in @(@($entries[0], $entries[1]), @($entries[0], @{ name = 'ahk-manager-portable-release.json'; value = [Text.Encoding]::UTF8.GetBytes($portableText.Replace($Commit, ('b' * 40))) }, $entries[2], @{ name = 'extra'; value = [byte[]](1) }), @($entries[0], $entries[1], @{ name = '../escape.zip'; value = [byte[]](1) }), @($entries[0], $entries[1], $entries[2], @{ name = 'extra'; value = [byte[]](1) }))) {
     $path = New-PortableArtifactFixture (Join-Path $OutputRoot ([Guid]::NewGuid().ToString('N') + '.zip')) $bad
-    Assert-PortableRefused { Read-TestReleaseArtifactIdentity $path } 'incomplete mixed-source or unexpected portable artifact families are rejected'
+    Assert-PortableRefused { Read-TestReleaseArtifactIdentity $path } 'incomplete or unexpected portable artifact families are rejected'
 }
 $publisher = Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1'
-$parameters = @{ InstallerPath = $InstallerPath; ManifestPath = $SourceManifestPath; PortableArchivePath = $archivePath; PortableManifestPath = $portableManifestPath; Repository = 'bezoro/ahk-manager'; Commit = $Commit; Channel = 'test'; TestRunId = 7 }
+$parameters = @{ PortableArchivePath = $archivePath; PortableManifestPath = $portableManifestPath; Repository = 'bezoro/ahk-manager'; Commit = $Commit; Channel = 'test'; TestRunId = 7 }
 & $publisher @parameters -ValidateOnly
 $RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.ChangeHead = $false
 $RequestFixture.Responses['https://api.github.com/repos/bezoro/ahk-manager/pulls/2'].head.sha = $Commit
 & $publisher @parameters
-Assert-PortableCheck (-not $RequestFixture.Release.draft -and $RequestFixture.Release.assets.Count -eq 4) 'installer and portable assets are all uploaded before a single prerelease publication'
+Assert-PortableCheck (-not $RequestFixture.Release.draft -and $RequestFixture.Release.assets.Count -eq 2) 'portable archive and manifest are uploaded before a single prerelease publication'
 $before = $RequestFixture.Calls.Count
 & $publisher @parameters
 Assert-PortableCheck (@($RequestFixture.Calls.GetRange($before, $RequestFixture.Calls.Count - $before) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'an identical published portable family remains an immutable read-only no-op'
@@ -96,10 +94,10 @@ $RequestFixture.Release.assets = @($allAssets | Where-Object name -CNE 'ahk-mana
 $before = $RequestFixture.Calls.Count
 Assert-PortableRefused { & $publisher @parameters } 'an incomplete published portable release never receives new assets'
 Assert-PortableCheck (@($RequestFixture.Calls.GetRange($before, $RequestFixture.Calls.Count - $before) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'missing portable publication assets cause no mutation'
-Assert-PortableRefused { & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit -Portable } 'portable status refuses an installer-only or incomplete immutable release'
+Assert-PortableRefused { & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit } 'portable status refuses an incomplete immutable release'
 $RequestFixture.Release.assets = $allAssets
-$status = & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit -Portable
-Assert-PortableCheck ($status -ceq 'Published') 'portable publication status confirms the complete four-asset family'
+$status = & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit
+Assert-PortableCheck ($status -ceq 'Published') 'portable publication status confirms the complete two-asset family'
 $status = & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit -PortableArchivePath $archivePath -PortableManifestPath $portableManifestPath
 Assert-PortableCheck ($status -ceq 'Published') 'preview no-op status compares immutable portable asset hashes with the approved artifact'
 $portableAsset = @($RequestFixture.Release.assets | Where-Object name -CEQ $archiveName)[0]
@@ -107,14 +105,14 @@ $originalDigest = $portableAsset.digest
 $portableAsset.digest = 'sha256:' + ('0' * 64)
 Assert-PortableRefused { & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit -PortableArchivePath $archivePath -PortableManifestPath $portableManifestPath } 'already-published status cannot hide different portable bytes'
 $portableAsset.digest = $originalDigest
-Assert-PortableRefused { & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit -Portable -RequirePortableSignature } 'signed portable policy refuses a release missing its sidecar'
+Assert-PortableRefused { & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit -RequirePortableSignature } 'signed portable policy refuses a release missing its sidecar'
 $RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.FailAssetName = 'ahk-manager-portable-release.json'
 Assert-PortableRefused { & $publisher @parameters } 'portable upload interruption prevents publication'
-Assert-PortableCheck ($null -eq $RequestFixture.Published -and $RequestFixture.Release.draft -and $RequestFixture.Release.assets.Count -eq 3) 'an interrupted portable family remains a recoverable draft'
+Assert-PortableCheck ($null -eq $RequestFixture.Published -and $RequestFixture.Release.draft -and $RequestFixture.Release.assets.Count -eq 1) 'an interrupted portable family remains a recoverable draft'
 $RequestFixture.FailAssetName = $null
 & $publisher @parameters
-Assert-PortableCheck (-not $RequestFixture.Release.draft -and $RequestFixture.Release.assets.Count -eq 4) 'retry resumes identical draft assets and publishes only the complete family'
-$RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.MutatePathAfterSetup = $archivePath
+Assert-PortableCheck (-not $RequestFixture.Release.draft -and $RequestFixture.Release.assets.Count -eq 2) 'retry resumes identical draft assets and publishes only the complete family'
+$RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.MutatePathAfterArchive = $archivePath
 Assert-PortableRefused { & $publisher @parameters } 'a portable file changed during upload cannot redefine the approved package digest'
 Assert-PortableCheck ($null -eq $RequestFixture.Published -and $RequestFixture.Release.draft) 'concurrent package mutation leaves its mismatched asset family unpublished'
 [IO.File]::WriteAllBytes($archivePath, [byte[]](3, 1, 4, 1, 5, 9))

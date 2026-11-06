@@ -13,13 +13,31 @@ public sealed record SettingsLoad(
     ImmutableArray<Issue> Issues
 );
 
-public sealed class SettingsStore(string path)
+public sealed class SettingsStore(string path, bool managerRequiresAdministrator = false)
 {
     readonly SemaphoreSlim gate = new(1, 1);
     string? fingerprint;
     bool loaded;
     public string FilePath { get; } = System.IO.Path.GetFullPath(path);
     public bool ReadOnly { get; private set; }
+
+    // Keep the legacy field on disk and on the wire while enforcing the packaged host
+    // requirement. Raw bytes still own the concurrency fingerprint during loading.
+    internal ManagerSettings ApplyHostPolicy(ManagerSettings settings) =>
+        managerRequiresAdministrator && !settings.LaunchManagerAsAdministrator
+            ? settings with
+            {
+                LaunchManagerAsAdministrator = true,
+            }
+            : settings;
+
+    internal SettingsDocument ApplyHostPolicy(SettingsDocument document) =>
+        managerRequiresAdministrator && document.Settings is { LaunchManagerAsAdministrator: false }
+            ? document with
+            {
+                Settings = ApplyHostPolicy(document.Settings),
+            }
+            : document;
 
     public async Task<bool> VerifyLoadedAsync(CancellationToken ct = default)
     {
@@ -43,7 +61,9 @@ public sealed class SettingsStore(string path)
                             .ReadAsync(FilePath, ct)
                             .ConfigureAwait(false);
                         fingerprint = bytes is null ? null : SafeJsonFiles.Hash(bytes);
-                        var document = bytes is null ? new() : Parse(bytes);
+                        var document = ApplyHostPolicy(
+                            bytes is null ? new SettingsDocument() : Parse(bytes)
+                        );
                         loaded = true;
                         ReadOnly = false;
                         return new SettingsLoad(document, false, []);
@@ -67,7 +87,7 @@ public sealed class SettingsStore(string path)
                                 .ConfigureAwait(false);
                             if (backup is not null)
                             {
-                                var recovered = Parse(backup);
+                                var recovered = ApplyHostPolicy(Parse(backup));
                                 issues.Add(new(ReasonCode.RecoveredBackup));
                                 return new SettingsLoad(recovered, true, issues.ToImmutable());
                             }
@@ -100,6 +120,7 @@ public sealed class SettingsStore(string path)
                     if (!loaded || ReadOnly)
                         return new OperationResult(Outcome.Failed, ReasonCode.ReadOnlySettings);
                     Validate(document);
+                    document = ApplyHostPolicy(document);
                     var bytes = JsonSerializer.SerializeToUtf8Bytes(
                         document,
                         ManagerJson.Default.SettingsDocument

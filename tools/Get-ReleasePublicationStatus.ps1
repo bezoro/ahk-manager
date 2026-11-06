@@ -3,7 +3,6 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$')][string]$Repository,
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$Commit,
-    [Alias('RequirePortable')][switch]$Portable,
     [switch]$RequirePortableSignature,
     [string]$PortableArchivePath,
     [string]$PortableManifestPath
@@ -19,10 +18,8 @@ if (-not [string]::IsNullOrWhiteSpace($PortableArchivePath) -or -not [string]::I
     if ([string]::IsNullOrWhiteSpace($PortableArchivePath) -or [string]::IsNullOrWhiteSpace($PortableManifestPath)) { throw 'Portable publication status needs both local archive and manifest paths.' }
     $null = Read-PortableReleaseManifest -ManifestPath $PortableManifestPath -ArchivePath $PortableArchivePath -ExpectedVersion $Version -ExpectedCommit $Commit.ToLowerInvariant()
     $portableFiles = @(Get-Item -LiteralPath $PortableArchivePath; Get-Item -LiteralPath $PortableManifestPath)
-    $Portable = $true
 }
-$RequirePortableSignature = $RequirePortableSignature -or ($Portable -and -not [string]::IsNullOrWhiteSpace($env:AHK_PUBLISHER_NAME))
-if ($RequirePortableSignature -and -not $Portable) { throw 'A portable signature status check requires its portable release family.' }
+$RequirePortableSignature = $RequirePortableSignature -or -not [string]::IsNullOrWhiteSpace($env:AHK_PUBLISHER_NAME)
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'The release status token is missing.' }
 $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'Bezoro-AhkManager-Release' }
 $tag = 'v' + $Version
@@ -45,9 +42,14 @@ catch {
 if ($null -eq $release -or $release.tag_name -cne $tag -or $release.target_commitish -cne $Commit.ToLowerInvariant() -or $release.prerelease -isnot [bool] -or $release.prerelease -ne ((Get-ReleaseVersionChannel $Version) -ceq 'test')) { throw 'The existing release belongs to a different commit, tag or channel.' }
 if ($release.draft) { return 'Draft' }
 if ($null -eq $tagCommit) { throw 'The published release is missing its Git tag.' }
-$required = @("AHK-Manager-$Version-Setup-x64.exe", 'ahk-manager-release.json')
-if ($Portable) { $required += @("AHK-Manager-$Version-Portable-x64.zip", 'ahk-manager-portable-release.json') }
+$required = @("AHK-Manager-$Version-Portable-x64.zip", 'ahk-manager-portable-release.json')
 if ($RequirePortableSignature) { $required += 'ahk-manager-portable-release.json.p7s' }
+$assetNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($asset in $release.assets) {
+    if (-not $assetNames.Add($asset.name) -or $asset.state -cne 'uploaded') { throw 'The immutable release has duplicate or incomplete assets.' }
+}
+$allowed = $required + @('ahk-manager-portable-release.json.p7s')
+if (@($release.assets | Where-Object { $_.name -cnotin $allowed }).Count -gt 0) { throw 'The immutable release contains an unexpected asset.' }
 foreach ($name in $required) {
     if (@($release.assets | Where-Object { $_.name -ceq $name -and $_.state -ceq 'uploaded' }).Count -ne 1) { throw 'The immutable published release is incomplete.' }
 }

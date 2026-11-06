@@ -1,4 +1,4 @@
-# Portable edition
+# Portable application
 
 Download `AHK-Manager-<version>-Portable-x64.zip` from the public release page. Extract the complete ZIP into a dedicated local folder. Open `Bezoro.AhkManager.exe` at its top level.
 
@@ -18,7 +18,9 @@ AHK Manager/
 
 ## Windows integration
 
-No Setup or uninstall registration is required. Opening the root launcher starts Manager and its notification-area icon. A new profile starts Manager with Windows and requests administrator privileges by default; both preferences remain configurable. Windows may show UAC when elevation is needed.
+No application installation or uninstall registration is required. Opening the root launcher starts Manager and its notification-area icon. Windows requires administrator privileges before either the root launcher or application runs. Windows may show UAC when you open Manager. Manager starts with Windows by default; this startup preference remains configurable. An enabled startup entry uses a current-user scheduled task with highest privileges. Older Manager administrator preferences are migrated to the required mode. Individual scripts keep their own administrator preferences and can still run with standard privileges.
+
+When upgrading from version 1.6.2 or earlier, open that older Manager as administrator before applying the update. Its existing update helper must be elevated to reopen the new administrator-required application. Subsequent launches use the Windows elevation requirement automatically.
 
 After obtaining writable ownership of its profile, Manager creates a current-user **AHK Manager Portable** shortcut in the Start Menu. It points to the root launcher, so Windows Search and PowerToys launchers that index Start Menu applications can discover it. Search results can take time to refresh, and the relevant PowerToys launcher must be enabled. Existing unrelated shortcuts are preserved.
 
@@ -34,11 +36,11 @@ Owned tasks with missing or outdated working directories are repaired without tr
 
 ## Importing current settings
 
-Before the first portable launch, close the current Manager with **Exit and keep scripts running**. Existing AHK processes can stay active. The portable edition imports the current Electron profile from `%LOCALAPPDATA%/Bezoro/AhkManagerElectron` into `Data/Profile`. It preserves the source and a migration backup. Script files remain at their original paths.
+Before the first portable launch, close the current Manager with **Exit and keep scripts running**. Existing AHK processes can stay active. Manager imports a verified previous Electron profile from `%LOCALAPPDATA%/Bezoro/AhkManagerElectron` into `Data/Profile`. It preserves the source and a migration backup. Script files remain at their original paths.
 
-Import requires exclusive ownership of Manager effects. Another active Manager, a corrupt source profile, or unresolved startup continuation prevents an unsafe import. An error never silently replaces the profile with empty settings. Archived WinUI profiles retain their separate preview and confirmation flow.
+Import requires exclusive ownership of Manager effects. Another active Manager, a corrupt source profile, or unresolved startup continuation prevents an unsafe import. An error never silently replaces the profile with empty settings. Explicit historical profile imports retain their separate preview and confirmation flow.
 
-Only the public update channel preference is carried into the new update store. Installer credentials and unfinished installer operations are not imported. The installed edition and portable edition use different package histories.
+Only the public update channel preference is carried into the new update store. Credentials, cached packages and unfinished updates from the retired distribution are not imported. Portable version history remains in the selected data folder.
 
 ## Choosing a data folder
 
@@ -54,7 +56,7 @@ The selected path is stored in `portable.json` beside the launcher. Updates pres
 
 ## Updates and rollback
 
-Use **Updates** and select **Stable** or **Test** as usual. The portable edition downloads portable packages and applies them without Setup registration. It verifies the package, waits for normal Manager shutdown, replaces the application files, and reopens the Manager. Your data path, scripts, and profile remain intact.
+Use **Updates** and select **Stable** or **Test** as usual. Manager downloads portable packages and replaces its application files directly. It verifies the package, waits for normal Manager shutdown, replaces the application files, and reopens the Manager. Your data path, scripts, and profile remain intact.
 
 Before a confirmed update, the Manager preserves the current portable package when it is available in the public feed. Downloaded packages appear in **Version history** for rollback. Releases published before portable packages existed do not appear as portable rollback choices.
 
@@ -63,8 +65,6 @@ Do not delete `Updates/operations` while an update has an unresolved result. An 
 ## Diagnostic logs
 
 Command logging is enabled automatically. Open **Help > Open logs folder** to inspect `Data/Logs`, including when the backend is unavailable. A custom data location keeps its logs in that location's `Logs` directory. The existing **Activity** page continues to show script and settings results.
-
-The installed edition writes to `%LOCALAPPDATA%/Bezoro/AhkManagerElectronDiagnostics/Logs`. Keeping these startup logs outside its operational profile preserves the empty destination required for profile migration, while recording backend initialization and load failures.
 
 Failures before portable initialization are recorded separately in `%LOCALAPPDATA%/Bezoro/AhkManagerElectronDiagnostics/Startup`, outside the blocked app or Data folder. Up to ten reports of 64 KiB are retained. Reports distinguish failure to launch the helper from a native startup refusal and retain the phase, check, resource category, Windows error, HRESULT and available token identity. They do not contain raw helper stderr, authentication tokens or script contents. The startup error dialog offers **Copy diagnostic details** and, when saved, **Open diagnostics folder**. Background login failures remain silent and still save a report. A later complete diagnostic archive includes these reports.
 

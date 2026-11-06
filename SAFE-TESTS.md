@@ -1,6 +1,6 @@
 # Isolated Windows validation
 
-The active product is Electron with a .NET backend. Ordinary tests use temporary profiles and adapters. Packaged integration tests run on disposable Windows runners, never against a personal profile or an existing installation.
+The active product is Electron with a .NET backend. Ordinary tests use temporary profiles and adapters. Packaged integration tests run on disposable Windows runners, never against a personal profile or an existing Manager copy.
 
 ## Windows CI
 
@@ -22,17 +22,11 @@ The native Windows self-test also creates a private, nonce-bound Cloud Files syn
 
 These captures establish layout and control behavior with solid backgrounds. They do not establish Windows Mica composition, interactive UAC, or behavior at the next real sign-in. Inspect the captures when changing the interface.
 
-## Installed integration tests
-
-`tools/Test-UpdateInstallation.ps1` installs, updates, rolls back and uninstalls real packages in a temporary location. It requires no prior product registration or profile. It verifies registry ownership, hashes, version identities, and preservation of inert fixture files, then removes only its own confirmed registration and files. This package smoke test does not launch Manager or AHK scripts.
-
-The separate installed-updater jobs launch the published preview or current candidate on a fresh runner and drive the actual app update action. Desktop automation binds to the fixture process identity and its owned dialogs. Positive cases use a registered private installation. Negative cases verify refusal for an unsafe parent or an unregistered executable. Fixtures explicitly disable automatic script launch and configure their own startup preferences.
-
 ## Portable integration tests
 
-`tools/Test-PortableUpdater.ps1` uses a separately packaged older baseline and the current candidate. Both packages carry the reviewed source identity and their distinct complete versions. The baseline exists only for testing and is not a public release asset.
+`tools/Test-PortableUpdater.ps1` verifies the source identity and complete version of each package. The default migration starts with the pinned published v1.6.2 package. The custom data and foreign-root scenarios use a separately packaged older baseline from the candidate's reviewed source.
 
-The driver launches the real portable application and checks profile import, update and rollback with default and custom data directories. It verifies that no Setup registration is required, a proven dedicated product root can become private beneath a permissive parent without changing the parent's permissions, and a root containing unrelated files is refused.
+The driver launches the real portable application and checks profile import, update and rollback with default and custom data directories. It verifies that application registration is unnecessary, a proven dedicated product root can become private beneath a permissive parent without changing the parent's permissions, and a root containing unrelated files is refused.
 
 The `download-cancel` scenario starts from the exact CI candidate ZIP with only its own verified rollback package seeded. It requires an empty packaged publisher policy and a pinned public v1.6.2 target. A loopback CONNECT proxy holds the CDN transfer after the first 8 MiB of TLS traffic. The test clicks Cancel download in the real Updates screen, checks that the client closed the tunnel and discarded the partial ZIP, then retries through the same history action and verifies the native install and reopened profile. The scenario runs on a disposable GitHub-hosted Windows runner.
 
@@ -56,4 +50,4 @@ The separate `--ahk-owned` suite executes harmless temporary scripts and require
 
 Use a fresh absolute root for every attempt. Never use the personal profile or an old `publish` directory. Keep stdout, stderr, exit codes, assertions, captures and result documents.
 
-WinUI/WPF projects and `tools/Run-SafeTests.ps1` are historical. Their selectors and screenshots do not validate the current Electron application. Historical UI or AHK tests still require isolated owned fixtures, no real startup registration, and normal process shutdown. See [VALIDATION.md](VALIDATION.md) for historical evidence.
+The root launcher and application must require administrator access. The native launcher fixture inspects the embedded manifest and the child's actual `TokenElevation`; packaged updater runners also verify the real administrative backend. Those runners already have an elevated token, so success does not prove that an interactive medium-token UAC prompt was shown. See [VALIDATION.md](VALIDATION.md) for reporting requirements.

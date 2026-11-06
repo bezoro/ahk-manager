@@ -91,6 +91,6 @@ internal static partial class SelfTests
             linked = true;
         }
 
-        check(linked, "multiply linked installation files are refused before any installer effect");
+        check(linked, "multiply linked installation files are refused before any payload effect");
     }
 }
