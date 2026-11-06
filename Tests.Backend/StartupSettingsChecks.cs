@@ -88,22 +88,20 @@ internal static class StartupSettingsChecks
             "disabling manager startup removes the owned elevated registration"
         );
 
-        var launch = ManagerElevation.CommittedHostStartInfo(
-            Path.Combine(root, "Manager.exe"),
-            resumeLogin: true
-        );
+        var layout = PortableHostFixture.Create(root, "startup-settings-portable-host");
+        string host = layout.HostExecutable;
+        var launch = ManagerElevation.CommittedHostStartInfo(host, resumeLogin: true);
         check(
-            launch.ArgumentList.SequenceEqual(["--login", "--background"]),
+            launch.FileName == host
+                && launch.WorkingDirectory == layout.PortableRoot
+                && !launch.UseShellExecute
+                && launch.ArgumentList.SequenceEqual(["--login", "--background"]),
             "authenticated automatic elevation preserves login intent without making a foreground-only replacement"
         );
         bool refused = false;
         try
         {
-            _ = ManagerElevation.CommittedHostStartInfo(
-                Path.Combine(root, "Manager.exe"),
-                "descriptor",
-                true
-            );
+            _ = ManagerElevation.CommittedHostStartInfo(host, "descriptor", true);
         }
         catch (ProtocolException)
         {
@@ -111,29 +109,35 @@ internal static class StartupSettingsChecks
         }
         check(refused, "a scoped continuation cannot also request the general login loop");
         var scoped = ManagerElevation.CommittedHostStartInfo(
-            Path.Combine(root, "Manager.exe"),
+            host,
             "descriptor",
             backgroundStartup: true
         );
         check(
-            scoped.ArgumentList.SequenceEqual(["--background", "--startup-adoption=descriptor"]),
+            scoped.FileName == host
+                && scoped.WorkingDirectory == layout.PortableRoot
+                && !scoped.UseShellExecute
+                && scoped.ArgumentList.SequenceEqual([
+                    "--background",
+                    "--startup-adoption=descriptor",
+                ]),
             "quiet scoped replacement preserves presentation without general login or foreground activation"
         );
-        var manual = ManagerElevation.CommittedHostStartInfo(
-            Path.Combine(root, "Manager.exe"),
-            "descriptor"
-        );
+        var manual = ManagerElevation.CommittedHostStartInfo(host, "descriptor");
         check(
-            manual.ArgumentList.SequenceEqual(["--foreground", "--startup-adoption=descriptor"]),
+            manual.FileName == host
+                && manual.WorkingDirectory == layout.PortableRoot
+                && !manual.UseShellExecute
+                && manual.ArgumentList.SequenceEqual([
+                    "--foreground",
+                    "--startup-adoption=descriptor",
+                ]),
             "manual scoped replacement retains explicit foreground intent"
         );
         refused = false;
         try
         {
-            _ = ManagerElevation.CommittedHostStartInfo(
-                Path.Combine(root, "Manager.exe"),
-                backgroundStartup: true
-            );
+            _ = ManagerElevation.CommittedHostStartInfo(host, backgroundStartup: true);
         }
         catch (ProtocolException)
         {
