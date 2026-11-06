@@ -18,7 +18,7 @@ AHK Manager/
 
 ## Windows integration
 
-No application installation or uninstall registration is required. Opening the root launcher starts Manager and its notification-area icon. Windows requires administrator privileges before either the root launcher or application runs. Windows may show UAC when you open Manager. Manager starts with Windows by default; this startup preference remains configurable. An enabled startup entry uses a current-user scheduled task with highest privileges. Older Manager administrator preferences are migrated to the required mode. Individual scripts keep their own administrator preferences and can still run with standard privileges.
+No application installation or uninstall registration is required. Opening the root launcher starts Manager and its notification-area icon. The root launcher requires administrator privileges before starting Manager. The native initializer also refuses an unelevated internal application before it prepares portable data. Windows may show UAC when you open Manager. Manager starts with Windows by default; this startup preference remains configurable. An enabled startup entry uses a current-user scheduled task with highest privileges. Older Manager administrator preferences are migrated to the required mode. Individual scripts keep their own administrator preferences and can still run with standard privileges.
 
 When upgrading from version 1.6.2 or earlier, open that older Manager as administrator before applying the update. Its existing update helper must be elevated to reopen the new administrator-required application. Subsequent launches use the Windows elevation requirement automatically.
 

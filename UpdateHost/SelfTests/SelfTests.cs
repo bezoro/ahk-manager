@@ -32,6 +32,7 @@ internal static partial class SelfTests
             Deployment: "portable"
         );
         CheckAdmissionDiagnostics(Check);
+        CheckPortableAdministratorAccess(Check);
         CheckPortableInitializationDiagnostics(Check);
         CheckApplyDiagnostics(Check);
         CheckPortablePromotionPolicy(Check);

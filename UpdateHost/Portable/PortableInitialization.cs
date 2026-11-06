@@ -11,7 +11,7 @@ internal static class PortableInitialization
             "resolve-layout",
             "application",
             () =>
-                PortableLayout.FromParent()
+                PortableLayout.FromParent(requireAdministrator: true)
                 ?? throw new InvalidDataException("The parent is not a portable Manager.")
         );
         using var directories = Step(

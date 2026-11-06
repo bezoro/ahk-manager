@@ -10,7 +10,7 @@ function numericVersion(value) {
   return value.split('.').slice(0, 3).map(Number).join('.');
 }
 
-/** Inspect the final PE without executing or modifying it. */
+/** Inspect the final Electron PE without executing or modifying it. */
 function verifyPortableExecutable(file, version) {
   if (!path.isAbsolute(file) || !validUpdateVersion(version))
     throw new Error('An absolute executable path and valid release version are required.');
@@ -32,13 +32,13 @@ function verifyPortableExecutable(file, version) {
     const levels = [...xml.matchAll(/<(?:[\w.-]+:)?requestedExecutionLevel\b([^>]*)>/g)];
     if (
       levels.length !== 1 ||
-      !/\blevel\s*=\s*(['"])requireAdministrator\1/.test(levels[0][1]) ||
+      !/\blevel\s*=\s*(['"])highestAvailable\1/.test(levels[0][1]) ||
       !/\buiAccess\s*=\s*(['"])false\1/.test(levels[0][1]) ||
       (levels[0][1].match(/\blevel\s*=/g) ?? []).length !== 1 ||
       (levels[0][1].match(/\buiAccess\s*=/g) ?? []).length !== 1
     )
       throw new Error(
-        'The packaged executable must require administrator access without UIAccess.',
+        'The packaged Electron executable must use highestAvailable without UIAccess.',
       );
   }
   const versions = Resource.VersionInfo.fromEntries(resources.entries);
@@ -58,7 +58,7 @@ function verifyPortableExecutable(file, version) {
     version,
     fileVersion,
     productVersion,
-    requestedExecutionLevel: 'requireAdministrator',
+    requestedExecutionLevel: 'highestAvailable',
     uiAccess: false,
     manifestResources: manifests.length,
     sha256: crypto.createHash('sha256').update(bytes).digest('hex'),

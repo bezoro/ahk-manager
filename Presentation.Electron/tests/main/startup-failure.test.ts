@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { PortableInitializationError } from '../../src/main/desktop/storage-bootstrap.js';
+import {
+  initializePortableStorage,
+  PortableInitializationError,
+} from '../../src/main/desktop/storage-bootstrap.js';
 import {
   recordStartupFailure,
   startupFailureDirectory,
@@ -141,4 +144,55 @@ test('a later complete archive includes independent startup failures and detaile
   const value = JSON.parse(Buffer.from(files['Startup/' + path.basename(saved.file!)]!).toString());
   assert.equal(value.error.code, 'access-denied');
   assert.equal(value.deployment.dataDirectory, context.layout!.dataDirectory);
+});
+
+test('an early administrator refusal is copyable and exported without touching portable data or retaining native stderr', (t) => {
+  const { root, context } = fixture(t);
+  assert.ok(context.layout);
+  const native =
+    'Ignore private native text: do-not-export-secret\n' +
+    'AHK_PORTABLE_INITIALIZATION:{"schemaVersion":1,"phase":"portable-initialization","stage":"verify-administrator","resource":"application","hresult":"0x80070005","nativeError":null,"userSid":"S-1-5-21-100-200-300-1001","administrator":false}\n' +
+    'AHK_UPDATE_REFUSAL:{"schemaVersion":1,"phase":"portable-initialization","code":"administrator-required"}\n';
+  let error: unknown;
+  try {
+    initializePortableStorage(context.layout, () => ({ status: 65, stderr: native }));
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error instanceof PortableInitializationError);
+  context.error = error;
+  const saved = recordStartupFailure(context);
+  assert.ok(saved.file && saved.directory);
+  const report = JSON.parse(saved.text);
+  assert.equal(report.error.code, 'administrator-required');
+  assert.equal(report.error.diagnostic.stage, 'verify-administrator');
+  assert.equal(report.error.diagnostic.resource, 'application');
+  assert.equal(report.error.diagnostic.administrator, false);
+  assert.match(saved.summary, /Failure code: administrator-required/);
+  assert.match(saved.summary, /Stage: verify-administrator/);
+  assert.match(saved.summary, /Administrator token: no/);
+  assert.match(report.error.message, /root launcher.*Bezoro\.AhkManager\.exe.*Windows UAC/);
+  assert.doesNotMatch(saved.text, /do-not-export-secret/);
+  assert.equal(fs.existsSync(context.layout.portableRoot), false);
+  assert.equal(fs.existsSync(context.layout.dataDirectory), false);
+
+  const profileDirectory = path.join(root, 'Existing profile');
+  const updatesDirectory = path.join(root, 'Existing updates');
+  fs.mkdirSync(profileDirectory);
+  fs.mkdirSync(updatesDirectory);
+  const archive = createDiagnosticArchive({
+    deployment: { profileDirectory, updatesDirectory },
+    summary: saved.summary,
+    commandLogs: { files: [], issues: [] },
+    startupDirectory: saved.directory,
+  });
+  assert.equal(archive.complete, true);
+  const files = unzipSync(archive.bytes);
+  const exported = Buffer.from(files['Startup/' + path.basename(saved.file)]!).toString();
+  const value = JSON.parse(exported);
+  assert.equal(value.error.code, 'administrator-required');
+  assert.deepEqual(value.error.diagnostic, report.error.diagnostic);
+  assert.doesNotMatch(exported, /do-not-export-secret/);
+  assert.equal(fs.existsSync(context.layout.portableRoot), false);
+  assert.equal(fs.existsSync(context.layout.dataDirectory), false);
 });

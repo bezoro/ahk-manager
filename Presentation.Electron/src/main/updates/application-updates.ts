@@ -43,13 +43,14 @@ export async function createApplicationUpdates(
   const store = new UpdateStore(root, deployment);
   const fetcher = createElectronUpdateFetch(network, (request) => net.request(request));
   const client = new GitHubUpdateClient(fetcher, deployment);
-  const download: UpdateBoundary['download'] = (release, progress) =>
+  const download: UpdateBoundary['download'] = (release, progress, signal) =>
     downloadPortableRelease(release, progress, {
       store,
       fetcher,
       verifyManifest: verifyPortableManifestPolicy,
+      signal,
     });
-  const preserveCurrent: UpdateBoundary['preserveCurrent'] = async (progress) => {
+  const preserveCurrent: UpdateBoundary['preserveCurrent'] = async (transfer) => {
     const current = (await store.cached()).find((item) => item.version === app.getVersion());
     if (current) {
       try {
@@ -68,7 +69,7 @@ export async function createApplicationUpdates(
     const release = await client.resolveVersion(app.getVersion());
     if (options.currentCommit && release.commit !== options.currentCommit)
       throw new Error('The published portable package does not match this running build.');
-    const source = await download(release, progress);
+    const source = await transfer(release);
     const saved = await store.cache(release.version, source, release.sha256, release.bytes);
     await store.verify(saved);
     await verifyCachedPortablePackageSignature(saved.archivePath);

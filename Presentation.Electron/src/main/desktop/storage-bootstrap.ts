@@ -5,9 +5,13 @@ import {
 } from 'node:child_process';
 import path from 'node:path';
 import type { DeploymentLayout } from '../storage/deployment.js';
-import { readUpdateHostRefusal } from '../updates/update-host-diagnostics.js';
+import {
+  administratorRequiredMessage,
+  readUpdateHostRefusal,
+} from '../updates/update-host-diagnostics.js';
 
 type InitializationCode =
+  | 'administrator-required'
   | 'unsupported-filesystem'
   | 'cloud-file-unavailable'
   | 'redirected-path'
@@ -19,6 +23,7 @@ type InitializationCode =
   | 'unknown';
 
 const stages = [
+  'verify-administrator',
   'resolve-layout',
   'retain-root',
   'retain-data',
@@ -87,6 +92,8 @@ type StartInitializer = (
 
 function initializationMessage(code: InitializationCode): string {
   switch (code) {
+    case 'administrator-required':
+      return administratorRequiredMessage;
     case 'unsupported-filesystem':
       return 'Portable Manager requires NTFS storage for its app and data folders. ReFS, FAT32 and exFAT are not supported. Extract the portable ZIP into an NTFS folder and try again.';
     case 'cloud-file-unavailable':
@@ -257,6 +264,7 @@ function initializationCode(
   )
     return 'data-unavailable';
   switch (refusal.code) {
+    case 'administrator-required':
     case 'unsupported-filesystem':
     case 'cloud-file-unavailable':
     case 'redirected-path':

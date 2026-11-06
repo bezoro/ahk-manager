@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { UpdateChannel, UpdateRelease, UpdateState } from '../../shared/updates.js';
+import type {
+  CancelUpdateDownloadResult,
+  UpdateChannel,
+  UpdateRelease,
+  UpdateState,
+} from '../../shared/updates.js';
 import {
   isTestUpdateVersion,
   validUpdateChannel,
@@ -15,20 +20,26 @@ export interface UpdateStorePort {
   cached(): Promise<CachedPackage[]>;
   verify(packageEntry: CachedPackage): Promise<void>;
   cache(version: string, source: string, sha256: string, bytes: number): Promise<CachedPackage>;
+  discardPortableDownload(source: string): Promise<void>;
 }
 export interface UpdateBoundary {
   version: string;
-  preserveCurrent?(progress: (percent: number) => void): Promise<void>;
+  preserveCurrent?(download: (release: RemoteUpdateRelease) => Promise<string>): Promise<void>;
   store: UpdateStorePort;
   releases(channel: UpdateChannel): Promise<RemoteUpdateRelease[]>;
   resolve?(id: string): Promise<RemoteUpdateRelease>;
-  download(release: RemoteUpdateRelease, progress: (percent: number) => void): Promise<string>;
+  download(
+    release: RemoteUpdateRelease,
+    progress: (percent: number) => void,
+    signal: AbortSignal,
+  ): Promise<string>;
   preflight(operationId: string, phase: 'begin' | 'commit'): Promise<boolean>;
   confirm(release: UpdateRelease): Promise<boolean>;
   apply(operationId: string, target: CachedPackage): Promise<void>;
   changed(state: UpdateState): void;
   recovery?(): Promise<string | null>;
 }
+const downloadCanceled = new Error('The update download was canceled.');
 const active = (state: UpdateState): boolean =>
   ['checking', 'downloading', 'installing'].includes(state.phase);
 const safeError = (error: unknown, fallback: string): string =>
@@ -45,6 +56,7 @@ export class UpdateService {
   private installing = false;
   private configuringChannel = false;
   private explicitTestOptIn = false;
+  private transfer: { id: string; controller: AbortController } | null = null;
   constructor(private readonly boundary: UpdateBoundary) {
     this.state = {
       currentVersion: boundary.version,
@@ -54,6 +66,8 @@ export class UpdateService {
       lastCheckedAt: null,
       error: null,
       progress: null,
+      downloadId: null,
+      downloadCancellation: null,
       releases: [],
     };
   }
@@ -164,7 +178,12 @@ export class UpdateService {
     // Discard catalog identities before the first await. A former-channel choice
     // must never remain selectable while its preference is being persisted.
     this.remote = [];
-    this.publish({ phase: 'checking', error: null, lastCheckedAt: null });
+    this.publish({
+      phase: 'checking',
+      error: null,
+      lastCheckedAt: null,
+      downloadCancellation: null,
+    });
     try {
       await this.boundary.store.saveChannel(channel);
       this.explicitTestOptIn = channel === 'test' && this.state.channel === 'stable';
@@ -181,7 +200,7 @@ export class UpdateService {
   }
   async check(): Promise<UpdateState> {
     if (this.busy) return this.snapshot;
-    this.publish({ phase: 'checking', error: null, progress: null });
+    this.publish({ phase: 'checking', error: null, progress: null, downloadCancellation: null });
     try {
       this.local = await this.boundary.store.cached();
       this.remote = await this.boundary.releases(this.state.channel);
@@ -198,6 +217,43 @@ export class UpdateService {
       });
     }
   }
+  cancelDownload(id: string): CancelUpdateDownloadResult {
+    const transfer = this.transfer;
+    if (!transfer || transfer.id !== id) return 'unavailable';
+    this.transfer = null;
+    this.publish({ downloadId: null, downloadCancellation: 'canceling' });
+    transfer.controller.abort(downloadCanceled);
+    return 'accepted';
+  }
+  private async download(
+    release: RemoteUpdateRelease,
+    progress: (percent: number) => void,
+  ): Promise<string> {
+    const transfer = { id: randomUUID(), controller: new AbortController() };
+    this.transfer = transfer;
+    this.publish({ downloadId: transfer.id });
+    let source: string;
+    try {
+      source = await this.boundary.download(
+        release,
+        (percent) => {
+          if (this.transfer === transfer) progress(percent);
+        },
+        transfer.controller.signal,
+      );
+    } finally {
+      // Retire the ID before either preservation or target cache publication can start.
+      if (this.transfer === transfer) {
+        this.transfer = null;
+        this.publish({ downloadId: null });
+      }
+    }
+    if (transfer.controller.signal.aborted) {
+      await this.boundary.store.discardPortableDownload(source);
+      throw downloadCanceled;
+    }
+    return source;
+  }
   async install(id: string): Promise<UpdateState> {
     if (this.busy) return this.snapshot;
     const choice = this.state.releases.find((item) => item.id === id && item.canInstall);
@@ -205,6 +261,7 @@ export class UpdateService {
       return this.publish({
         phase: 'error',
         error: 'This version is no longer available in the history. Check for updates again.',
+        downloadCancellation: null,
       });
     this.installing = true;
     const operationId = randomUUID();
@@ -213,13 +270,16 @@ export class UpdateService {
         return this.publish({
           phase: 'error',
           error: 'Save or discard your changes and wait for operations to finish before updating.',
+          downloadCancellation: null,
         });
       if (!(await this.boundary.confirm(choice))) return this.snapshot;
-      this.publish({ phase: 'downloading', error: null, progress: 0 });
+      this.publish({ phase: 'downloading', error: null, progress: 0, downloadCancellation: null });
       const preserving = !!this.boundary.preserveCurrent;
       if (this.boundary.preserveCurrent) {
-        await this.boundary.preserveCurrent((percent) =>
-          this.publish({ progress: Math.max(0, Math.min(50, percent / 2)) }),
+        await this.boundary.preserveCurrent((release) =>
+          this.download(release, (percent) =>
+            this.publish({ progress: Math.max(0, Math.min(50, percent / 2)) }),
+          ),
         );
         this.local = await this.boundary.store.cached();
         this.publish({ progress: 50 });
@@ -260,7 +320,7 @@ export class UpdateService {
           throw new Error(
             'The portable package for this version is not available on this computer.',
           );
-        const file = await this.boundary.download(remote, (percent) =>
+        const file = await this.download(remote, (percent) =>
           this.publish({
             progress: Math.max(0, Math.min(100, preserving ? 50 + percent / 2 : percent)),
           }),
@@ -280,16 +340,19 @@ export class UpdateService {
       await this.boundary.apply(operationId, target);
       return this.snapshot;
     } catch (error) {
-      return this.publish({
-        phase: 'error',
-        progress: null,
-        error: safeError(
-          error,
-          'The update did not finish. The portable application and recovery records have been preserved.',
-        ),
-      });
+      if (error !== downloadCanceled)
+        return this.publish({
+          phase: 'error',
+          progress: null,
+          downloadCancellation: null,
+          error: safeError(
+            error,
+            'The update did not finish. The portable application and recovery records have been preserved.',
+          ),
+        });
     } finally {
       this.installing = false;
     }
+    return this.publish({ phase: 'idle', progress: null, downloadCancellation: 'canceled' });
   }
 }

@@ -27,6 +27,7 @@ declare global {
       resolveResponse(method: string, response: { value?: unknown; error?: string }): Promise<void>;
       resetResponses(): Promise<void>;
       openPreferences(): Promise<void>;
+      pressEnter(): Promise<void>;
       setState(state: HostState): Promise<void>;
       setTheme(theme: ThemeState): Promise<void>;
       calls(): Promise<Array<{ method: string; args: unknown[] }>>;
@@ -3658,6 +3659,8 @@ function updateFixture(): UpdateState {
     lastCheckedAt: '2026-10-28T11:30:00Z',
     error: null,
     progress: null,
+    downloadId: null,
+    downloadCancellation: null,
     releases: [
       {
         id: 'fixture-new-122',
@@ -3923,6 +3926,91 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
     },
   );
   await check(
+    'a portable transfer can be canceled by keyboard during install, and the same release can retry',
+    async () => {
+      await window.fixtureHarness.setUpdates(updates);
+      button(text.updates).click();
+      await tick();
+      const hasCancel = () =>
+        [...document.querySelectorAll('button')].some(
+          (node) => node.textContent?.trim() === text.updateCancelDownload,
+        );
+      const hasStatus = (label: string) =>
+        [...document.querySelectorAll('[role="status"]')].some(
+          (node) => node.textContent?.trim() === label,
+        );
+      assert(!hasCancel(), 'Cancel was offered while idle');
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('installUpdate', { pending: true });
+      outstanding.add('installUpdate');
+      button(text.updateInstall).click();
+      await untilCall('installUpdate');
+      assert(!hasCancel(), 'Cancel was offered while consent was pending');
+      const preparing: UpdateState = { ...updates, phase: 'downloading', progress: 50 };
+      await window.fixtureHarness.setUpdates(preparing);
+      await tick();
+      assert(!hasCancel(), 'Cancel was offered without an active transfer');
+      const downloadId = '42eca1f3-8051-4e89-9fd6-3f0ce4f88629';
+      const transfer = { ...preparing, downloadId, progress: 65 };
+      await window.fixtureHarness.setUpdates(transfer);
+      await tick();
+      const cancel = button(text.updateCancelDownload);
+      assert(!cancel.disabled && button(text.updateInstall).disabled, 'Wrong transfer actions');
+      assert(
+        document.querySelector(`[role="progressbar"][aria-label="${text.updateDownloadProgress}"]`),
+        'Download progress is unlabeled',
+      );
+      await window.fixtureHarness.setResponse('cancelUpdateDownload', { pending: true });
+      outstanding.add('cancelUpdateDownload');
+      cancel.focus();
+      assert(document.activeElement === cancel, 'Cancel could not receive keyboard focus');
+      let trustedActivation = false;
+      cancel.addEventListener('click', (event) => (trustedActivation = event.isTrusted), {
+        once: true,
+      });
+      await window.fixtureHarness.pressEnter();
+      await untilCall('cancelUpdateDownload');
+      assert(trustedActivation, 'Enter did not activate the native button');
+      await tick();
+      assert(cancel.disabled, 'Duplicate cancellation remained available');
+      cancel.click();
+      const calls = (await window.fixtureHarness.calls()).filter(
+        (call) => call.method === 'cancelUpdateDownload',
+      );
+      assert(calls.length === 1 && calls[0]?.args[0] === downloadId, 'Wrong cancel request');
+      await window.fixtureHarness.resolveResponse('cancelUpdateDownload', { value: 'accepted' });
+      outstanding.delete('cancelUpdateDownload');
+      await tick();
+      assert(
+        !hasStatus(text.updateDownloadCanceled),
+        'Acknowledgment confirmed cancellation early',
+      );
+      await window.fixtureHarness.setUpdates({ ...preparing, downloadCancellation: 'canceling' });
+      await tick();
+      assert(!hasCancel() && hasStatus(text.updateCancelingDownload), 'Pending cleanup was hidden');
+      assert(button(text.updateInstall).disabled, 'Retry was offered before cleanup');
+      await window.fixtureHarness.setUpdates({ ...updates, downloadCancellation: 'canceled' });
+      await window.fixtureHarness.resolveResponse('installUpdate', { value: transfer });
+      outstanding.delete('installUpdate');
+      await tick();
+      assert(
+        !hasCancel() &&
+          hasStatus(text.updateDownloadCanceled) &&
+          !button(text.updateInstall).disabled,
+        'Stale install reply displaced confirmed cancellation or disabled retry',
+      );
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('installUpdate', { value: updates });
+      button(text.updateInstall).click();
+      await untilCall('installUpdate');
+      assert(
+        (await window.fixtureHarness.calls()).find((call) => call.method === 'installUpdate')
+          ?.args[0] === 'fixture-new-122',
+        'Retry selected a different release',
+      );
+    },
+  );
+  await check(
     'rollback remains available with no backend and dispatches one opaque release ID',
     async () => {
       await window.fixtureHarness.setState({
@@ -4118,6 +4206,83 @@ export async function previewUpdates(
         !!document.querySelector('.update-release-list') &&
         (document.getElementById('update-channel') as HTMLSelectElement)?.value ===
           (testChannel ? 'test' : 'stable'),
+    },
+  ];
+}
+
+/** Deterministic visual states only: no update request or real transfer is dispatched. */
+export async function previewUpdateDownload(canceling = false): Promise<AssertionRecord[]> {
+  await previewUpdates();
+  await window.fixtureHarness.setState({ ...state(), authorityMode: 'Administrator' });
+  await window.fixtureHarness.clearCalls();
+  await window.fixtureHarness.setUpdates({
+    ...updateFixture(),
+    phase: 'downloading',
+    progress: 65,
+    downloadId: canceling ? null : '42eca1f3-8051-4e89-9fd6-3f0ce4f88629',
+    downloadCancellation: canceling ? 'canceling' : null,
+  });
+  await tick();
+  const label = canceling ? text.updateCancelingDownload : text.updateDownloading;
+  const status = [...document.querySelectorAll<HTMLElement>('[role="status"]')].find(
+    (node) => node.textContent?.trim() === label,
+  );
+  assert(status, 'The transfer state has no visible status');
+  const progress = document.querySelector<HTMLElement>(
+    `[role="progressbar"][aria-label="${text.updateDownloadProgress}"]`,
+  );
+  assert(
+    canceling ? !progress : !!progress,
+    canceling ? 'Cleanup retained stale transfer progress' : 'The transfer progress is not labeled',
+  );
+  const cancels = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(
+    (node) => node.textContent?.trim() === text.updateCancelDownload,
+  );
+  if (canceling) assert(cancels.length === 0, 'Cleanup still offers another cancel action');
+  else {
+    assert(cancels.length === 1 && !cancels[0]!.disabled, 'An active transfer cannot be canceled');
+    cancels[0]!.focus();
+    assert(document.activeElement === cancels[0], 'Cancel cannot receive keyboard focus');
+  }
+  assert(
+    button(text.updateInstall).disabled &&
+      button(text.updateCheck).disabled &&
+      (document.getElementById('update-channel') as HTMLSelectElement).disabled,
+    'A transfer or its cleanup leaves competing update actions enabled',
+  );
+  const page = document.querySelector<HTMLElement>('.updates-page');
+  assert(
+    page &&
+      page.scrollWidth <= page.clientWidth + 1 &&
+      document.documentElement.scrollWidth <= innerWidth,
+    'The transfer preview overflows its viewport',
+  );
+  for (const control of [status, ...(progress ? [progress] : []), ...cancels]) {
+    const bounds = control.getBoundingClientRect();
+    assert(
+      bounds.width > 0 &&
+        bounds.height > 0 &&
+        bounds.left >= 0 &&
+        bounds.right <= innerWidth &&
+        bounds.top >= 0 &&
+        bounds.bottom <= innerHeight,
+      'A transfer status, progress or cancel control is outside the viewport',
+    );
+  }
+  assert(
+    !(await window.fixtureHarness.calls()).some((call) =>
+      ['installUpdate', 'cancelUpdateDownload', 'checkUpdates', 'setUpdateChannel'].includes(
+        call.method,
+      ),
+    ),
+    'The transfer preview dispatched an update effect',
+  );
+  return [
+    {
+      name: canceling
+        ? 'update cancellation cleanup is visible, bounded and does not offer another transfer action'
+        : 'active update download shows labeled progress and a visible keyboard-focusable cancel action',
+      passed: true,
     },
   ];
 }

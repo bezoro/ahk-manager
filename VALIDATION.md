@@ -21,7 +21,7 @@ Before publication, the complete portable asset family must identify one version
 
 The Task Scheduler integration uses disabled tasks inside an isolated GUID folder. It verifies resolved account/SID identity, exact task shape, guarded updates and cleanup. It never runs a production login task or simulates a real Windows sign-in.
 
-The launcher check extracts the embedded `requireAdministrator` manifest and verifies the actual child `TokenElevation`, arguments, executable, working directory and console policy. Packaged integration runners also require an elevated administrative backend. These checks prove elevated-run behavior; they do not prove an interactive medium-token UAC prompt was shown or accepted.
+The launcher check extracts the embedded `requireAdministrator` manifest and verifies the actual child `TokenElevation`, arguments, executable, working directory and console policy. A read-only PE inspection requires the internal Electron executable to use `highestAvailable` with `uiAccess=false` and the exact release version. Native initializer checks reject an unelevated Manager or helper before profile changes. Packaged integration runners also require an elevated administrative backend. These checks prove elevated-run behavior; they do not prove an interactive medium-token UAC prompt was shown or accepted.
 
 Cloud Files tests use a private, owned Windows CFAPI fixture where supported. They validate hydrated metadata, offline-file refusal, handle retention and guarded recovery. They do not exercise a user's OneDrive, Dropbox or Google Drive synchronization account.
 

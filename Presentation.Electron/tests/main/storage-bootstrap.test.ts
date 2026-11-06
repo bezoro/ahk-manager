@@ -91,6 +91,58 @@ test('portable initialization distinguishes NTFS requirements, unavailable cloud
   }
 });
 
+test('an early administrator refusal keeps token context and directs the user to the root launcher and UAC', () => {
+  const native = context('verify-administrator', 'application')
+    .replace('"userSid":null', '"userSid":"S-1-5-21-100-200-300-1001"')
+    .replace('"administrator":null', '"administrator":false');
+  const error = refusal(native + wire('administrator-required'));
+  assert.equal(error.code, 'administrator-required');
+  assert.match(
+    error.message,
+    /requires administrator access.*root launcher.*Bezoro\.AhkManager\.exe.*Windows UAC/,
+  );
+  assert.doesNotMatch(error.message, /folder access|permissions|could not be prepared/);
+  assert.deepEqual(error.diagnostic, {
+    origin: 'native',
+    phase: 'portable-initialization',
+    stage: 'verify-administrator',
+    resource: 'application',
+    code: 'administrator-required',
+    exitCode: 65,
+    errorCode: null,
+    hresult: '0x80070005',
+    nativeError: null,
+    userSid: 'S-1-5-21-100-200-300-1001',
+    administrator: false,
+  });
+});
+
+test('administrator diagnostics retain strict context bounds and never display untrusted native messages', () => {
+  const finite = wire('administrator-required');
+  for (const invalid of [
+    context('verify-administrator', 'application').trimEnd(),
+    context('verify-administrator', 'application').replace(
+      '"stage":',
+      '"extra":"private-value","stage":',
+    ),
+    context('verify-administrator', 'application').replace(
+      '"administrator":null',
+      '"administrator":"private-value"',
+    ),
+  ]) {
+    const error = refusal(finite + invalid);
+    assert.equal(error.code, 'administrator-required');
+    assert.equal(error.diagnostic.stage, null);
+    assert.doesNotMatch(JSON.stringify(error.diagnostic), /private-value/);
+  }
+  for (const invalid of [finite.trimEnd(), finite + finite, 'x'.repeat(4096) + finite]) {
+    const error = refusal(invalid);
+    assert.equal(error.code, 'unknown');
+    assert.equal(error.diagnostic.phase, null);
+    assert.doesNotMatch(error.message, /AHK_UPDATE_REFUSAL/);
+  }
+});
+
 test('invalid or oversized initialization diagnostics never expose native text or paths', () => {
   const valid = wire('access-denied');
   for (const stderr of [

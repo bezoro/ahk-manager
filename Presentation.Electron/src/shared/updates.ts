@@ -24,8 +24,12 @@ export interface UpdateState {
   lastCheckedAt: string | null;
   error: string | null;
   progress: number | null;
+  downloadId: string | null;
+  downloadCancellation: 'canceling' | 'canceled' | null;
   releases: UpdateRelease[];
 }
+
+export type CancelUpdateDownloadResult = 'accepted' | 'unavailable';
 
 export const emptyUpdateState = (): UpdateState => ({
   currentVersion: '',
@@ -35,6 +39,8 @@ export const emptyUpdateState = (): UpdateState => ({
   lastCheckedAt: null,
   error: null,
   progress: null,
+  downloadId: null,
+  downloadCancellation: null,
   releases: [],
 });
 

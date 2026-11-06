@@ -45,13 +45,13 @@ Start and restart require a verified interpreter and script. Stop requests norma
 
 ## Windows startup and elevation
 
-Both the root launcher and packaged Electron executable carry `requireAdministrator` manifests with `uiAccess=false`. Windows enforces this before app initialization. Backend and UpdateHost inherit their authenticated parent's token; their identity checks remain independent of manifest metadata.
+The root launcher carries a `requireAdministrator` manifest with `uiAccess=false`. The internal Electron executable uses `highestAvailable` with `uiAccess=false`, allowing Chromium to start its restricted subprocesses. The root launcher requests elevation before starting the application. Before portable profile or ACL initialization, the native initializer authenticates the real Manager parent and requires both parent and helper to have an effective administrator token. An unelevated internal application cannot continue into profile, backend or window initialization. Backend and UpdateHost inherit their authenticated parent's token; their identity checks remain independent of manifest metadata.
 
 The trusted desktop composition uses `CreateForTrustedStartupHost` and makes Manager administrator mode mandatory. It normalizes the compatible preference field before startup comparison and persistence while preserving the Windows-startup opt-out and every script's own privilege choice. Enabled Windows startup uses a current-user scheduled task with highest privileges.
 
 Task ownership requires the product marker, resolved Windows account, exact command, logon mode and task shape. Working-directory readiness is separate from ownership. The reviewed legacy Run-entry repair binds approval to exact task/registry/settings state and saves a durable backup before deletion. Unknown or concurrently replaced entries remain protected.
 
-Normal-to-administrator coordination and startup continuation retain authenticated process proofs, receipts and recovery evidence for compatible sessions. A JSON receipt alone never authorizes execution. The mandatory manifest does not weaken account, session, ACL or file-identity checks.
+Normal-to-administrator coordination and startup continuation retain authenticated process proofs, receipts and recovery evidence for compatible sessions. A JSON receipt alone never authorizes execution. Mandatory elevation does not weaken account, session, ACL or file-identity checks.
 
 ## Portable data and compatibility
 

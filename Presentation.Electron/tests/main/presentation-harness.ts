@@ -305,6 +305,28 @@ app
         window.webContents.send('fixture:preferences');
         return;
       }
+      if (method === 'pressEnter') {
+        // Deliver browser keyboard input even when the fixture lacks desktop focus.
+        const debuggerSession = window.webContents.debugger;
+        const key = { code: 'Enter', key: 'Enter', windowsVirtualKeyCode: 13 };
+        return (async () => {
+          debuggerSession.attach();
+          try {
+            await debuggerSession.sendCommand('Input.dispatchKeyEvent', {
+              ...key,
+              type: 'keyDown',
+              text: '\r',
+              unmodifiedText: '\r',
+            });
+            await debuggerSession.sendCommand('Input.dispatchKeyEvent', {
+              ...key,
+              type: 'keyUp',
+            });
+          } finally {
+            debuggerSession.detach();
+          }
+        })();
+      }
       if (method === 'setState') {
         requireValid(
           args[0],
@@ -374,6 +396,7 @@ app
         return updates;
       }
       if (method === 'installUpdate') return { ...updates, phase: 'installing' };
+      if (method === 'cancelUpdateDownload') return 'unavailable';
       if (method === 'setUpdateChannel') {
         const channel = requireValid<'stable' | 'test'>(
           args[0],
@@ -530,6 +553,15 @@ app
                   ')',
               );
               write('updates-' + command.id + '.json', { assertions, fixture: true });
+            } else if (command.action === 'updateDownload' && scenarios) {
+              const assertions = await window.webContents.executeJavaScript(
+                scenarios +
+                  '\nAhkRendererScenarios.previewUpdateDownload(' +
+                  Boolean(command.canceling) +
+                  ')',
+              );
+              write('updateDownload-' + command.id + '.json', { assertions, fixture: true });
+              report();
             } else if (command.action === 'startupReview' && scenarios) {
               const assertions = await window.webContents.executeJavaScript(
                 scenarios + '\nAhkRendererScenarios.previewStartupRepair()',
