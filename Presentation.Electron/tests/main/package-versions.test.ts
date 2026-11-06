@@ -170,7 +170,7 @@ test('the production Windows resource editor uses highestAvailable while preserv
     const manifests = resources.entries.filter((entry) => entry.type === 24 && entry.id === 1);
     assert.equal(manifests.length, 1);
     const manifest = Buffer.from(manifests[0]!.bin).toString('utf8');
-    assert.match(manifest, /<requestedExecutionLevel\b[^>]*\blevel="requireAdministrator"/);
+    assert.match(manifest, /<requestedExecutionLevel\b[^>]*\blevel="highestAvailable"/);
     assert.match(manifest, /<requestedExecutionLevel\b[^>]*\buiAccess="false"/);
   } finally {
     for (const [name, value] of previous) {
