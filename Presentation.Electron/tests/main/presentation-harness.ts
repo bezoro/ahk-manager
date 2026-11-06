@@ -553,6 +553,15 @@ app
                   ')',
               );
               write('updates-' + command.id + '.json', { assertions, fixture: true });
+            } else if (command.action === 'updateDownload' && scenarios) {
+              const assertions = await window.webContents.executeJavaScript(
+                scenarios +
+                  '\nAhkRendererScenarios.previewUpdateDownload(' +
+                  Boolean(command.canceling) +
+                  ')',
+              );
+              write('updateDownload-' + command.id + '.json', { assertions, fixture: true });
+              report();
             } else if (command.action === 'startupReview' && scenarios) {
               const assertions = await window.webContents.executeJavaScript(
                 scenarios + '\nAhkRendererScenarios.previewStartupRepair()',

@@ -227,6 +227,18 @@ try {
         Save-Capture "$theme-updates-zoom-200"
     }
 
+    # Native transfer state is represented only by deterministic fixture data.
+    # Narrow active transfers exercise the cancel action; wide cleanup captures
+    # verify pending cancellation before any retry becomes available.
+    foreach ($theme in @('light', 'dark')) {
+        Set-Presentation $theme 740 600
+        Invoke-Assertions 'updateDownload' 'updateDownload'
+        Save-Capture "$theme-updates-downloading-narrow-740"
+        Set-Presentation $theme 1240 820
+        Invoke-Assertions 'updateDownload' 'updateDownload' @{ canceling = $true }
+        Save-Capture "$theme-updates-canceling-1240"
+    }
+
     foreach ($theme in @('light', 'dark')) {
         Set-Presentation $theme
         Invoke-Assertions 'help' 'help'

@@ -4209,3 +4209,80 @@ export async function previewUpdates(
     },
   ];
 }
+
+/** Deterministic visual states only: no update request or real transfer is dispatched. */
+export async function previewUpdateDownload(canceling = false): Promise<AssertionRecord[]> {
+  await previewUpdates();
+  await window.fixtureHarness.setState({ ...state(), authorityMode: 'Administrator' });
+  await window.fixtureHarness.clearCalls();
+  await window.fixtureHarness.setUpdates({
+    ...updateFixture(),
+    phase: 'downloading',
+    progress: 65,
+    downloadId: canceling ? null : '42eca1f3-8051-4e89-9fd6-3f0ce4f88629',
+    downloadCancellation: canceling ? 'canceling' : null,
+  });
+  await tick();
+  const label = canceling ? text.updateCancelingDownload : text.updateDownloading;
+  const status = [...document.querySelectorAll<HTMLElement>('[role="status"]')].find(
+    (node) => node.textContent?.trim() === label,
+  );
+  assert(status, 'The transfer state has no visible status');
+  const progress = document.querySelector<HTMLElement>(
+    `[role="progressbar"][aria-label="${text.updateDownloadProgress}"]`,
+  );
+  assert(
+    canceling ? !progress : !!progress,
+    canceling ? 'Cleanup retained stale transfer progress' : 'The transfer progress is not labeled',
+  );
+  const cancels = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(
+    (node) => node.textContent?.trim() === text.updateCancelDownload,
+  );
+  if (canceling) assert(cancels.length === 0, 'Cleanup still offers another cancel action');
+  else {
+    assert(cancels.length === 1 && !cancels[0]!.disabled, 'An active transfer cannot be canceled');
+    cancels[0]!.focus();
+    assert(document.activeElement === cancels[0], 'Cancel cannot receive keyboard focus');
+  }
+  assert(
+    button(text.updateInstall).disabled &&
+      button(text.updateCheck).disabled &&
+      (document.getElementById('update-channel') as HTMLSelectElement).disabled,
+    'A transfer or its cleanup leaves competing update actions enabled',
+  );
+  const page = document.querySelector<HTMLElement>('.updates-page');
+  assert(
+    page &&
+      page.scrollWidth <= page.clientWidth + 1 &&
+      document.documentElement.scrollWidth <= innerWidth,
+    'The transfer preview overflows its viewport',
+  );
+  for (const control of [status, ...(progress ? [progress] : []), ...cancels]) {
+    const bounds = control.getBoundingClientRect();
+    assert(
+      bounds.width > 0 &&
+        bounds.height > 0 &&
+        bounds.left >= 0 &&
+        bounds.right <= innerWidth &&
+        bounds.top >= 0 &&
+        bounds.bottom <= innerHeight,
+      'A transfer status, progress or cancel control is outside the viewport',
+    );
+  }
+  assert(
+    !(await window.fixtureHarness.calls()).some((call) =>
+      ['installUpdate', 'cancelUpdateDownload', 'checkUpdates', 'setUpdateChannel'].includes(
+        call.method,
+      ),
+    ),
+    'The transfer preview dispatched an update effect',
+  );
+  return [
+    {
+      name: canceling
+        ? 'update cancellation cleanup is visible, bounded and does not offer another transfer action'
+        : 'active update download shows labeled progress and a visible keyboard-focusable cancel action',
+      passed: true,
+    },
+  ];
+}
