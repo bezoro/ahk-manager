@@ -49,6 +49,6 @@ END
 $resourcePath = Join-Path $OutputRoot 'launcher.rc'
 [IO.File]::WriteAllText($resourcePath, $resource, [Text.UTF8Encoding]::new($false))
 $executable = Join-Path $OutputRoot 'Bezoro.AhkManager.exe'
-Build-PortableWin32Executable -SourcePath (Join-Path $sourceRoot 'Launcher.cpp') -OutputPath $executable -ResourcePath $resourcePath
+Build-PortableWin32Executable -SourcePath (Join-Path $sourceRoot 'Launcher.cpp') -OutputPath $executable -ResourcePath $resourcePath -ExecutionLevel requireAdministrator
 if ([Diagnostics.FileVersionInfo]::GetVersionInfo($executable).FileVersion -cne $Version) { throw 'The portable launcher lost its exact release version resource.' }
 Write-Host 'Built the standalone Windows GUI portable launcher.'

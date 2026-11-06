@@ -9,10 +9,26 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     int count = 0;
     wchar_t** arguments = CommandLineToArgvW(GetCommandLineW(), &count);
     if (arguments == nullptr || count < 2) return 2;
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        LocalFree(arguments);
+        return 7;
+    }
+    TOKEN_ELEVATION elevation{};
+    DWORD returned = 0;
+    const BOOL tokenRead = GetTokenInformation(token, TokenElevation, &elevation,
+                                               static_cast<DWORD>(sizeof(elevation)), &returned);
+    CloseHandle(token);
+    if (!tokenRead || returned != sizeof(elevation)) {
+        LocalFree(arguments);
+        return 7;
+    }
     const HANDLE output = CreateFileW(arguments[1], GENERIC_WRITE, 0, nullptr, CREATE_NEW,
                                       FILE_ATTRIBUTE_NORMAL, nullptr);
     if (output == INVALID_HANDLE_VALUE) { LocalFree(arguments); return 3; }
     std::wstring data = GetConsoleWindow() == nullptr ? L"no-console" : L"console";
+    data.push_back(L'\0');
+    data.append(elevation.TokenIsElevated ? L"administrator" : L"normal");
     data.push_back(L'\0');
     wchar_t buffer[32768];
     DWORD length = GetCurrentDirectoryW(32768, buffer);

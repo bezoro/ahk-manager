@@ -18,7 +18,9 @@ AHK Manager/
 
 ## Windows integration
 
-No Setup or uninstall registration is required. Opening the root launcher starts Manager and its notification-area icon. A new profile starts Manager with Windows and requests administrator privileges by default; both preferences remain configurable. Windows may show UAC when elevation is needed.
+No Setup or uninstall registration is required. Opening the root launcher starts Manager and its notification-area icon. Windows requires administrator privileges before either the root launcher or application runs. Windows may show UAC when you open Manager. Manager starts with Windows by default; this startup preference remains configurable. An enabled startup entry uses a current-user scheduled task with highest privileges. Older Manager administrator preferences are migrated to the required mode. Individual scripts keep their own administrator preferences and can still run with standard privileges.
+
+When upgrading from version 1.6.2 or earlier, open that older Manager as administrator before applying the update. Its existing update helper must be elevated to reopen the new administrator-required application. Subsequent launches use the Windows elevation requirement automatically.
 
 After obtaining writable ownership of its profile, Manager creates a current-user **AHK Manager Portable** shortcut in the Start Menu. It points to the root launcher, so Windows Search and PowerToys launchers that index Start Menu applications can discover it. Search results can take time to refresh, and the relevant PowerToys launcher must be enabled. Existing unrelated shortcuts are preserved.
 

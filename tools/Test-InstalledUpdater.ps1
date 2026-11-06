@@ -400,6 +400,9 @@ try {
     } while ([DateTime]::UtcNow -lt $deadline)
     Write-Json 'installed-host-state.json' $hostState
     Assert-Check ($hostState -and $hostState.connection -eq 'ready' -and $hostState.authorityMode -eq 'Administrator' -and $hostState.snapshot.scripts.Count -eq 0 -and -not $hostState.snapshot.readOnly) 'the installed baseline has a real administrative backend and an empty writable fixture profile'
+    if ($BaselineKind -eq 'Candidate') {
+        Assert-Check ($hostState.snapshot.settings.launchManagerAsAdministrator -eq $true -and $hostState.snapshot.settings.launchManagerAtLogin -eq $false) 'the candidate normalizes the legacy Manager privilege preference without enabling Windows startup'
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     do {
         $updateState = Evaluate 'window.ahkManager.getUpdateState()'

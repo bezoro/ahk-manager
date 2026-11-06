@@ -77,7 +77,7 @@ module.exports = {
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
     icon: path.join(frontend, 'app.ico'),
-    requestedExecutionLevel: 'asInvoker',
+    requestedExecutionLevel: 'requireAdministrator',
     signAndEditExecutable: true,
     verifyUpdateCodeSignature: signed || publisherName !== null,
     ...(publisherName !== null ? { signtoolOptions: { publisherName: [publisherName] } } : {}),

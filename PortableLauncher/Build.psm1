@@ -5,7 +5,8 @@ function Build-PortableWin32Executable {
     param(
         [Parameter(Mandatory = $true)][string]$SourcePath,
         [Parameter(Mandatory = $true)][string]$OutputPath,
-        [string]$ResourcePath
+        [string]$ResourcePath,
+        [ValidateSet('asInvoker', 'requireAdministrator')][string]$ExecutionLevel = 'asInvoker'
     )
     if (-not $IsWindows -or -not [IO.Path]::IsPathFullyQualified($SourcePath) -or -not [IO.Path]::IsPathFullyQualified($OutputPath) -or (Test-Path -LiteralPath $OutputPath)) { throw 'Use Windows and fresh absolute native build paths.' }
     $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -58,11 +59,28 @@ function Build-PortableWin32Executable {
     }
     foreach ($argument in @('/nologo', '/O2', '/Os', '/W4', '/WX', '/MT', '/EHsc', '/guard:cf', '/Brepro', '/utf-8', $SourcePath, ('/Fo' + [IO.Path]::ChangeExtension($OutputPath, '.obj')))) { $start.ArgumentList.Add($argument) }
     if ($resourceOutput) { $start.ArgumentList.Add($resourceOutput) }
-    foreach ($argument in @('/link', '/SUBSYSTEM:WINDOWS', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/CETCOMPAT', '/OPT:REF', '/OPT:ICF', '/Brepro', ('/OUT:' + $OutputPath), 'user32.lib', 'shell32.lib')) { $start.ArgumentList.Add($argument) }
+    foreach ($argument in @('/link', '/SUBSYSTEM:WINDOWS', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/CETCOMPAT', '/OPT:REF', '/OPT:ICF', '/Brepro', '/MANIFEST:EMBED', ("/MANIFESTUAC:level='$ExecutionLevel' uiAccess='false'"), ('/OUT:' + $OutputPath), 'user32.lib', 'shell32.lib', 'advapi32.lib')) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($start)
     try { $process.WaitForExit(); if ($process.ExitCode -ne 0) { throw "Portable native build failed: $($process.ExitCode)." } }
     finally { $process.Dispose() }
     if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { throw 'The native build did not produce its executable.' }
+    # Verify the embedded PE manifest, rather than trusting only linker inputs.
+    # The adjacent extraction is build/test evidence and is not packaged.
+    $manifestTool = @($start.Environment['PATH'].Split(';') | Where-Object { $_ } | ForEach-Object { Join-Path $_ 'mt.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
+    if ($manifestTool.Count -ne 1) { throw 'The Windows SDK manifest tool is unavailable.' }
+    $manifestPath = $OutputPath + '.manifest.xml'
+    if (Test-Path -LiteralPath $manifestPath) { throw 'Use a fresh native manifest evidence path.' }
+    $manifestStart = [Diagnostics.ProcessStartInfo]::new($manifestTool[0])
+    $manifestStart.UseShellExecute = $false
+    $manifestStart.WorkingDirectory = $directory
+    foreach ($entry in $start.Environment.GetEnumerator()) { $manifestStart.Environment[$entry.Key] = $entry.Value }
+    foreach ($argument in @('-nologo', ('-inputresource:' + $OutputPath + ';#1'), ('-out:' + $manifestPath))) { $manifestStart.ArgumentList.Add($argument) }
+    $manifestProcess = [Diagnostics.Process]::Start($manifestStart)
+    try { $manifestProcess.WaitForExit(); if ($manifestProcess.ExitCode -ne 0) { throw "Native manifest extraction failed: $($manifestProcess.ExitCode)." } }
+    finally { $manifestProcess.Dispose() }
+    [xml]$manifest = [IO.File]::ReadAllText($manifestPath)
+    $requested = $manifest.SelectNodes("//*[local-name()='requestedExecutionLevel']")
+    if ($requested.Count -ne 1 -or $requested[0].GetAttribute('level') -cne $ExecutionLevel -or $requested[0].GetAttribute('uiAccess') -cne 'false') { throw 'The native executable has an unexpected requested execution level.' }
 }
 
 Export-ModuleMember -Function Build-PortableWin32Executable

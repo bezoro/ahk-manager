@@ -59,9 +59,9 @@ export const text = {
   editorAdvanced: 'Advanced arguments',
   startupAdvanced: 'Previous installation',
   descriptionSource: 'Description in file',
-  launchManagerAsAdministrator: 'Run Manager as administrator',
+  managerAdministratorRequired: 'Manager always runs as administrator.',
   managerAdministratorHint:
-    'Administrator scripts start at sign-in only when this option is enabled. Windows requests permission to configure elevated startup.',
+    'Windows may request UAC approval when Manager opens. Each script keeps its own administrator preference.',
   requestAdministration: 'Reopen as administrator',
   checkAdministration: 'Check transfer',
   administrationPending:
