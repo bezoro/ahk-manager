@@ -556,13 +556,15 @@ function Confirm-CanceledDownload($Target, $Choice, [string]$Action) {
         $state = Invoke-PortableEvaluation $session 'window.ahkManager.getUpdateState()'
         $terminal = Invoke-PortableEvaluation $session 'document.querySelector(".updates-page")?.innerText.includes("Download canceled.") === true'
         $discarded = -not (Test-Path -LiteralPath $staging)
-        if ($terminal -and $discarded -and $tunnel.ClientClosedAtUtc) { break }
+        # The DOM can advance after this iteration sampled the main process.
+        $cancellationComplete = $terminal -and $discarded -and $tunnel.ClientClosedAtUtc -and [DateTimeOffset]$tunnel.ClientClosedAtUtc -ge $clickedAt -and
+            $state.phase -ceq 'idle' -and $state.downloadCancellation -ceq 'canceled' -and $null -eq $state.progress -and $null -eq $state.downloadId -and
+            @($state.releases | Where-Object { $_.id -ceq $Choice.id -and $_.canInstall -and -not $_.cached }).Count -eq 1
+        if ($cancellationComplete) { break }
         Start-Sleep -Milliseconds 50
     } while ($deadline.Elapsed.TotalSeconds -lt 10)
     Write-Json 'cancel-terminal.json' @{ clickedAtUtc = $clickedAt.ToString('O'); elapsedMilliseconds = $deadline.ElapsedMilliseconds; terminal = $terminal; discarded = $discarded; state = $state; tunnel = $tunnel }
-    Check ($deadline.Elapsed.TotalSeconds -le 10 -and $terminal -and $discarded -and $tunnel.ClientClosedAtUtc -and [DateTimeOffset]$tunnel.ClientClosedAtUtc -ge $clickedAt -and
-        $state.phase -ceq 'idle' -and $state.downloadCancellation -ceq 'canceled' -and $null -eq $state.progress -and $null -eq $state.downloadId -and
-        @($state.releases | Where-Object { $_.id -ceq $Choice.id -and $_.canInstall -and -not $_.cached }).Count -eq 1) 'browser closure, exact staging removal and reusable canceled state are observed within ten seconds'
+    Check ($deadline.Elapsed.TotalSeconds -le 10 -and $cancellationComplete) 'browser closure, exact staging removal and reusable canceled state are observed within ten seconds'
     Save-PortableScreenshot 'cancel-complete.png'
     Check (-not (Test-Path -LiteralPath $cache) -and -not @(Get-ChildItem -LiteralPath (Join-Path $updatesRoot 'operations') -Directory -ErrorAction SilentlyContinue).Count) 'cancellation publishes no target cache or native operation'
     Wait-Ready $session $currentVersion
