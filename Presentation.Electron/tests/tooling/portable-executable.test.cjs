@@ -8,14 +8,7 @@ const crypto = require('node:crypto');
 const { NtExecutable, NtExecutableResource, Resource, Format } = require('resedit');
 const { verifyPortableExecutable } = require('../../scripts/verify-portable-executable.cjs');
 
-function image(
-  root,
-  name,
-  version,
-  level = 'requireAdministrator',
-  access = 'false',
-  utf16 = false,
-) {
+function image(root, name, version, level = 'highestAvailable', access = 'false', utf16 = false) {
   const executable = NtExecutable.createEmpty(false);
   const resources = NtExecutableResource.from(executable);
   Resource.VersionInfo.create({
@@ -55,10 +48,10 @@ function temporary(t) {
 test('final PE inspection verifies stable and preview identity without executing or changing images', (t) => {
   const root = temporary(t);
   for (const [index, version] of ['2.0.0', '2.0.1-test.19.63.1'].entries()) {
-    const file = image(root, String(index), version, 'requireAdministrator', 'false', index === 1);
+    const file = image(root, String(index), version, 'highestAvailable', 'false', index === 1);
     const original = fs.readFileSync(file);
     const result = verifyPortableExecutable(file, version);
-    assert.equal(result.requestedExecutionLevel, 'requireAdministrator');
+    assert.equal(result.requestedExecutionLevel, 'highestAvailable');
     assert.equal(result.uiAccess, false);
     assert.equal(result.readOnly, true);
     assert.equal(result.fileVersion, version);
@@ -68,19 +61,27 @@ test('final PE inspection verifies stable and preview identity without executing
   }
 });
 
-test('final PE inspection refuses standard privileges, UIAccess and a lost preview identity', (t) => {
+test('final Electron PE inspection refuses incompatible manifests, UIAccess and a lost preview identity', (t) => {
   const root = temporary(t);
   assert.throws(
     () => verifyPortableExecutable(image(root, 'normal', '2.0.0', 'asInvoker'), '2.0.0'),
-    /administrator access/,
+    /highestAvailable/,
   );
   assert.throws(
     () =>
       verifyPortableExecutable(
-        image(root, 'uiaccess', '2.0.0', 'requireAdministrator', 'true'),
+        image(root, 'incompatible', '2.0.0', 'requireAdministrator'),
         '2.0.0',
       ),
-    /administrator access/,
+    /highestAvailable/,
+  );
+  assert.throws(
+    () =>
+      verifyPortableExecutable(
+        image(root, 'uiaccess', '2.0.0', 'highestAvailable', 'true'),
+        '2.0.0',
+      ),
+    /highestAvailable/,
   );
   assert.throws(
     () => verifyPortableExecutable(image(root, 'wrong-preview', '2.0.0'), '2.0.0-test.19.63.1'),
@@ -103,7 +104,7 @@ test('PE verification CLI writes fresh evidence and preserves an existing receip
   ];
   assert.equal(spawnSync(process.execPath, args, { encoding: 'utf8' }).status, 0);
   const original = fs.readFileSync(out);
-  assert.equal(JSON.parse(original).requestedExecutionLevel, 'requireAdministrator');
+  assert.equal(JSON.parse(original).requestedExecutionLevel, 'highestAvailable');
   assert.notEqual(spawnSync(process.execPath, args, { encoding: 'utf8' }).status, 0);
   assert.deepEqual(fs.readFileSync(out), original);
 });
@@ -138,5 +139,5 @@ test('certificate-bearing PE inspection preserves certificate bytes and enforces
   assert.deepEqual(fs.readFileSync(file), bytes);
   const normal = image(root, 'certificate-normal', '2.0.0', 'asInvoker');
   certificateBearing(normal);
-  assert.throws(() => verifyPortableExecutable(normal, '2.0.0'), /administrator access/);
+  assert.throws(() => verifyPortableExecutable(normal, '2.0.0'), /highestAvailable/);
 });

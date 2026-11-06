@@ -18,6 +18,7 @@ internal static class PortableInitializationDiagnostics
     static readonly HashSet<string> Stages = new(StringComparer.Ordinal)
     {
         "resolve-layout",
+        "verify-administrator",
         "retain-root",
         "retain-data",
         "open-marker",

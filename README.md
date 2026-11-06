@@ -8,7 +8,7 @@ A portable AutoHotkey v2 script manager for Windows 11 x64. Electron, React and 
 
 Extract `AHK-Manager-<version>-Portable-x64.zip` into its own local folder and open the root `Bezoro.AhkManager.exe`. Keep `portable.json`, `portable-package.json` and `App` together. The package includes Electron and .NET; AutoHotkey v2 is a separate requirement for executing scripts.
 
-Manager always runs as administrator. Windows requests UAC approval when needed, before the launcher or application opens its files. Manager starts with Windows by default through a current-user scheduled task with highest privileges. This startup preference remains configurable. Each script keeps its own privilege preference; ordinary scripts still use the standard user token.
+Manager always runs as administrator. The root launcher requests UAC approval when needed. Manager also verifies administrator privileges before preparing its portable profile. Manager starts with Windows by default through a current-user scheduled task with highest privileges. This startup preference remains configurable. Each script keeps its own privilege preference; ordinary scripts still use the standard user token.
 
 - Add scripts from anywhere on the system and choose which ones run at sign-in.
 - Start, restart and stop scripts manually, with verified process identities.

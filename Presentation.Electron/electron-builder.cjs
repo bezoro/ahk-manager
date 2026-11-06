@@ -77,7 +77,9 @@ module.exports = {
   win: {
     target: [{ target: 'dir', arch: ['x64'] }],
     icon: path.join(frontend, 'app.ico'),
-    requestedExecutionLevel: 'requireAdministrator',
+    // Chromium subprocesses require a compatible manifest. The root launcher
+    // requires elevation; native initialization rejects an unelevated Manager.
+    requestedExecutionLevel: 'highestAvailable',
     signAndEditExecutable: true,
     verifyUpdateCodeSignature: signed || publisherName !== null,
     ...(publisherName !== null ? { signtoolOptions: { publisherName: [publisherName] } } : {}),

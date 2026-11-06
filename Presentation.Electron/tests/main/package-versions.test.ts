@@ -26,7 +26,7 @@ test('packaging accepts bounded test identities and rejects ambiguous versions b
     assert.equal(validUpdateVersion(version), false, version);
 });
 
-test('the production Windows resource editor requires administrator while preserving full test FileVersion and numeric ProductVersion', async () => {
+test('the production Windows resource editor uses highestAvailable while preserving full test FileVersion and numeric ProductVersion', async () => {
   const { Platform } = require(path.resolve('node_modules/app-builder-lib')) as {
     Platform: { WINDOWS: unknown };
   };
@@ -79,7 +79,7 @@ test('the production Windows resource editor requires administrator while preser
       requestedExecutionLevel: string;
       target: Array<{ target: string }>;
     };
-    assert.equal(windows.requestedExecutionLevel, 'requireAdministrator');
+    assert.equal(windows.requestedExecutionLevel, 'highestAvailable');
     assert.deepEqual(windows.target, [{ target: 'dir', arch: ['x64'] }]);
     assert.equal(Object.hasOwn(config, 'nsis'), false);
     assert.equal((config.extraMetadata as { updateProtocol: number }).updateProtocol, 2);

@@ -33,6 +33,7 @@ const codes = new Set([
   'cancelled',
   'invalid-data',
   'access-denied',
+  'administrator-required',
   'file-not-found',
   'directory-not-found',
   'sharing-violation',
@@ -51,6 +52,9 @@ const codes = new Set([
   'invalid-package',
 ]);
 const maximumBytes = 4096;
+
+export const administratorRequiredMessage =
+  'Manager requires administrator access. Open the root launcher, Bezoro.AhkManager.exe, and approve the Windows UAC prompt.';
 
 export interface UpdateHostRefusal {
   schemaVersion: 1;
@@ -124,6 +128,7 @@ export function updateHostRefusalMessage(refusal: UpdateHostRefusal | null): str
     'The update helper rejected the update. The portable application has been preserved.';
   if (refusal?.schemaVersion !== 1 || !phases.has(refusal.phase) || !codes.has(refusal.code))
     return fallback;
+  if (refusal.code === 'administrator-required') return administratorRequiredMessage;
   if (refusal.code === 'unsupported-filesystem')
     return 'Updates require NTFS storage for the application and update cache. ReFS, FAT32 and exFAT are not supported. Nothing was changed.';
   if (refusal.code === 'cloud-file-unavailable')

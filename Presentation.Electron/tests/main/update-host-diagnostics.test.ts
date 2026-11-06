@@ -55,6 +55,29 @@ test('native refusal diagnostics accept only complete records from the fixed voc
   assert.equal(readUpdateHostRefusal(highBit), null);
 });
 
+test('administrator-required is a finite native refusal with root-launcher recovery instructions', () => {
+  const native =
+    'AHK_UPDATE_REFUSAL:{"schemaVersion":1,"phase":"portable-initialization","code":"administrator-required"}\n';
+  const value = readUpdateHostRefusal(Buffer.from(native));
+  assert.deepEqual(value, {
+    schemaVersion: 1,
+    phase: 'portable-initialization',
+    code: 'administrator-required',
+  });
+  assert.match(
+    updateHostRefusalMessage(value),
+    /requires administrator access.*root launcher.*Bezoro\.AhkManager\.exe.*Windows UAC/,
+  );
+  for (const invalid of [
+    native.trimEnd(),
+    native + native,
+    native.replace('administrator-required', 'administrator-required-private'),
+    native.replace('"code":', '"token":"private-value","code":'),
+    'x'.repeat(4096) + native,
+  ])
+    assert.equal(readUpdateHostRefusal(Buffer.from(invalid)), null);
+});
+
 test('stderr is drained immediately across split chunks and after process exit before stream close', async () => {
   const f = fixture();
   assert.equal(f.unreferenced(), true, 'the pipe must not prevent normal Manager exit');

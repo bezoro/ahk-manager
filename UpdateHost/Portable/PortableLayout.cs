@@ -27,7 +27,7 @@ internal sealed record PortableLayout(
     internal string Launcher => Path.Combine(Root, Executable);
     internal string Marker => Path.Combine(Root, "portable.json");
 
-    internal static string ParentImage()
+    internal static string ParentImage(bool requireAdministrator = false)
     {
         using var self = Process.GetCurrentProcess();
         if (
@@ -42,20 +42,39 @@ internal sealed record PortableLayout(
         )
             throw new InvalidDataException("The native Manager parent is unavailable.");
         using var parent = Process.GetProcessById((int)information.ParentPid);
+        const uint queryToken = 0x8,
+            duplicateToken = 0x2;
+        // WindowsPrincipal duplicates a primary token when checking enabled membership.
         if (
             parent.SessionId != self.SessionId
-            || !Native.OpenProcessToken(parent.SafeHandle, 8, out var token)
+            || !Native.OpenProcessToken(
+                parent.SafeHandle,
+                queryToken | (requireAdministrator ? duplicateToken : 0U),
+                out var token
+            )
         )
             throw new InvalidDataException("The portable Manager session is not authenticated.");
         using (token)
         using (var parentUser = new WindowsIdentity(token.DangerousGetHandle()))
         using (var currentUser = WindowsIdentity.GetCurrent())
+        {
             if (
                 parentUser.User is null
                 || currentUser.User is null
                 || parentUser.User.Value != currentUser.User.Value
             )
                 throw new InvalidDataException("The portable Manager belongs to another user.");
+            if (requireAdministrator)
+                PortableInitializationDiagnostics.Step(
+                    "verify-administrator",
+                    "application",
+                    () =>
+                        PortableAdministratorAccess.Require(
+                            PortableAdministratorAccess.Read(currentUser),
+                            PortableAdministratorAccess.Read(parentUser)
+                        )
+                );
+        }
         var image = new StringBuilder(32768);
         int length = image.Capacity;
         if (!Native.QueryFullProcessImageName(parent.SafeHandle, 0, image, ref length))
@@ -63,9 +82,9 @@ internal sealed record PortableLayout(
         return UpdatePaths.Local(image.ToString());
     }
 
-    internal static PortableLayout? FromParent()
+    internal static PortableLayout? FromParent(bool requireAdministrator = false)
     {
-        string image = ParentImage();
+        string image = ParentImage(requireAdministrator);
         string application = Path.GetDirectoryName(image)!;
         if (
             !Path.GetFileName(image).Equals(Executable, StringComparison.OrdinalIgnoreCase)

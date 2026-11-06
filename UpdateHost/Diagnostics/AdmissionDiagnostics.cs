@@ -87,6 +87,7 @@ internal static class AdmissionDiagnostics
                 _ => throw new ArgumentOutOfRangeException(nameof(exception)),
             },
             OperationCanceledException => "cancelled",
+            PortableAdministratorRequiredException => "administrator-required",
             InvalidDataException => "invalid-data",
             UnauthorizedAccessException => "access-denied",
             FileNotFoundException => "file-not-found",
