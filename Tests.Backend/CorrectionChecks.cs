@@ -63,22 +63,31 @@ internal static class CorrectionChecks
             ManagerElevation.ProfileLocksAvailable(operational, isolatedOwner, chromium),
             "F1 released actual Chromium locks permit next gate"
         );
+        var layout = PortableHostFixture.Create(root, "correction-portable-host");
         Check(
-            ManagerElevation.ChromiumRoot
-                == Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "Bezoro",
-                    "AhkManagerElectron",
-                    "Chromium"
-                )
-                && ManagerElevation.ProfileRootsMatch(
-                    ManagerElevation.ProfileRoot,
-                    ManagerElevation.ChromiumRoot
+            layout.ProfileRoot == Path.Combine(layout.DataRoot, "Profile")
+                && layout.ChromiumRoot == Path.Combine(layout.DataRoot, "Chromium")
+                && ElevationReceiptStore.ProfileRootsMatch(
+                    layout.ProfileRoot,
+                    layout.ChromiumRoot,
+                    layout.HostExecutable
                 ),
-            "F1 actual fixed Roaming Chromium path is bound separately from operational root"
+            "F1 authenticated portable marker binds separate operational and Chromium roots"
         );
         Check(
-            !ManagerElevation.ProfileRootsMatch(ManagerElevation.ProfileRoot, operational),
+            !ElevationReceiptStore.ProfileRootsMatch(
+                operational,
+                layout.ChromiumRoot,
+                layout.HostExecutable
+            ),
+            "F1 wrong existing operational directory cannot authenticate receipt"
+        );
+        Check(
+            !ElevationReceiptStore.ProfileRootsMatch(
+                layout.ProfileRoot,
+                chromium,
+                layout.HostExecutable
+            ),
             "F1 wrong existing Chromium directory cannot authenticate receipt"
         );
 

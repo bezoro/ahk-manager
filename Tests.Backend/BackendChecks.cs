@@ -99,7 +99,8 @@ internal static class BackendChecks
 
     static async Task StartupVisibilityFixturesAsync(string root)
     {
-        string host = Path.Combine(root, "Manager.exe");
+        var layout = PortableHostFixture.Create(root, "startup-visibility-portable-host");
+        string host = layout.HostExecutable;
         System.Diagnostics.ProcessStartInfo? delivered = null;
         int activation = await ManagerElevation.ActivateCommitted(
             _ => Task.FromResult(true),
@@ -117,7 +118,7 @@ internal static class BackendChecks
                 && delivered is not null
                 && delivered.FileName == host
                 && !delivered.UseShellExecute
-                && delivered.WorkingDirectory == root
+                && delivered.WorkingDirectory == layout.PortableRoot
                 && delivered.ArgumentList.SequenceEqual(["--foreground"]),
             "authenticated committed host launch carries only foreground UI intent without login or privilege arguments"
         );
