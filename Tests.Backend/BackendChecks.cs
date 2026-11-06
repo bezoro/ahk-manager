@@ -79,6 +79,10 @@ internal static class BackendChecks
         await Suite("portable profiles", () => PortableProfileChecks.RunAsync(root, Check));
         await Suite("startup settings", () => StartupSettingsChecks.RunAsync(root, Check));
         await Suite(
+            "mandatory Manager administrator",
+            () => ManagerAdministratorPolicyChecks.RunAsync(root, Check)
+        );
+        await Suite(
             "startup repair transport",
             () => StartupRepairTransportChecks.RunAsync(root, Check)
         );

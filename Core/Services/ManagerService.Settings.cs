@@ -14,6 +14,7 @@ public sealed partial class ManagerService
         ResultAction(
             async () =>
             {
+                settings = store.ApplyHostPolicy(settings);
                 bool registrationChange =
                     settings.LaunchManagerAtLogin != document.Settings.LaunchManagerAtLogin
                     || settings.LaunchManagerAtLogin

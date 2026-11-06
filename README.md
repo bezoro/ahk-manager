@@ -12,7 +12,7 @@ An AutoHotkey v2 script manager for Windows 11 x64. The desktop interface uses E
 - Browse hotkeys, activity, and process observation problems.
 - Update from the app, choose Stable or Test, and use version history to return to a previous release.
 
-The manager starts with Windows and requests administrator access by default. These preferences are independent and configurable. Scripts without the administrator option continue to use the standard user token.
+Manager always runs as administrator. Windows requests UAC approval when needed, before the portable launcher or application opens its files. Starting Manager with Windows remains configurable and uses a current-user scheduled task with highest privileges. Scripts without the administrator option continue to use the standard user token.
 
 Automatic sign-in does not display Manager confirmation or warning dialogs. Windows UAC may still request elevation permission; the main window follows your visibility preferences. Startup issues remain available in the app.
 

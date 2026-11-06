@@ -50,6 +50,7 @@ export function Preferences({
 }: Props): React.ReactElement {
   const [draft, setDraft] = React.useState(() => ({
     ...settings,
+    launchManagerAsAdministrator: true,
     editorArguments: [...settings.editorArguments],
   }));
   const [argumentsText, setArgumentsText] = React.useState(settings.editorArguments.join('\n'));
@@ -61,9 +62,10 @@ export function Preferences({
   const settingsChanged =
     JSON.stringify({
       ...draft,
+      launchManagerAsAdministrator: true,
       window: settings.window,
       editorArguments: argumentsText.split(/\r?\n/).filter(Boolean),
-    }) !== JSON.stringify(settings);
+    }) !== JSON.stringify({ ...settings, launchManagerAsAdministrator: true });
   const change = (patch: Partial<ManagerSettings>) => setDraft((value) => ({ ...value, ...patch }));
   async function choose(kind: 'interpreter' | 'editor'): Promise<void> {
     if (picking || busy) return;
@@ -78,6 +80,7 @@ export function Preferences({
   const save = (): void =>
     onSave({
       ...draft,
+      launchManagerAsAdministrator: true,
       window: settings.window,
       editorArguments: argumentsText.split(/\r?\n/).filter((value) => value.length > 0),
     });
@@ -108,14 +111,9 @@ export function Preferences({
                   onChange={(_, data) => change({ launchManagerAtLogin: data.checked === true })}
                 />
                 <p className="muted">{text.startupHint}</p>
-                <Checkbox
-                  id="settings-administrator"
-                  checked={draft.launchManagerAsAdministrator}
-                  label={text.launchManagerAsAdministrator}
-                  onChange={(_, data) =>
-                    change({ launchManagerAsAdministrator: data.checked === true })
-                  }
-                />
+                <p id="settings-administrator-policy">
+                  <strong>{text.managerAdministratorRequired}</strong>
+                </p>
                 <p className="muted">{text.managerAdministratorHint}</p>
                 <Checkbox
                   id="settings-start-in-tray"
@@ -146,10 +144,7 @@ export function Preferences({
                   pendingDataMove={!!storage.state?.pendingDataDirectory}
                   storageStatus={storageStatus}
                   refreshKey={notice}
-                  savedMode={JSON.stringify([
-                    settings.launchManagerAtLogin,
-                    settings.launchManagerAsAdministrator,
-                  ])}
+                  savedMode={JSON.stringify([settings.launchManagerAtLogin, true])}
                   onPending={setRepairingStartup}
                   onResult={onRepairResult}
                   onRepair={onRepairStartup}

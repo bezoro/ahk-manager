@@ -368,8 +368,9 @@ function Wait-Ready($Current, [string]$ExpectedVersion) {
     } while ([DateTime]::UtcNow -lt $deadline)
     Write-Json ("host-$ExpectedVersion.json") $state
     Check ($state -and $state.connection -eq 'ready' -and $state.authorityMode -eq 'Administrator' -and -not $state.snapshot.readOnly) 'the portable application has its real administrative backend and writable profile'
-    Check ($state.snapshot.scripts.Count -eq 1 -and $state.snapshot.scripts[0].id -eq $scriptId -and $state.snapshot.scripts[0].path -eq $scriptFile -and $state.snapshot.scripts[0].runAtLogin -eq $false) 'the imported external script identity and disabled automatic execution are preserved'
-    Check ($state.snapshot.settings.editorArguments -contains 'portable-ci-preservation') 'the imported user preferences survive in the real backend state'
+    Check ($state.snapshot.scripts.Count -eq 1 -and $state.snapshot.scripts[0].id -eq $scriptId -and $state.snapshot.scripts[0].path -eq $scriptFile -and $state.snapshot.scripts[0].runAtLogin -eq $false -and $state.snapshot.scripts[0].runAsAdministrator -eq $false) 'the imported external script identity, disabled automatic execution and standard privileges are preserved'
+    Check ($state.snapshot.settings.launchManagerAsAdministrator -eq $true -and $state.snapshot.settings.launchManagerAtLogin -eq $false) 'the legacy normal-Manager preference becomes administrative while Windows startup remains disabled'
+    Check ($state.snapshot.settings.editorArguments.Count -eq 1 -and $state.snapshot.settings.editorArguments[0] -ceq 'portable-ci-preservation' -and $null -eq $state.snapshot.settings.interpreterPath -and $null -eq $state.snapshot.settings.editorPath -and $state.snapshot.settings.showWindowAtLogin -eq $true -and $state.snapshot.settings.startInTray -eq $false -and $state.snapshot.settings.theme -ceq 'Dark' -and $state.snapshot.settings.closeBehavior -ceq 'Exit') 'all unrelated imported user preferences survive the Manager-only administrator migration'
     $update = Invoke-PortableEvaluation $Current 'window.ahkManager.getUpdateState()'
     Check ($update.currentVersion -ceq $ExpectedVersion) 'the packaged app reports its exact coherent release version'
     $storage = Invoke-PortableEvaluation $Current 'window.ahkManager.getStorageState()'

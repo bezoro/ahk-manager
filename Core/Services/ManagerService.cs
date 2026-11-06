@@ -81,7 +81,8 @@ public sealed partial class ManagerService : IManagerService
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Bezoro",
                 "AhkManager"
-            )
+            ),
+            managerRequiresAdministrator: true
         );
     }
 
@@ -90,14 +91,15 @@ public sealed partial class ManagerService : IManagerService
         IEffectOwner owner,
         IProcessManager processes,
         UserStartupService startup,
-        string? legacyAuthorityDirectory = null
+        string? legacyAuthorityDirectory = null,
+        bool managerRequiresAdministrator = false
     )
     {
         DataRoot = ScriptPaths.LocalPath(dataRoot);
         this.owner = owner;
         this.processes = processes;
         this.startup = startup;
-        store = new(Path.Combine(DataRoot, "settings.json"));
+        store = new(Path.Combine(DataRoot, "settings.json"), managerRequiresAdministrator);
         journal = new(Path.Combine(DataRoot, "operations.json"));
         activity = new(DataRoot);
         importer = new(DataRoot, owner, legacyAuthorityDirectory);
@@ -216,6 +218,7 @@ public sealed partial class ManagerService : IManagerService
 
     async Task<OperationResult> Commit(SettingsDocument next, Guid? scriptId, CancellationToken ct)
     {
+        next = store.ApplyHostPolicy(next);
         var result = await store.SaveAsync(next, ct).ConfigureAwait(false);
         if (result.Succeeded)
         {
