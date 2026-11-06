@@ -67,6 +67,7 @@ const commandNames = new Set([
   'storage:cancel',
   'checkUpdates',
   'installUpdate',
+  'cancelUpdateDownload',
   'setUpdateChannel',
   'requestAdministration',
   'refresh',

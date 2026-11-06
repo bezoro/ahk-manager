@@ -426,7 +426,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        location: [default, custom-data, foreign-root]
+        location: [default, custom-data, foreign-root, download-cancel]
     defaults:
       run:
         shell: pwsh
@@ -473,7 +473,7 @@ jobs:
           if ($candidate.Count -ne 1) { throw 'Exactly one candidate portable archive is required.' }
           ./tools/Prepare-PublishedPortableBaseline.ps1 -CandidateArchive $candidate[0].FullName -CandidateManifest (Join-Path $candidate[0].DirectoryName 'ahk-manager-portable-release.json') -SourceCommit $env:SOURCE_COMMIT -OutputRoot (Join-Path $env:GITHUB_WORKSPACE 'portable-updater-baseline')
 
-      - name: Exercise real portable import, update and rollback without installation
+      - name: Exercise the selected portable updater scenario without installation
         env:
           TEST_LOCATION: ${{ matrix.location }}
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}

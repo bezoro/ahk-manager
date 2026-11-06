@@ -24,9 +24,11 @@ These captures establish layout and control behavior with solid backgrounds. The
 
 ## Portable integration tests
 
-`tools/Test-PortableUpdater.ps1` uses a separately packaged older baseline and the current candidate. Both packages carry the reviewed source identity and their distinct complete versions. The baseline exists only for testing and is not a public release asset.
+`tools/Test-PortableUpdater.ps1` verifies the source identity and complete version of each package. The default migration starts with the pinned published v1.6.2 package. The custom data and foreign-root scenarios use a separately packaged older baseline from the candidate's reviewed source.
 
 The driver launches the real portable application and checks profile import, update and rollback with default and custom data directories. It verifies that application registration is unnecessary, a proven dedicated product root can become private beneath a permissive parent without changing the parent's permissions, and a root containing unrelated files is refused.
+
+The `download-cancel` scenario starts from the exact CI candidate ZIP with only its own verified rollback package seeded. It requires an empty packaged publisher policy and a pinned public v1.6.2 target. A loopback CONNECT proxy holds the CDN transfer after the first 8 MiB of TLS traffic. The test clicks Cancel download in the real Updates screen, checks that the client closed the tunnel and discarded the partial ZIP, then retries through the same history action and verifies the native install and reopened profile. The scenario runs on a disposable GitHub-hosted Windows runner.
 
 External fixture files, source profiles, startup state, and unrelated process identities are checked for preservation. A scoped helper may dismiss the exact known startup error dialog of its fixture process in a refusal case. It cannot acknowledge arbitrary desktop dialogs or operate on another process.
 

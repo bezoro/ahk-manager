@@ -27,6 +27,7 @@ declare global {
       resolveResponse(method: string, response: { value?: unknown; error?: string }): Promise<void>;
       resetResponses(): Promise<void>;
       openPreferences(): Promise<void>;
+      pressEnter(): Promise<void>;
       setState(state: HostState): Promise<void>;
       setTheme(theme: ThemeState): Promise<void>;
       calls(): Promise<Array<{ method: string; args: unknown[] }>>;
@@ -3658,6 +3659,8 @@ function updateFixture(): UpdateState {
     lastCheckedAt: '2026-10-28T11:30:00Z',
     error: null,
     progress: null,
+    downloadId: null,
+    downloadCancellation: null,
     releases: [
       {
         id: 'fixture-new-122',
@@ -3919,6 +3922,91 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
         document.querySelectorAll('.update-release').length === 3 &&
           document.querySelector('.update-feedback')?.textContent?.includes('preserved'),
         'Check error discarded history',
+      );
+    },
+  );
+  await check(
+    'a portable transfer can be canceled by keyboard during install, and the same release can retry',
+    async () => {
+      await window.fixtureHarness.setUpdates(updates);
+      button(text.updates).click();
+      await tick();
+      const hasCancel = () =>
+        [...document.querySelectorAll('button')].some(
+          (node) => node.textContent?.trim() === text.updateCancelDownload,
+        );
+      const hasStatus = (label: string) =>
+        [...document.querySelectorAll('[role="status"]')].some(
+          (node) => node.textContent?.trim() === label,
+        );
+      assert(!hasCancel(), 'Cancel was offered while idle');
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('installUpdate', { pending: true });
+      outstanding.add('installUpdate');
+      button(text.updateInstall).click();
+      await untilCall('installUpdate');
+      assert(!hasCancel(), 'Cancel was offered while consent was pending');
+      const preparing: UpdateState = { ...updates, phase: 'downloading', progress: 50 };
+      await window.fixtureHarness.setUpdates(preparing);
+      await tick();
+      assert(!hasCancel(), 'Cancel was offered without an active transfer');
+      const downloadId = '42eca1f3-8051-4e89-9fd6-3f0ce4f88629';
+      const transfer = { ...preparing, downloadId, progress: 65 };
+      await window.fixtureHarness.setUpdates(transfer);
+      await tick();
+      const cancel = button(text.updateCancelDownload);
+      assert(!cancel.disabled && button(text.updateInstall).disabled, 'Wrong transfer actions');
+      assert(
+        document.querySelector(`[role="progressbar"][aria-label="${text.updateDownloadProgress}"]`),
+        'Download progress is unlabeled',
+      );
+      await window.fixtureHarness.setResponse('cancelUpdateDownload', { pending: true });
+      outstanding.add('cancelUpdateDownload');
+      cancel.focus();
+      assert(document.activeElement === cancel, 'Cancel could not receive keyboard focus');
+      let trustedActivation = false;
+      cancel.addEventListener('click', (event) => (trustedActivation = event.isTrusted), {
+        once: true,
+      });
+      await window.fixtureHarness.pressEnter();
+      await untilCall('cancelUpdateDownload');
+      assert(trustedActivation, 'Enter did not activate the native button');
+      await tick();
+      assert(cancel.disabled, 'Duplicate cancellation remained available');
+      cancel.click();
+      const calls = (await window.fixtureHarness.calls()).filter(
+        (call) => call.method === 'cancelUpdateDownload',
+      );
+      assert(calls.length === 1 && calls[0]?.args[0] === downloadId, 'Wrong cancel request');
+      await window.fixtureHarness.resolveResponse('cancelUpdateDownload', { value: 'accepted' });
+      outstanding.delete('cancelUpdateDownload');
+      await tick();
+      assert(
+        !hasStatus(text.updateDownloadCanceled),
+        'Acknowledgment confirmed cancellation early',
+      );
+      await window.fixtureHarness.setUpdates({ ...preparing, downloadCancellation: 'canceling' });
+      await tick();
+      assert(!hasCancel() && hasStatus(text.updateCancelingDownload), 'Pending cleanup was hidden');
+      assert(button(text.updateInstall).disabled, 'Retry was offered before cleanup');
+      await window.fixtureHarness.setUpdates({ ...updates, downloadCancellation: 'canceled' });
+      await window.fixtureHarness.resolveResponse('installUpdate', { value: transfer });
+      outstanding.delete('installUpdate');
+      await tick();
+      assert(
+        !hasCancel() &&
+          hasStatus(text.updateDownloadCanceled) &&
+          !button(text.updateInstall).disabled,
+        'Stale install reply displaced confirmed cancellation or disabled retry',
+      );
+      await window.fixtureHarness.clearCalls();
+      await window.fixtureHarness.setResponse('installUpdate', { value: updates });
+      button(text.updateInstall).click();
+      await untilCall('installUpdate');
+      assert(
+        (await window.fixtureHarness.calls()).find((call) => call.method === 'installUpdate')
+          ?.args[0] === 'fixture-new-122',
+        'Retry selected a different release',
       );
     },
   );

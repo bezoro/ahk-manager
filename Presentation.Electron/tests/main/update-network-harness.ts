@@ -2,10 +2,12 @@ import { app, net, session } from 'electron';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { Readable } from 'node:stream';
 import { GitHubUpdateClient } from '../../src/main/updates/github-updates.js';
 import { createElectronUpdateFetch } from '../../src/main/updates/electron-update-fetch.js';
 import { configureUpdateNetwork } from '../../src/main/updates/update-network-policy.js';
 import { downloadPortableRelease } from '../../src/main/updates/portable-update-download.js';
+import { verifyPortableManifestPolicy } from '../../src/main/updates/portable-update-signature.js';
 import { UpdateStore } from '../../src/main/updates/update-store.js';
 import { createHash } from 'node:crypto';
 
@@ -31,7 +33,9 @@ const requests: Array<{
   cookie: boolean;
 }> = [];
 let stage = 'setup';
-let mode: 'normal' | 'untrusted' | 'loop' | 'oversized' | 'delayed' = 'normal';
+let mode: 'normal' | 'untrusted' | 'loop' | 'oversized' | 'delayed' | 'held' | 'corrupt' = 'normal';
+let closeHeldArchive: (() => void) | undefined;
+let abortHeldArchive: (() => void) | undefined;
 
 function fixture(version: string, id: number, prerelease = false) {
   const manifest = {
@@ -182,14 +186,34 @@ app
           return new Response(null, { status: 302, headers: { Location: `${CDN}/loop.json` } });
         const id = /^\/(\d+)\.json$/.exec(url.pathname)?.[1];
         if (id && manifests.has(id)) return Response.json(manifests.get(id));
-        if (url.pathname === '/131.zip')
-          return new Response(portableBody, {
+        if (url.pathname === '/131.zip') {
+          const body =
+            mode === 'held'
+              ? new ReadableStream<Uint8Array>({
+                  start(controller) {
+                    controller.enqueue(portableBody.subarray(0, 8));
+                  },
+                })
+              : mode === 'corrupt'
+                ? Buffer.alloc(portableBody.length, 1)
+                : portableBody;
+          return new Response(body, {
             headers: { 'Content-Length': String(portableBody.length) },
           });
+        }
       }
       return new Response('Unexpected fixture request.', { status: 404 });
     });
-    const fetcher = createElectronUpdateFetch(network, (options) => net.request(options));
+    const fetcher = createElectronUpdateFetch(network, (options) => {
+      const request = net.request(options);
+      if (mode === 'held' && options.url === `${CDN}/131.zip`) {
+        request.once('abort', () => abortHeldArchive?.());
+        request.once('response', (response) =>
+          (response as unknown as Readable).once('close', () => closeHeldArchive?.()),
+        );
+      }
+      return request;
+    });
     await network.cookies.set({
       url: 'https://api.github.com',
       name: 'isolated-fixture-cookie',
@@ -290,6 +314,115 @@ app
           JSON.stringify(portableManifest),
         );
         assert.deepEqual(await new UpdateStore(store.root).cached(), [cached]);
+      },
+    );
+    await check(
+      'a partial portable Chromium transfer aborts, closes, and retries from fresh staging',
+      async () => {
+        const release = (await new GitHubUpdateClient(fetcher, 'portable').releases('test'))[0]!;
+        const store = new UpdateStore(path.join(output, 'canceled-portable-cache'), 'portable');
+        const downloads = path.join(store.root, 'downloads');
+        const controller = new AbortController();
+        const canceled = new Error('Fixture cancellation after initial archive bytes.');
+        const aborted = new Promise<void>((resolve) => {
+          abortHeldArchive = resolve;
+        });
+        const closed = new Promise<void>((resolve) => {
+          closeHeldArchive = resolve;
+        });
+        const bounded = AbortSignal.timeout(5000);
+        let partial = '';
+        mode = 'held';
+        try {
+          await assert.rejects(
+            downloadPortableRelease(
+              release,
+              (progress) => {
+                assert.ok(progress > 0 && progress < 100);
+                const directory = fs.readdirSync(downloads);
+                assert.equal(directory.length, 1);
+                partial = path.join(downloads, directory[0]!, 'archive.zip');
+                assert.equal(fs.statSync(partial).size, 8);
+                controller.abort(canceled);
+              },
+              {
+                fetcher,
+                store,
+                signal: AbortSignal.any([controller.signal, bounded]),
+                verifyManifest: async () => {},
+              },
+            ),
+            (error) => error === canceled,
+          );
+          bounded.throwIfAborted();
+          await Promise.race([
+            Promise.all([aborted, closed]),
+            new Promise<never>((_, reject) =>
+              bounded.addEventListener('abort', () => reject(bounded.reason), { once: true }),
+            ),
+          ]);
+          assert.ok(partial);
+          assert.deepEqual(fs.readdirSync(downloads), []);
+          assert.deepEqual(await store.cached(), []);
+        } finally {
+          mode = 'normal';
+          closeHeldArchive = undefined;
+          abortHeldArchive = undefined;
+        }
+        const before = requests.length;
+        const source = await downloadPortableRelease(release, () => {}, {
+          fetcher,
+          store,
+          signal: AbortSignal.timeout(5000),
+          verifyManifest: async () => {},
+        });
+        assert.notEqual(path.dirname(source), path.dirname(partial));
+        assert.deepEqual(fs.readFileSync(source), portableBody);
+        assert.equal(
+          requests.slice(before).filter((item) => item.pathname === '/131.zip').length,
+          1,
+        );
+        const cached = await store.cache(release.version, source, release.sha256, release.bytes);
+        await store.verify(cached);
+        assert.deepEqual(fs.readdirSync(downloads), []);
+      },
+    );
+    await check(
+      'corrupt portable bytes and missing publisher proof never become cached releases',
+      async () => {
+        const release = (await new GitHubUpdateClient(fetcher, 'portable').releases('test'))[0]!;
+        const store = new UpdateStore(path.join(output, 'rejected-portable-cache'), 'portable');
+        const signal = AbortSignal.timeout(5000);
+        mode = 'corrupt';
+        try {
+          await assert.rejects(
+            downloadPortableRelease(release, () => {}, {
+              fetcher,
+              store,
+              signal,
+              verifyManifest: async () => {},
+            }),
+            /integrity/,
+          );
+        } finally {
+          mode = 'normal';
+        }
+        const policyPath = path.join(output, 'required-publisher.yml');
+        fs.writeFileSync(policyPath, 'publisherName: Fixture Publisher\n');
+        const before = requests.length;
+        await assert.rejects(
+          downloadPortableRelease(release, () => {}, {
+            fetcher,
+            store,
+            signal,
+            verifyManifest: (manifest, signature) =>
+              verifyPortableManifestPolicy(manifest, signature, { policyPath }),
+          }),
+          /signature/,
+        );
+        assert.equal(requests.length, before);
+        assert.deepEqual(await store.cached(), []);
+        assert.deepEqual(fs.readdirSync(path.join(store.root, 'downloads')), []);
       },
     );
     await check('AbortSignal cancels a pending Chromium update request', async () => {

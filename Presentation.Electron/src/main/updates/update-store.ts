@@ -229,24 +229,28 @@ export class UpdateStore {
       entry,
     );
   }
-  private async removePortableDownload(source: string): Promise<void> {
-    const directory = path.dirname(source);
-    if (
-      path.dirname(directory) !== path.join(this.root, 'downloads') ||
-      !/^portable-[A-Za-z0-9]+$/.test(path.basename(directory)) ||
-      path.basename(source) !== 'archive.zip'
-    )
-      return;
+  async discardPortableDownload(source: string): Promise<void> {
     try {
+      const directory = path.dirname(source);
+      if (
+        path.dirname(directory) !== path.join(this.root, 'downloads') ||
+        !/^portable-[A-Za-z0-9]+$/.test(path.basename(directory)) ||
+        path.basename(source) !== 'archive.zip'
+      )
+        throw new Error('Invalid staging path.');
       await this.safeDirectory(directory);
       const allowed = new Set(['archive.zip', portableManifestFile, portableSignatureFile]);
       const files = await fs.readdir(directory);
-      if (files.some((name) => !allowed.has(name))) return;
-      for (const name of files) await this.regular(path.join(directory, name));
+      for (const name of files) {
+        if (!allowed.has(name)) throw new Error('Unknown staging entry.');
+        const stat = await fs.lstat(path.join(directory, name));
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
+          throw new Error('Invalid staging file.');
+      }
       for (const name of files) await fs.unlink(path.join(directory, name));
       await fs.rmdir(directory);
     } catch {
-      /* A completed package remains valid if temporary cleanup fails. */
+      throw new Error('The temporary update download could not be removed.');
     }
   }
   private async cachePortableProof(
@@ -325,14 +329,13 @@ export class UpdateStore {
     if (existing) {
       // A valid archive can still need a fresh signature after interrupted cache
       // publication. Retain the archive while repairing its downloaded proof.
-
       await this.cachePortableProof(path.dirname(source), directory, {
         version: versionName,
         sha256,
         bytes,
       });
-      await this.removePortableDownload(source);
-
+      // A completed package remains valid if temporary cleanup fails.
+      await this.discardPortableDownload(source).catch(() => {});
       return existing;
     }
     const temporary = path.join(directory, `download-${randomUUID()}.tmp`);
@@ -364,7 +367,7 @@ export class UpdateStore {
       }),
     );
     await fs.rename(tempReceipt, receipt);
-    await this.removePortableDownload(source);
+    await this.discardPortableDownload(source).catch(() => {});
     return { version: versionName, archivePath, sha256, bytes };
   }
 }

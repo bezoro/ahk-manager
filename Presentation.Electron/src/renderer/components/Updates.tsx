@@ -11,7 +11,7 @@ import { text } from '../resources/en-US.js';
 
 interface Props {
   state: UpdateState;
-  onState(value: UpdateState): void;
+  onState(value: UpdateState, before: UpdateState): void;
   installBlockedReason: string | null;
   recovery: boolean;
 }
@@ -40,8 +40,17 @@ export function Updates({
   const [pending, setPending] = React.useState(false);
   const [operation, setOperation] = React.useState<'check' | 'install' | 'channel' | null>(null);
   const [feedback, setFeedback] = React.useState<string | null>(null);
+  const [cancelRequest, setCancelRequest] = React.useState<{
+    id: string;
+    failed: boolean;
+  } | null>(null);
   const inFlight = React.useRef(false);
+  const cancelInFlight = React.useRef<string | null>(null);
   const active = pending || ['checking', 'downloading', 'installing'].includes(state.phase);
+  const downloadId = state.downloadId;
+  const canceling = state.downloadCancellation === 'canceling';
+  const canceled = state.downloadCancellation === 'canceled';
+  const cancelFailed = cancelRequest?.id === downloadId && cancelRequest.failed;
   const available = state.availableVersion
     ? state.releases.find(
         (release) =>
@@ -81,7 +90,7 @@ export function Updates({
           : action === 'install'
             ? await window.ahkManager.installUpdate(release!.id)
             : await window.ahkManager.setUpdateChannel(channel!);
-      onState(result);
+      onState(result, state);
     } catch {
       setFeedback(
         action === 'install'
@@ -94,6 +103,20 @@ export function Updates({
       inFlight.current = false;
       setPending(false);
       setOperation(null);
+    }
+  }
+  async function cancelDownload(id: string): Promise<void> {
+    if (cancelInFlight.current === id) return;
+    cancelInFlight.current = id;
+    setCancelRequest({ id, failed: false });
+    try {
+      // The reply only acknowledges dispatch. Main state confirms cleanup.
+      await window.ahkManager.cancelUpdateDownload(id);
+    } catch {
+      if (cancelInFlight.current === id) {
+        cancelInFlight.current = null;
+        setCancelRequest({ id, failed: true });
+      }
     }
   }
   const install = (release: UpdateRelease, label: string, primary = false): React.ReactElement => (
@@ -186,19 +209,32 @@ export function Updates({
       {!installBlockedReason && (
         <p className="muted update-install-hint">{text.updateInstallHint}</p>
       )}
-      {active && (
-        <div className="update-progress" role="status" aria-live="polite">
-          <Spinner size="tiny" />
-          <span>
-            {state.phase === 'downloading'
-              ? text.updateDownloading
-              : state.phase === 'installing' || operation === 'install'
-                ? text.updateInstalling
-                : operation === 'channel'
-                  ? text.updateSavingChannel
-                  : text.updateChecking}
+      {(active || canceled) && (
+        <div className="update-progress">
+          {!canceled && <Spinner size="tiny" />}
+          <span role="status" aria-live="polite">
+            {canceled
+              ? text.updateDownloadCanceled
+              : canceling
+                ? text.updateCancelingDownload
+                : state.phase === 'downloading'
+                  ? text.updateDownloading
+                  : state.phase === 'installing' || operation === 'install'
+                    ? text.updateInstalling
+                    : operation === 'channel'
+                      ? text.updateSavingChannel
+                      : text.updateChecking}
           </span>
-          {state.phase === 'downloading' && (
+          {downloadId && (
+            <Button
+              appearance="secondary"
+              disabled={cancelRequest?.id === downloadId && !cancelFailed}
+              onClick={() => void cancelDownload(downloadId)}
+            >
+              {text.updateCancelDownload}
+            </Button>
+          )}
+          {state.phase === 'downloading' && !canceling && (
             <ProgressBar
               aria-label={text.updateDownloadProgress}
               value={
@@ -208,7 +244,12 @@ export function Updates({
           )}
         </div>
       )}
-      {(state.error || feedback) && (
+      {cancelFailed && (
+        <p className="update-feedback warning" role="alert">
+          {text.updateCancelDownloadUnknown}
+        </p>
+      )}
+      {(state.error || (feedback && !canceled)) && (
         <p
           className={'update-feedback ' + (feedbackFailed ? 'warning' : 'success')}
           role={feedbackFailed ? 'alert' : 'status'}

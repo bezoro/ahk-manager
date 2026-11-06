@@ -375,7 +375,9 @@ test('untrusted redirects and explicit cancellation leave no partial portable pa
       /untrusted|cancellation/,
     );
     assert.deepEqual(await store.cached(), []);
-    assert.deepEqual(await fs.readdir(path.join(store.root, 'downloads')), []);
+    const downloads = fs.readdir(path.join(store.root, 'downloads'));
+    if (mode === 'cancel') await assert.rejects(downloads, { code: 'ENOENT' });
+    else assert.deepEqual(await downloads, []);
   }
 });
 
@@ -399,6 +401,39 @@ test('publisher policy refuses a missing signature before downloading the archiv
   );
   assert.equal(downloads, 0);
   assert.deepEqual(await store.cached(), []);
+});
+
+test('cancellation during verification refuses an unexpected staging entry and preserves its contents', async (t) => {
+  const { store } = await disk(t);
+  const f = portable();
+  const controller = new AbortController();
+  const downloads = path.join(store.root, 'downloads');
+  let unrelated = '';
+  await assert.rejects(
+    downloadPortableRelease(f.release, () => {}, {
+      store,
+      signal: controller.signal,
+      fetcher: (async () => {
+        assert.fail('The archive must not be fetched after cancellation.');
+      }) as typeof fetch,
+      verifyManifest: async (manifest) => {
+        unrelated = path.join(path.dirname(manifest), 'unexpected.txt');
+        await fs.writeFile(unrelated, 'Unrelated fixture file.');
+        controller.abort(new Error('Fixture cancellation.'));
+      },
+    }),
+    /temporary update download could not be removed/,
+  );
+  assert.equal(await fs.readFile(unrelated, 'utf8'), 'Unrelated fixture file.');
+  assert.deepEqual(await store.cached(), []);
+  const retry = await downloadPortableRelease(f.release, () => {}, {
+    store,
+    fetcher: fixtureFetch(f, () => new Response(f.body)),
+    verifyManifest: async () => {},
+  });
+  assert.notEqual(path.dirname(retry), path.dirname(unrelated));
+  await store.discardPortableDownload(retry);
+  assert.deepEqual(await fs.readdir(downloads), [path.basename(path.dirname(unrelated))]);
 });
 
 test('signed cached rollback binds raw metadata, publisher policy and actual archive bytes', async (t) => {

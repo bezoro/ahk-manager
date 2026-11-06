@@ -55,6 +55,7 @@ class Store implements UpdateStorePort {
   items: CachedPackage[] = [];
   corrupt = new Set<string>();
   cachedSources: string[] = [];
+  discarded: string[] = [];
   channel: UpdateChannel = 'stable';
   channelSaveGate: Promise<void> | null = null;
   savedChannels: UpdateChannel[] = [];
@@ -78,6 +79,9 @@ class Store implements UpdateStorePort {
   }
   async verify(value: CachedPackage): Promise<void> {
     if (this.corrupt.has(value.version)) throw new Error('Fixture cache integrity failure.');
+  }
+  async discardPortableDownload(source: string): Promise<void> {
+    this.discarded.push(source);
   }
   async cache(
     version: string,
@@ -109,6 +113,7 @@ function fixture(version = '1.2.2') {
     download: async (
       _item: RemoteUpdateRelease,
       progress: (value: number) => void,
+      _signal: AbortSignal,
     ): Promise<string> => {
       progress(60);
       return '/fixture/downloaded.zip';
@@ -128,9 +133,9 @@ function fixture(version = '1.2.2') {
       resolved.push({ id });
       return hooks.resolve(id);
     },
-    download: async (item, progress) => {
+    download: async (item, progress, signal) => {
       downloaded.push(item);
-      return hooks.download(item, progress);
+      return hooks.download(item, progress, signal);
     },
     preflight: async (operationId, phase) => {
       preflights.push({ operationId, phase });
@@ -166,9 +171,8 @@ function fixture(version = '1.2.2') {
 test('portable rollback preservation runs only after explicit consent and before downloading the target', async () => {
   const f = fixture();
   const calls: string[] = [];
-  f.boundary.preserveCurrent = async (progress) => {
+  f.boundary.preserveCurrent = async () => {
     calls.push('preserve');
-    progress(100);
     f.store.items.push(cached('1.2.2'));
   };
   f.hooks.download = async (_release, progress) => {
@@ -192,6 +196,237 @@ test('portable rollback preservation runs only after explicit consent and before
     .filter((item) => item.phase === 'downloading')
     .map((item) => item.progress!);
   assert.ok(progress.every((item, index) => index === 0 || item >= progress[index - 1]!));
+});
+
+test('portable cancellation waits for abort cleanup and a retry asks for fresh consent', async () => {
+  const f = fixture();
+  const consent = deferred<boolean>();
+  const confirming = deferred<void>();
+  f.hooks.confirm = () => {
+    confirming.resolve(undefined);
+    return consent.promise;
+  };
+  const started = deferred<{ signal: AbortSignal; progress: (percent: number) => void }>();
+  const cleanup = deferred<void>();
+  f.hooks.download = async (_release, progress, signal) => {
+    assert.ok(signal);
+    started.resolve({ signal, progress });
+    progress(25);
+    await cleanup.promise;
+    signal.throwIfAborted();
+    throw new Error('Fixture transfer was not canceled.');
+  };
+  await f.service.check();
+  const attempt = f.service.install(release().id);
+  await confirming.promise;
+  assert.equal(f.service.snapshot.downloadId, null);
+  consent.resolve(true);
+  const { signal, progress } = await started.promise;
+  const id = f.service.snapshot.downloadId;
+  assert.ok(id);
+  assert.equal(f.service.cancelDownload('11111111-1111-1111-1111-111111111111'), 'unavailable');
+  assert.equal(signal.aborted, false);
+  signal.addEventListener('abort', () => assert.equal(f.service.snapshot.downloadId, null));
+  assert.equal(f.service.cancelDownload(id), 'accepted');
+  assert.equal(f.service.cancelDownload(id), 'unavailable');
+  assert.equal(signal.aborted, true);
+  const canceling = f.service.snapshot;
+  assert.equal(canceling.downloadCancellation, 'canceling');
+  assert.equal(f.service.busy, true);
+  progress(100);
+  assert.deepEqual(f.service.snapshot, canceling);
+  assert.deepEqual(await f.service.install(release().id), canceling);
+  cleanup.resolve(undefined);
+  const result = await attempt;
+  assert.equal(f.service.busy, false);
+  assert.equal(result.phase, 'idle');
+  assert.equal(result.downloadCancellation, 'canceled');
+  assert.equal(result.progress, null);
+  assert.equal(result.error, null);
+  assert.equal(result.availableVersion, release().version);
+  assert.deepEqual(
+    f.preflights.map((call) => call.phase),
+    ['begin'],
+  );
+  assert.deepEqual(f.store.cachedSources, []);
+  assert.deepEqual(f.applied, []);
+
+  f.hooks.confirm = async () => true;
+  f.hooks.download = async () => {
+    assert.ok(f.service.snapshot.downloadId);
+    assert.notEqual(f.service.snapshot.downloadId, id);
+    assert.equal(f.service.cancelDownload(id), 'unavailable');
+    return '/fixture/retry.zip';
+  };
+  await f.service.install(release().id);
+  assert.deepEqual(f.confirmed, [release().id, release().id]);
+  assert.deepEqual(f.store.cachedSources, ['/fixture/retry.zip']);
+  assert.deepEqual(
+    f.preflights.map((call) => call.phase),
+    ['begin', 'begin', 'commit'],
+  );
+  assert.equal(f.applied.length, 1);
+});
+
+for (const cleanupFails of [false, true]) {
+  test(`cancel before verified staging returns blocks publication, even if cleanup ${cleanupFails ? 'fails' : 'settles late'}`, async () => {
+    const f = fixture();
+    const started = deferred<void>();
+    const transfer = deferred<string>();
+    const discarding = deferred<string>();
+    const discarded = deferred<void>();
+    f.hooks.download = async (_release, progress) => {
+      progress(100);
+      started.resolve(undefined);
+      return transfer.promise;
+    };
+    f.store.discardPortableDownload = async (source) => {
+      discarding.resolve(source);
+      await discarded.promise;
+    };
+    await f.service.check();
+    const attempt = f.service.install(release().id);
+    await started.promise;
+    assert.equal(f.service.snapshot.progress, 100);
+    assert.equal(f.service.cancelDownload(f.service.snapshot.downloadId!), 'accepted');
+    transfer.resolve('/fixture/staged.zip');
+    assert.equal(await discarding.promise, '/fixture/staged.zip');
+    assert.equal(f.service.snapshot.downloadCancellation, 'canceling');
+    assert.equal(f.service.busy, true);
+    if (cleanupFails)
+      discarded.reject(new Error('The temporary update download could not be removed.'));
+    else discarded.resolve(undefined);
+    const result = await attempt;
+    assert.equal(result.phase, cleanupFails ? 'error' : 'idle');
+    assert.equal(result.downloadCancellation, cleanupFails ? null : 'canceled');
+    assert.equal(
+      result.error,
+      cleanupFails ? 'The temporary update download could not be removed.' : null,
+    );
+    assert.deepEqual(f.store.cachedSources, []);
+    assert.deepEqual(f.applied, []);
+    assert.deepEqual(
+      f.preflights.map((call) => call.phase),
+      ['begin'],
+    );
+  });
+}
+
+test('completed portable transfer retires its ID before cache publication and verified apply', async () => {
+  const f = fixture();
+  const publishing = deferred<void>();
+  const cache = deferred<void>();
+  let id: string | null = null;
+  let staleProgress!: (value: number) => void;
+  f.hooks.download = async (_release, progress) => {
+    id = f.service.snapshot.downloadId;
+    staleProgress = progress;
+    return '/fixture/verified.zip';
+  };
+  const save = f.store.cache.bind(f.store);
+  f.store.cache = async (...args) => {
+    publishing.resolve(undefined);
+    await cache.promise;
+    return save(...args);
+  };
+  await f.service.check();
+  const attempt = f.service.install(release().id);
+  await publishing.promise;
+  assert.ok(id);
+  const before = f.service.snapshot;
+  assert.equal(before.downloadId, null);
+  assert.equal(f.service.cancelDownload(id), 'unavailable');
+  staleProgress(42);
+  assert.deepEqual(f.service.snapshot, before);
+  cache.resolve(undefined);
+  assert.equal((await attempt).phase, 'installing');
+  assert.deepEqual(f.store.cachedSources, ['/fixture/verified.zip']);
+  assert.equal(f.applied.length, 1);
+  assert.deepEqual(
+    f.preflights.map((call) => call.phase),
+    ['begin', 'commit'],
+  );
+});
+
+test('portable rollback preservation and target transfers use separate IDs, and retry reuses verified rollback', async () => {
+  const f = fixture();
+  const current = release('1.2.2');
+  const target = release();
+  f.boundary.preserveCurrent = async (download) => {
+    if (f.store.items.some((item) => item.version === current.version)) {
+      assert.equal(f.service.snapshot.downloadId, null);
+      return;
+    }
+    const source = await download(current);
+    assert.equal(f.service.snapshot.downloadId, null);
+    await f.store.cache(current.version, source, current.sha256, current.bytes);
+  };
+  const started = deferred<string>();
+  const preservation = deferred<string>();
+  const targetStarted = deferred<string>();
+  const targetClosed = deferred<void>();
+  f.hooks.download = async (item, progress, signal) => {
+    const id = f.service.snapshot.downloadId!;
+    progress(50);
+    if (item === current) {
+      started.resolve(id);
+      return preservation.promise;
+    }
+    assert.ok(signal);
+    targetStarted.resolve(id);
+    await targetClosed.promise;
+    signal.throwIfAborted();
+    return '/fixture/target.zip';
+  };
+  await f.service.check();
+  const first = f.service.install(target.id);
+  const preservationId = await started.promise;
+  assert.equal(f.service.snapshot.progress, 25);
+  assert.equal(f.service.cancelDownload(preservationId), 'accepted');
+  preservation.resolve('/fixture/canceled-rollback.zip');
+  assert.equal((await first).downloadCancellation, 'canceled');
+  assert.deepEqual(f.store.discarded, ['/fixture/canceled-rollback.zip']);
+  assert.deepEqual(f.store.cachedSources, []);
+  assert.equal(f.downloaded.length, 1);
+
+  let nextPreservationId: string | null = null;
+  const previousDownload = f.hooks.download;
+  f.hooks.download = async (item, progress, signal) => {
+    if (item === current) {
+      nextPreservationId = f.service.snapshot.downloadId;
+      return '/fixture/rollback.zip';
+    }
+    return previousDownload(item, progress, signal);
+  };
+  const second = f.service.install(target.id);
+  const targetId = await targetStarted.promise;
+  assert.ok(nextPreservationId);
+  assert.notEqual(targetId, nextPreservationId);
+  assert.equal(f.service.snapshot.progress, 75);
+  assert.equal(f.service.cancelDownload(nextPreservationId), 'unavailable');
+  assert.equal(f.service.cancelDownload(targetId), 'accepted');
+  targetClosed.resolve(undefined);
+  const result = await second;
+  assert.equal(result.downloadCancellation, 'canceled');
+  assert.equal(result.releases.find((item) => item.version === current.version)?.cached, true);
+  assert.deepEqual(f.store.cachedSources, ['/fixture/rollback.zip']);
+  assert.deepEqual(
+    f.preflights.map((call) => call.phase),
+    ['begin', 'begin'],
+  );
+  assert.deepEqual(f.applied, []);
+
+  await f.service.install(target.id);
+  assert.deepEqual(
+    f.downloaded.map((item) => item.version),
+    [current.version, current.version, target.version, target.version],
+  );
+  assert.deepEqual(f.store.cachedSources, ['/fixture/rollback.zip', '/fixture/target.zip']);
+  assert.deepEqual(
+    f.preflights.map((call) => call.phase),
+    ['begin', 'begin', 'begin', 'commit'],
+  );
+  assert.equal(f.applied.length, 1);
 });
 
 test('failure to preserve the running portable version never downloads or applies the target', async () => {

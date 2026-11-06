@@ -30,24 +30,30 @@ export async function downloadPortableRelease(
   const proof = requirePortablePackageProof(release.manifestText, release);
   if (proof.sha512 !== release.sha512 || proof.commit !== release.commit)
     throw new Error('The portable release metadata changed. Check for updates again.');
+  const deadline = AbortSignal.timeout(30 * 60 * 1000);
+  const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+  signal.throwIfAborted();
   const root = path.join(options.store.root, 'downloads');
   await options.store.safeDirectory(root, true);
+  signal.throwIfAborted();
   const directory = await fs.mkdtemp(path.join(root, 'portable-'));
   const archive = path.join(directory, 'archive.zip');
   const manifest = path.join(directory, portableManifestFile);
   const signature = path.join(directory, portableSignatureFile);
-  const signal = options.signal
-    ? AbortSignal.any([options.signal, AbortSignal.timeout(30 * 60 * 1000)])
-    : AbortSignal.timeout(30 * 60 * 1000);
   let completed = false;
   try {
+    signal.throwIfAborted();
     await options.store.writeNew(manifest, release.manifestText);
+    signal.throwIfAborted();
     if (release.signatureAssetId !== undefined) {
       const bytes = await readUpdateAsset(options.fetcher, release.signatureAssetId, 65536, signal);
+      signal.throwIfAborted();
       await options.store.writeNew(signature, bytes);
+      signal.throwIfAborted();
     }
     // Publisher verification happens before fetching the much larger archive.
     await options.verifyManifest(manifest, signature);
+    signal.throwIfAborted();
     const response = await openUpdateAsset(options.fetcher, release.assetId, signal);
     const declared = response.headers.get('content-length');
     if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) !== release.bytes)) {
@@ -58,6 +64,7 @@ export async function downloadPortableRelease(
     const hash512 = createHash('sha512');
     let file: import('node:fs/promises').FileHandle;
     try {
+      signal.throwIfAborted();
       file = await fs.open(archive, 'wx', 0o600);
     } catch (error) {
       await response.body!.cancel().catch(() => {});
@@ -67,7 +74,9 @@ export async function downloadPortableRelease(
     let transferred = 0;
     try {
       for (;;) {
+        signal.throwIfAborted();
         const part = await reader.read();
+        signal.throwIfAborted();
         if (part.done) break;
         transferred += part.value.byteLength;
         if (transferred > release.bytes) {
@@ -78,6 +87,7 @@ export async function downloadPortableRelease(
         hash512.update(part.value);
         for (let offset = 0; offset < part.value.byteLength;) {
           const written = await file.write(part.value, offset, part.value.byteLength - offset);
+          signal.throwIfAborted();
           if (written.bytesWritten < 1) throw new Error('The portable package could not be saved.');
           offset += written.bytesWritten;
         }
@@ -95,12 +105,10 @@ export async function downloadPortableRelease(
       reader.releaseLock();
       await file.close();
     }
+    signal.throwIfAborted();
     completed = true;
     return archive;
   } finally {
-    if (!completed) {
-      for (const file of [archive, manifest, signature]) await fs.unlink(file).catch(() => {});
-      await fs.rmdir(directory).catch(() => {});
-    }
+    if (!completed) await options.store.discardPortableDownload(archive);
   }
 }

@@ -63,7 +63,7 @@ export interface IpcContext {
   clipboard: { writeText(text: string): void };
   guard: Pick<DocumentGuard, 'connect' | 'validate' | 'current'>;
   controller: ManagerController;
-  updates: Pick<UpdateService, 'snapshot' | 'check' | 'install' | 'setChannel'>;
+  updates: Pick<UpdateService, 'snapshot' | 'check' | 'install' | 'cancelDownload' | 'setChannel'>;
   preflight: AdministrationPreflight;
   documentScope: AsyncLocalStorage<() => boolean>;
   policy(): RequestPolicy;
@@ -143,6 +143,9 @@ export function registerHandlers(context: IpcContext): void {
   bind('checkUpdates', none, () => updates.check());
   bind<{ id: string }>('installUpdate', shape({ id: text(100) }), (value) =>
     updates.install(value.id),
+  );
+  bind<{ id: string }>('cancelUpdateDownload', shape({ id: guid }), (value) =>
+    updates.cancelDownload(value.id),
   );
   bind<{ channel: UpdateChannel }>(
     'setUpdateChannel',
