@@ -27,16 +27,14 @@ async function fixture(t: TestContext) {
   return { parent, root, executable, local, marker, write };
 }
 
-test('installed layouts retain the existing LocalAppData profile and updater paths', async (t) => {
+test('an incomplete package cannot open a previous LocalAppData profile', async (t) => {
   const { executable, local } = await fixture(t);
-  const layout = resolveDeployment(executable, local);
-  const existing = path.join(local, 'Bezoro', 'AhkManagerElectron');
-  assert.equal(layout.mode, 'installed');
-  assert.equal(layout.profileDirectory, existing);
-  assert.equal(layout.dataDirectory, existing);
-  assert.equal(layout.updatesDirectory, path.join(existing, 'Updates'));
-  assert.equal(layout.chromiumDirectory, null);
-  assert.equal(layout.launchExecutable, executable);
+  assert.throws(() => resolveDeployment(executable, local), /settings file is missing/);
+  assert.throws(
+    () => resolveDeployment(path.join(local, 'Bezoro.AhkManager.exe'), local),
+    /complete portable package/,
+  );
+  assert.deepEqual(await fs.readdir(local), []);
 });
 
 test('portable defaults keep mutable Data separate from the replaceable App payload', async (t) => {
@@ -63,7 +61,7 @@ test('a normalized custom local data folder resolves through the same strict mar
   );
 });
 
-test('a packaged portable payload with missing settings cannot silently become an installed profile', async (t) => {
+test('a packaged portable payload with missing settings cannot silently open fallback storage', async (t) => {
   const { root, executable, local } = await fixture(t);
   await fs.writeFile(path.join(root, 'portable-package.json'), '{}');
   assert.throws(() => resolveDeployment(executable, local), /settings file is missing/);
@@ -78,7 +76,7 @@ test('a selected data location cannot be a regular file or an alternate stream',
   assert.equal(await fs.readFile(file, 'utf8'), 'preserved');
 });
 
-test('malformed, duplicate, unknown and mismatched portable markers never fall back to an empty installed profile', async (t) => {
+test('malformed, duplicate, unknown and mismatched portable markers never open fallback storage', async (t) => {
   const { executable, local, marker } = await fixture(t);
   for (const text of [
     '{',

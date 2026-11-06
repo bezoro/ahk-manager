@@ -1,6 +1,6 @@
 namespace Bezoro.AhkManager.UpdateHost;
 
-internal sealed record InstallerRun(bool Exited, int? ExitCode, bool Dispatched = true);
+internal sealed record PackageApplyResult(bool Completed, int? ExitCode, bool Dispatched = true);
 
 internal sealed record BackupState(
     string Directory,
@@ -15,7 +15,7 @@ internal interface IApplyEffects
     Task<bool> WaitForParentExit();
     void CheckCancellation();
     Task<BackupState> Backup();
-    Task<InstallerRun> Install();
+    Task<PackageApplyResult> Install();
     void VerifyInstalled(string version);
     void Launch();
     Task<BackupState> Restore(BackupState backup);
@@ -73,7 +73,7 @@ internal static class ApplyEngine
             );
         }
 
-        InstallerRun installation;
+        PackageApplyResult installation;
         try
         {
             effects.CheckCancellation();
@@ -92,21 +92,21 @@ internal static class ApplyEngine
             ApplyDiagnostics.Failure(log, "install", ex);
             return Result(
                 "Unknown",
-                "The installer launch could not be confirmed. No recovery operation was replayed automatically.",
+                "The portable payload promotion could not be confirmed. No recovery operation was replayed automatically.",
                 backup: backup
             );
         }
 
-        if (!installation.Exited)
+        if (!installation.Completed)
             return Result(
                 "Unknown",
-                "The installer has not yet confirmed its exit. Do not run another update; inspect the operation before continuing.",
+                "The portable payload promotion has not confirmed completion. Do not run another update; inspect the operation before continuing.",
                 backup: backup
             );
         if (!installation.Dispatched)
             return Result(
                 "Failed",
-                "The installer could not be started. The original installation was preserved.",
+                "The portable payload promotion could not be started. The original installation was preserved.",
                 backup: backup
             );
         if (installation.ExitCode == 0)

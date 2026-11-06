@@ -63,28 +63,23 @@ internal static class PortableProfileChecks
                 ]),
             "automatic portable elevation retains the authenticated image and activation intent while using the root outside the replaceable App payload"
         );
-        var installed = RuntimeProfileLayout.ForHost(
-            Path.Combine(fixture, "installed", "Bezoro.AhkManager.exe"),
-            Path.Combine(fixture, "local"),
-            Path.Combine(fixture, "roaming")
+        check(
+            Refuses(() =>
+                RuntimeProfileLayout.ForHost(
+                    Path.Combine(fixture, "previous-layout", "Bezoro.AhkManager.exe"),
+                    Path.Combine(fixture, "local")
+                )
+            ),
+            "a host outside a portable App directory is refused without opening previous profile locations"
         );
         check(
-            !installed.Portable
-                && installed.ProfileRoot
-                    == Path.Combine(fixture, "local", "Bezoro", "AhkManagerElectron")
-                && installed.ChromiumRoot
-                    == Path.Combine(fixture, "roaming", "Bezoro", "AhkManagerElectron", "Chromium")
-                && installed.UpdatesRoot == Path.Combine(installed.ProfileRoot, "Updates")
-                && installed.StartupHostExecutable == installed.HostExecutable,
-            "installed profiles, Chromium storage, update history and startup paths retain their existing locations"
-        );
-        var elevatedInstalled = ManagerElevation.CommittedHostStartInfo(installed.HostExecutable);
-        check(
-            elevatedInstalled.FileName == installed.HostExecutable
-                && elevatedInstalled.WorkingDirectory
-                    == Path.GetDirectoryName(installed.HostExecutable)
-                && elevatedInstalled.ArgumentList.SequenceEqual(["--foreground"]),
-            "installed administrative activation retains its application working directory and foreground intent"
+            Refuses(() =>
+                RuntimeProfileLayout.ForHost(
+                    Path.Combine(fixture, "missing-package", "App", "Bezoro.AhkManager.exe"),
+                    Path.Combine(fixture, "local")
+                )
+            ),
+            "a missing portable marker is refused without initializing fallback storage"
         );
         check(
             Refuses(() =>
@@ -104,8 +99,8 @@ internal static class PortableProfileChecks
                     layout.HostExecutable
                 )
                 && !ElevationReceiptStore.ProfileRootsMatch(
-                    installed.ProfileRoot,
-                    installed.ChromiumRoot,
+                    layout.ProfileRoot,
+                    layout.ChromiumRoot,
                     layout.HostExecutable
                 ),
             "custom portable data is selected consistently by the host and authenticated elevation checks"
@@ -172,7 +167,7 @@ internal static class PortableProfileChecks
             File.WriteAllText(Path.Combine(root, "portable.json"), invalid);
             check(
                 Refuses(() => Read(layout.HostExecutable, fixture, "layout")),
-                "malformed, ambiguous or oversized portable markers never fall back to the installed profile"
+                "malformed, ambiguous or oversized portable markers never open fallback storage"
             );
         }
         check(
@@ -184,7 +179,7 @@ internal static class PortableProfileChecks
         File.Delete(Path.Combine(root, "portable.json"));
         check(
             Refuses(() => Read(layout.HostExecutable, fixture, "layout")),
-            "a portable package with missing data settings cannot silently open an installed profile"
+            "a portable package with missing data settings cannot silently open fallback storage"
         );
         File.Delete(Path.Combine(root, "portable-package.json"));
         WriteMarker(root, "Data");
@@ -584,15 +579,15 @@ internal static class PortableProfileChecks
                 && !Directory.Exists(overlap),
             "data staging cannot target the current data directory or its descendants"
         );
-        await using var installed = new BackendSession(
+        await using var unconfigured = new BackendSession(
             manager,
-            Path.Combine(fixture, "installed-profile"),
+            Path.Combine(fixture, "unconfigured-profile"),
             Path.Combine(fixture, "Manager.exe"),
             () => true,
             new FakeStartup()
         );
-        await installed.ExecuteAsync("load", Payload("{}"), CancellationToken.None);
-        prepared = await installed.ExecuteAsync(
+        await unconfigured.ExecuteAsync("load", Payload("{}"), CancellationToken.None);
+        prepared = await unconfigured.ExecuteAsync(
             "preparePortableDataDirectory",
             PathPayload(denied),
             CancellationToken.None
@@ -600,7 +595,7 @@ internal static class PortableProfileChecks
         check(
             !prepared.Deserialize(Protocol.Json.OperationResult)!.Succeeded
                 && !Directory.Exists(denied),
-            "installed sessions cannot use the portable directory creation command"
+            "an injected session without authenticated portable layout cannot create a data directory"
         );
     }
 
@@ -615,11 +610,7 @@ internal static class PortableProfileChecks
     }
 
     static RuntimeProfileLayout Read(string host, string fixture, string name) =>
-        RuntimeProfileLayout.ForHost(
-            host,
-            Path.Combine(fixture, name + "-local"),
-            Path.Combine(fixture, name + "-roaming")
-        );
+        RuntimeProfileLayout.ForHost(host, Path.Combine(fixture, name + "-local"));
 
     static void CreateSource(RuntimeProfileLayout layout)
     {

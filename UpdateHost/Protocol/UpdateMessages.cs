@@ -1,8 +1,12 @@
+using System.Text.Json.Serialization;
+
 namespace Bezoro.AhkManager.UpdateHost;
 
-internal sealed record CachedInstaller(
-    string InstallerPath,
-    string InstallerSha256,
+// Portable protocol 2 retains its deployed JSON keys and cache layout.
+// These historical names do not permit executable installers or protocol 1.
+internal sealed record CachedPackage(
+    [property: JsonPropertyName("installerPath")] string ArchivePath,
+    [property: JsonPropertyName("installerSha256")] string ArchiveSha256,
     string Version
 );
 
@@ -11,11 +15,11 @@ internal sealed record UpdatePlan(
     Guid OperationId,
     int ParentPid,
     DateTimeOffset ParentStartedAtUtc,
-    string InstallDirectory,
-    string InstallerPath,
-    string InstallerSha256,
+    [property: JsonPropertyName("installDirectory")] string ApplicationDirectory,
+    [property: JsonPropertyName("installerPath")] string ArchivePath,
+    [property: JsonPropertyName("installerSha256")] string ArchiveSha256,
     string Version,
-    CachedInstaller? Fallback = null,
+    CachedPackage? Fallback = null,
     string? Deployment = null
 );
 
@@ -49,7 +53,7 @@ internal sealed record UpdateOutcome(
     string Outcome,
     string Detail,
     string Version,
-    int? InstallerExitCode,
+    [property: JsonPropertyName("installerExitCode")] int? ApplyExitCode,
     int? FallbackExitCode,
     DateTimeOffset CompletedAtUtc,
     string? BackupDirectory = null,

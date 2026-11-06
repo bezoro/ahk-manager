@@ -9,7 +9,7 @@ import {
   compareVersions,
   type RemoteUpdateRelease,
 } from '../../src/main/updates/github-updates.js';
-import type { CachedInstaller } from '../../src/main/updates/update-store.js';
+import type { CachedPackage } from '../../src/main/updates/update-store.js';
 import type { UpdateChannel, UpdateState } from '../../src/shared/updates.js';
 
 function deferred<T>(): {
@@ -25,9 +25,9 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 const hash = 'a'.repeat(64);
-const cached = (version: string): CachedInstaller => ({
+const cached = (version: string): CachedPackage => ({
   version,
-  installerPath: `/fixture/${version}/installer.exe`,
+  archivePath: `/fixture/${version}/archive.zip`,
   sha256: hash,
   bytes: 123,
 });
@@ -41,7 +41,7 @@ const release = (version = '1.2.10', id = `github:${version}`): RemoteUpdateRele
   sha256: hash,
   sha512: Buffer.alloc(64, 7).toString('base64'),
   bytes: 123,
-  installerName: `AHK-Manager-${version}-Setup-x64.exe`,
+  archiveName: `AHK-Manager-${version}-Portable-x64.zip`,
 });
 const metadata = (version = '1.2.0'): RemoteUpdateRelease => ({
   ...release(version),
@@ -52,7 +52,7 @@ const metadata = (version = '1.2.0'): RemoteUpdateRelease => ({
 });
 
 class Store implements UpdateStorePort {
-  items: CachedInstaller[] = [];
+  items: CachedPackage[] = [];
   corrupt = new Set<string>();
   cachedSources: string[] = [];
   channel: UpdateChannel = 'stable';
@@ -73,10 +73,10 @@ class Store implements UpdateStorePort {
     this.cleanupCalls++;
     if (this.cleanupError) throw this.cleanupError;
   }
-  async cached(): Promise<CachedInstaller[]> {
+  async cached(): Promise<CachedPackage[]> {
     return structuredClone(this.items);
   }
-  async verify(value: CachedInstaller): Promise<void> {
+  async verify(value: CachedPackage): Promise<void> {
     if (this.corrupt.has(value.version)) throw new Error('Fixture cache integrity failure.');
   }
   async cache(
@@ -84,7 +84,7 @@ class Store implements UpdateStorePort {
     source: string,
     sha256: string,
     bytes: number,
-  ): Promise<CachedInstaller> {
+  ): Promise<CachedPackage> {
     if (this.cacheError) throw this.cacheError;
     this.cachedSources.push(source);
     this.corrupt.delete(version);
@@ -100,7 +100,7 @@ function fixture(version = '1.2.2') {
   const queriedChannels: UpdateChannel[] = [];
   const resolved: Array<{ id: string }> = [];
   const downloaded: RemoteUpdateRelease[] = [];
-  const applied: Array<{ operationId: string; target: CachedInstaller }> = [];
+  const applied: Array<{ operationId: string; target: CachedPackage }> = [];
   const preflights: Array<{ operationId: string; phase: 'begin' | 'commit' }> = [];
   const confirmed: string[] = [];
   const hooks = {
@@ -111,7 +111,7 @@ function fixture(version = '1.2.2') {
       progress: (value: number) => void,
     ): Promise<string> => {
       progress(60);
-      return '/fixture/downloaded.exe';
+      return '/fixture/downloaded.zip';
     },
     preflight: async (_operationId: string, _phase: 'begin' | 'commit'): Promise<boolean> => true,
     confirm: async (): Promise<boolean> => true,
@@ -166,7 +166,6 @@ function fixture(version = '1.2.2') {
 test('portable rollback preservation runs only after explicit consent and before downloading the target', async () => {
   const f = fixture();
   const calls: string[] = [];
-  f.boundary.deployment = 'portable';
   f.boundary.preserveCurrent = async (progress) => {
     calls.push('preserve');
     progress(100);
@@ -320,7 +319,7 @@ test('commit preflight refusal preserves the verified download and a later expli
   assert.notEqual(f.applied[0]!.operationId, f.preflights[0]!.operationId);
 });
 
-test('corrupt cached installer is downloaded again when the matching remote release remains available', async () => {
+test('corrupt cached archive is downloaded again when the matching remote release remains available', async () => {
   const f = fixture();
   f.store.items = [cached('1.2.10')];
   f.store.corrupt.add('1.2.10');
@@ -426,7 +425,7 @@ test('apply uses one operation after final verification and rejects concurrent i
   await first;
 });
 
-test('apply failure leaves recovery state and the cached installer without automatically retrying', async () => {
+test('apply failure leaves recovery state and the cached archive without automatically retrying', async () => {
   const f = fixture();
   await f.service.check();
   f.hooks.apply = async () => {
@@ -538,7 +537,7 @@ test('resolved manifest must retain release id, version, asset id, byte count an
   }
 });
 
-test('a verified complete local installer stays usable offline without requesting a remote manifest', async () => {
+test('a verified complete local archive stays usable offline without requesting a remote manifest', async () => {
   const f = fixture();
   f.store.items = [cached('1.2.0')];
   f.hooks.releases = async () => {
@@ -579,7 +578,7 @@ test('metadata-only GitHub history preserves a complete cached rollback even whe
   assert.deepEqual(f.applied[0]!.target, cached('1.2.0'));
 });
 
-test('a corrupt installer behind metadata-only history resolves its manifest and downloads a verified replacement', async () => {
+test('a corrupt archive behind metadata-only history resolves its manifest and downloads a verified replacement', async () => {
   const f = fixture();
   f.store.items = [cached('1.2.0')];
   f.store.corrupt.add('1.2.0');
@@ -596,7 +595,7 @@ test('a corrupt installer behind metadata-only history resolves its manifest and
   assert.equal(f.applied[0]!.target.sha256, hash);
 });
 
-test('a corrupt cached historical installer cannot bypass unavailable lazy metadata while offline', async () => {
+test('a corrupt cached historical archive cannot bypass unavailable lazy metadata while offline', async () => {
   const f = fixture();
   f.store.items = [cached('1.2.0')];
   f.store.corrupt.add('1.2.0');
@@ -642,7 +641,7 @@ test('a pending lazy manifest resolution owns the installation operation and can
   assert.equal(f.applied.length, 1);
 });
 
-test('stable defaults exclude test releases from both remote and preserved installer history', async () => {
+test('stable defaults exclude test releases from both remote and preserved archive history', async () => {
   const f = fixture();
   const preview = '1.3.0-test.2.10.1';
   f.store.items = [cached(preview), cached('1.2.0')];

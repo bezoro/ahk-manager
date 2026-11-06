@@ -72,7 +72,7 @@ internal static partial class SelfTests
         {
             SchemaVersion = 2,
             Deployment = "portable",
-            InstallerPath = Path.Combine(root, "installers", installed.Version, "archive.zip"),
+            ArchivePath = Path.Combine(root, "installers", installed.Version, "archive.zip"),
         };
         UpdateProtocol.Validate(plan);
         UpdatePaths.ValidatePlanLocation(
@@ -85,7 +85,7 @@ internal static partial class SelfTests
                 && UpdateProtocol.Read<UpdatePlan>(
                     JsonSerializer.SerializeToUtf8Bytes(plan, UpdateProtocol.Json)
                 ) == plan,
-            "portable protocol binds explicit deployment and an archive without changing installed defaults"
+            "portable protocol binds explicit deployment and an archive using deployed portable JSON keys"
         );
         foreach (
             var invalid in new[]
@@ -111,11 +111,10 @@ internal static partial class SelfTests
             );
         PortableRefused(
             () =>
-                UpdatePaths.ValidateInstallerLocation(
-                    installed.InstallerPath,
+                UpdatePaths.ValidateArchiveLocation(
+                    Path.Combine(root, "installers", installed.Version, "installer.exe"),
                     installed.Version,
-                    root,
-                    true
+                    root
                 ),
             check,
             "portable application cannot consume an installer cache entry"
@@ -742,7 +741,7 @@ internal static partial class SelfTests
                 Path.Combine(operation, "commit.json"),
                 new UpdateCommit(1, id, 42, plan.ParentStartedAtUtc)
             );
-            using var package = new PackageLease(archive, "1.2.1", hash, layout.Updates, true);
+            using var package = new PackageLease(archive, "1.2.1", hash, layout.Updates);
             _ = PortablePayload.ValidateArchive(package, "1.2.1");
             using var original = new PortableInventory(layout.Root);
             bool fault = false;

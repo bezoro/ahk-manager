@@ -23,13 +23,9 @@ function Read-PreviewManifestEntry {
 function Get-PreviewArtifactEntries {
     param([IO.Compression.ZipArchive]$Archive, [string]$Version)
     $expected = [Collections.Generic.Dictionary[string, long]]::new([StringComparer]::Ordinal)
-    $expected.Add("AHK-Manager-$Version-Setup-x64.exe", 1GB)
-    $expected.Add('ahk-manager-release.json', 65536L)
+    $expected.Add("AHK-Manager-$Version-Portable-x64.zip", 1GB)
+    $expected.Add('ahk-manager-portable-release.json', 65536L)
     $expected.Add('SHA256.txt', 16384L)
-    if ($Archive.Entries.Count -eq 5) {
-        $expected.Add("AHK-Manager-$Version-Portable-x64.zip", 1GB)
-        $expected.Add('ahk-manager-portable-release.json', 65536L)
-    }
     if ($Archive.Entries.Count -ne $expected.Count) { throw 'Unexpected preview ZIP entry count.' }
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $total = 0L
@@ -46,30 +42,16 @@ function Read-TestReleaseArtifactIdentity {
     param([Parameter(Mandatory = $true)][string]$ArchivePath)
     $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
-        $document = [Text.Json.JsonDocument]::Parse((Read-PreviewManifestEntry $archive 'ahk-manager-release.json'))
-        try {
-            $root = $document.RootElement
-            if ((@($root.EnumerateObject() | ForEach-Object Name) | Sort-Object) -join ',' -cne 'commit,installer,notes,publishedAt,schemaVersion,updateProtocol,version' -or $root.GetProperty('schemaVersion').GetInt32() -ne 1 -or $root.GetProperty('updateProtocol').GetInt32() -ne 1) { throw 'Unexpected or duplicate preview manifest fields.' }
-            $identity = [pscustomobject]@{
-                Version = $root.GetProperty('version').GetString()
-                Commit = $root.GetProperty('commit').GetString()
-                Notes = $root.GetProperty('notes').GetString()
-                PublishedAt = $root.GetProperty('publishedAt').GetString()
-                HasPortable = $archive.Entries.Count -eq 5
-            }
-        }
-        finally { $document.Dispose() }
+        $identity = ConvertFrom-PortableReleaseJson (Read-PreviewManifestEntry $archive 'ahk-manager-portable-release.json')
+        if ((Get-ReleaseVersionChannel $identity.Version) -cne 'test') { throw 'Only test-channel portable packages may be published as previews.' }
         $null = Get-PreviewArtifactEntries $archive $identity.Version
-        if ($identity.HasPortable) {
-            $portable = ConvertFrom-PortableReleaseJson (Read-PreviewManifestEntry $archive 'ahk-manager-portable-release.json')
-            if ($portable.Version -cne $identity.Version -or $portable.Commit -cne $identity.Commit -or $portable.PublishedAt -cne $identity.PublishedAt -or $portable.Notes -cne $identity.Notes -or $archive.GetEntry($portable.ArchiveName).Length -ne $portable.ArchiveBytes) { throw 'The portable package does not identify the same preview build.' }
-        }
+        if ($archive.GetEntry($identity.ArchiveName).Length -ne $identity.ArchiveBytes) { throw 'The portable package length does not match its preview manifest.' }
         return $identity
     }
     finally { $archive.Dispose() }
 }
 
-# Admit only the exact legacy installer family or the paired portable family.
+# Admit only the exact portable ZIP, protocol-2 manifest and checksum receipt.
 # Neither PR executables nor the contents of the portable payload are executed.
 function Expand-TestReleaseArtifact {
     param(

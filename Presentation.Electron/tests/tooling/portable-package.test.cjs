@@ -162,6 +162,8 @@ test('portable signing metadata uses the production publisher parser and exact p
   );
   assert.equal(result.baselinePolicySha256, result.candidatePolicySha256);
   assert.equal(result.sourceCommit, value.commit);
+  assert.equal(result.baselineSourceCommit, value.commit);
+  assert.equal(result.schemaVersion, 2);
   assert.deepEqual(JSON.parse(fs.readFileSync(output, 'utf8')), result);
   assert.deepEqual(fs.readFileSync(candidate), bytes);
   assert.deepEqual(fs.readFileSync(baseline), bytes);
@@ -169,6 +171,37 @@ test('portable signing metadata uses the production publisher parser and exact p
     writePortableTestPolicy({ candidate, baseline, output, commit: value.commit }),
     { code: 'EEXIST' },
   );
+});
+
+test('published portable baselines retain separately bound source and policy bytes', async () => {
+  const { writePortableTestPolicy } = await import('../../scripts/portable-test-policy.mjs');
+  const value = fixture();
+  const candidate = path.join(value.root, 'candidate.yml');
+  const baseline = path.join(value.root, 'baseline.yml');
+  const output = path.join(value.root, 'publisher-policy.json');
+  const current = Buffer.from('{"publisherName":["Expected"]}');
+  const previous = Buffer.from('publisherName: Expected\n');
+  fs.writeFileSync(candidate, current);
+  fs.writeFileSync(baseline, previous);
+  const result = await writePortableTestPolicy({
+    candidate,
+    baseline,
+    output,
+    commit: value.commit,
+    baselineCommit: 'b'.repeat(40),
+  });
+  assert.deepEqual(result.names, ['Expected']);
+  assert.equal(
+    result.candidatePolicySha256,
+    crypto.createHash('sha256').update(current).digest('hex'),
+  );
+  assert.equal(
+    result.baselinePolicySha256,
+    crypto.createHash('sha256').update(previous).digest('hex'),
+  );
+  assert.equal(result.baselineSourceCommit, 'b'.repeat(40));
+  assert.deepEqual(fs.readFileSync(candidate), current);
+  assert.deepEqual(fs.readFileSync(baseline), previous);
 });
 
 test('portable signing metadata refuses policy drift and invalid production publisher names', async () => {

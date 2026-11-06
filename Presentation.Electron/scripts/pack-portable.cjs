@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { parseArgs } = require('node:util');
-const { validateRelative } = require('./owned-files.cjs');
+const { validateRelative } = require('./lib/portable-paths.cjs');
 const { validUpdateVersion } = require('./lib/update-versions.cjs');
 
 const APPLICATION_ID = 'Bezoro.AhkManager.Electron';

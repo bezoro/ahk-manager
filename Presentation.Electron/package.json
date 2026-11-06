@@ -19,12 +19,11 @@
     "test:release": "node --test tests/tooling/release-identity.test.cjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.cjs",
-    "package": "electron-builder --config electron-builder.cjs --win nsis --x64"
+    "package": "electron-builder --config electron-builder.cjs --win --x64 --dir"
   },
   "dependencies": {
     "@fluentui/react-components": "9.74.11",
     "@fluentui/react-icons": "2.0.344",
-    "electron-updater": "6.8.11",
     "fflate": "0.8.3",
     "js-yaml": "4.3.2",
     "react": "19.3.1",

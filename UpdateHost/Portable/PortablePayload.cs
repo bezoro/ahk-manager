@@ -248,9 +248,9 @@ internal static class PortablePayload
         Action<string, string>? verifyImage = null
     )
     {
-        package.Installer.Stream.Position = 0;
+        package.Archive.Stream.Position = 0;
         using var archive = new ZipArchive(
-            package.Installer.Stream,
+            package.Archive.Stream,
             ZipArchiveMode.Read,
             leaveOpen: true
         );
@@ -319,9 +319,9 @@ internal static class PortablePayload
 
     internal static PortableDescriptor ValidateArchive(PackageLease package, string version)
     {
-        package.Installer.Stream.Position = 0;
+        package.Archive.Stream.Position = 0;
         using var archive = new ZipArchive(
-            package.Installer.Stream,
+            package.Archive.Stream,
             ZipArchiveMode.Read,
             leaveOpen: true
         );

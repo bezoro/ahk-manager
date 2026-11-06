@@ -46,7 +46,7 @@ export const text = {
   updateNew: 'New version',
   updateNoNotes: 'This version has no release notes.',
   updateCached: 'Available on this computer',
-  updateInstallerUnavailable: 'Installer unavailable',
+  updatePackageUnavailable: 'Package unavailable',
   updateNoHistory: 'No versions were found. Check for updates again later.',
   updateOpen: 'View update',
   authorityNormal: 'Standard',

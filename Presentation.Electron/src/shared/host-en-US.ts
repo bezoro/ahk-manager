@@ -77,12 +77,6 @@ export const hostText = {
     catalog: 'JSON catalog',
     applications: 'Applications',
   },
-  welcomeTitle: 'Welcome to AHK Manager',
-  welcomeQuestion: 'Create a new profile or migrate a WinUI profile?',
-  welcomeDetail:
-    'Existing profiles and scripts will be preserved. Migration shows a preview and requires confirmation before copying files.',
-  newProfile: 'Create new profile',
-  chooseWinUiProfile: 'Select WinUI profile',
   tray: {
     open: 'Open AHK Manager',
     hide: 'Hide window',

@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { DeploymentMode } from '../../shared/storage.js';
 import { parseStorageJson, storageKeys, storageObject } from './json.js';
 
 export const portableApplicationId = 'Bezoro.AhkManager.Electron';
@@ -14,14 +13,14 @@ export interface PortableConfiguration {
 }
 
 export interface DeploymentLayout {
-  mode: DeploymentMode;
+  mode: 'portable';
   applicationDirectory: string;
   launchExecutable: string;
-  portableRoot: string | null;
-  configurationPath: string | null;
+  portableRoot: string;
+  configurationPath: string;
   dataDirectory: string;
   profileDirectory: string;
-  chromiumDirectory: string | null;
+  chromiumDirectory: string;
   updatesDirectory: string;
   defaultDataDirectory: string;
   legacyDataDirectory: string;
@@ -176,36 +175,19 @@ export function resolveDeployment(
   const legacyDataDirectory = path.join(localAppDataDirectory, 'Bezoro', 'AhkManagerElectron');
   const portableRoot = path.dirname(applicationDirectory);
   const configurationPath = path.join(portableRoot, portableConfigurationName);
-  let configuration: PortableConfiguration | null = null;
-  if (path.basename(applicationDirectory).toLowerCase() === 'app') {
-    try {
-      configuration = parsePortableConfiguration(readStorageJson(configurationPath, 4096));
-    } catch (error) {
-      if (!missing(error)) throw error;
-      try {
-        fs.lstatSync(path.join(portableRoot, 'portable-package.json'));
-        throw new Error(
-          'The portable data settings file is missing. Restore portable.json before opening Manager.',
-        );
-      } catch (descriptorError) {
-        if (!missing(descriptorError)) throw descriptorError;
-      }
-    }
+  if (path.basename(applicationDirectory).toLowerCase() !== 'app')
+    throw new Error(
+      'Manager must run from the App folder of a complete portable package. Extract the portable ZIP and open its root launcher.',
+    );
+  let configuration: PortableConfiguration;
+  try {
+    configuration = parsePortableConfiguration(readStorageJson(configurationPath, 4096));
+  } catch (error) {
+    if (!missing(error)) throw error;
+    throw new Error(
+      'The portable data settings file is missing. Restore portable.json from the complete portable package before opening Manager.',
+    );
   }
-  if (!configuration)
-    return {
-      mode: 'installed',
-      applicationDirectory,
-      launchExecutable: executable,
-      portableRoot: null,
-      configurationPath: null,
-      dataDirectory: legacyDataDirectory,
-      profileDirectory: legacyDataDirectory,
-      chromiumDirectory: null,
-      updatesDirectory: path.join(legacyDataDirectory, 'Updates'),
-      defaultDataDirectory: legacyDataDirectory,
-      legacyDataDirectory,
-    };
   assertStoragePath(portableRoot);
   const dataDirectory = validateDataDirectory(portableRoot, configuration.dataDirectory);
   return {

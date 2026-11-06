@@ -98,15 +98,15 @@ test('diagnostic collection is bounded when an inherited pipe outlives the rejec
 test('preparation refusals explain supported recovery without exposing native diagnostics', () => {
   assert.equal(
     updateHostRefusalMessage(null),
-    'The update helper rejected the update. The installation has been preserved.',
+    'The update helper rejected the update. The portable application has been preserved.',
   );
   assert.equal(
     updateHostRefusalMessage(readUpdateHostRefusal(Buffer.from(wire))),
-    'The installation folder or its parent could not be verified as a private, trusted location. Check its permissions or install Manager in the default per-user folder. Nothing was changed.',
+    'The portable folder or its parent could not be verified as a private, trusted location. Check its permissions or move Manager to a private NTFS folder. Nothing was changed.',
   );
   assert.equal(
     updateHostRefusalMessage({ schemaVersion: 1, phase: 'registration', code: 'invalid-data' }),
-    'This copy of Manager is not registered for in-app updates. Run Manager Setup once, then open Manager from its installed shortcut. Your profile and scripts will be preserved.',
+    updateHostRefusalMessage(null),
   );
   assert.equal(
     updateHostRefusalMessage({ schemaVersion: 1, phase: 'registration', code: 'access-denied' }),

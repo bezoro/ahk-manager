@@ -12,7 +12,6 @@ export async function acquirePortableStorageLease(
   onFailure?: (error: Error) => void,
   start?: StartStorageLease,
 ): Promise<PortableStorageLease> {
-  if (layout.mode !== 'portable') return { check: () => {}, close: async () => {} };
   const lease = await openNativeStorageLease(layout, '--lease-portable-storage', start, onFailure);
   return { check: lease.check, close: lease.close };
 }

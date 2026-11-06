@@ -15,9 +15,9 @@ internal static partial class SelfTests
                 "parent-alive",
                 "cancel",
                 "backup-failed",
-                "installer-active",
-                "installer-refused",
-                "installer-failed",
+                "promotion-unconfirmed",
+                "promotion-refused",
+                "promotion-failed",
                 "verification-failed",
                 "restore-failed",
                 "launch-failed",
@@ -29,8 +29,8 @@ internal static partial class SelfTests
             var result = await ApplyEngine.Run(plan, fake, diagnostics.Add);
             string expected =
                 scenario == "success" ? "Installed"
-                : scenario is "installer-active" or "restore-failed" ? "Unknown"
-                : scenario is "installer-failed" or "verification-failed" or "launch-failed"
+                : scenario is "promotion-unconfirmed" or "restore-failed" ? "Unknown"
+                : scenario is "promotion-failed" or "verification-failed" or "launch-failed"
                     ? "RolledBack"
                 : "Failed";
             check(
@@ -44,21 +44,21 @@ internal static partial class SelfTests
                     "unconfirmed exit cancellation or missing backup never starts installation: "
                         + scenario
                 );
-            if (scenario == "installer-active")
+            if (scenario == "promotion-unconfirmed")
                 check(
                     fake.Restores == 0 && fake.Launches == 0,
-                    "an installer without exit evidence is never raced by rollback or relaunch"
+                    "a payload promotion without completion evidence is never raced by rollback or relaunch"
                 );
             if (
                 scenario
-                is "installer-failed"
+                is "promotion-failed"
                     or "verification-failed"
                     or "launch-failed"
                     or "restore-failed"
             )
                 check(
                     fake.Restores == 1 && fake.Installs == 1,
-                    "recovery is attempted once without replaying an installer: " + scenario
+                    "recovery is attempted once without replaying a payload promotion: " + scenario
                 );
             string? failureStage = scenario switch
             {
@@ -104,13 +104,13 @@ internal static partial class SelfTests
                 : Task.FromResult(new BackupState(Path.Combine(root, "backup"), "1.2.0"));
         }
 
-        public Task<InstallerRun> Install()
+        public Task<PackageApplyResult> Install()
         {
             Installs++;
             return Task.FromResult(
-                scenario == "installer-active" ? new InstallerRun(false, null)
-                : scenario == "installer-refused" ? new(true, null, false)
-                : new(true, scenario is "installer-failed" or "restore-failed" ? 2 : 0)
+                scenario == "promotion-unconfirmed" ? new PackageApplyResult(false, null)
+                : scenario == "promotion-refused" ? new(true, null, false)
+                : new(true, scenario is "promotion-failed" or "restore-failed" ? 2 : 0)
             );
         }
 

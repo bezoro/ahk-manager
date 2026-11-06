@@ -32,4 +32,4 @@ if (-not $process.WaitForExit(120000)) { throw 'The isolated network harness did
 if ($process.ExitCode -ne 0) { throw 'The Electron network regression checks failed. See update-network/summary.json.' }
 $summary = Get-Content -LiteralPath (Join-Path $OutputRoot 'summary.json') -Raw | ConvertFrom-Json
 if ($summary.failures.Count -ne 0 -or @($summary.checks | Where-Object { -not $_.passed }).Count -ne 0 -or $summary.checks.Count -lt 10) { throw 'The network harness did not confirm all checks.' }
-Write-Host "Passed $($summary.checks.Count) Electron network checks, including the shipped redirect failure and the repaired transport."
+Write-Host "Passed $($summary.checks.Count) portable Electron network and redirect-policy checks."

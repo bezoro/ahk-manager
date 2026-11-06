@@ -21,14 +21,15 @@ internal static partial class SelfTests
         }
 
         var plan = new UpdatePlan(
-            1,
+            2,
             Guid.NewGuid(),
             42,
             DateTimeOffset.UtcNow,
             Path.Combine(root, "installation"),
-            Path.Combine(root, "installers", "1.2.1", "installer.exe"),
+            Path.Combine(root, "installers", "1.2.1", "archive.zip"),
             new string('a', 64),
-            "1.2.1"
+            "1.2.1",
+            Deployment: "portable"
         );
         CheckAdmissionDiagnostics(Check);
         CheckPortableInitializationDiagnostics(Check);
@@ -41,7 +42,6 @@ internal static partial class SelfTests
         await CheckCloudFiles(root, Check).ConfigureAwait(false);
         CheckProtocol(root, plan, Check);
         CheckReleaseVersions(root, plan, Check);
-        CheckInstallerCommandLine(root, plan, Check);
         CheckSnapshotAclComparison(Check);
         CheckPortableProtectionPermissions(root, Check);
         CheckPortableProtocol(root, plan, Check);
@@ -52,8 +52,8 @@ internal static partial class SelfTests
         CheckPortableStorageLeases(root, Check);
         await CheckPortableTransactions(root, Check);
         await CheckPortablePromotionSharing(root, Check);
-        await CheckInstallerCache(root, plan, Check);
-        await CheckTestInstallerCache(root, Check);
+        await CheckArchiveCache(root, plan, Check);
+        await CheckTestArchiveCache(root, Check);
         await CheckApplyTransactions(root, plan, Check);
         await CheckShutdownAuthorization(root, plan, Check);
         string original = await CheckSnapshotContents(root, Check);

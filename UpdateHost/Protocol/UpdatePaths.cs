@@ -5,14 +5,6 @@ namespace Bezoro.AhkManager.UpdateHost;
 
 internal static class UpdatePaths
 {
-    internal static string UpdatesRoot =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Bezoro",
-            "AhkManagerElectron",
-            "Updates"
-        );
-
     internal static string Local(string? path)
     {
         if (
@@ -69,41 +61,18 @@ internal static class UpdatePaths
             )
         )
             throw new InvalidDataException("Plan is outside its operation directory.");
-        ValidateInstallerLocation(
-            plan.InstallerPath,
-            plan.Version,
-            updatesRoot,
-            UpdateProtocol.Portable(plan)
-        );
+        ValidateArchiveLocation(plan.ArchivePath, plan.Version, updatesRoot);
         if (plan.Fallback is { } fallback)
-            ValidateInstallerLocation(
-                fallback.InstallerPath,
-                fallback.Version,
-                updatesRoot,
-                UpdateProtocol.Portable(plan)
-            );
+            ValidateArchiveLocation(fallback.ArchivePath, fallback.Version, updatesRoot);
     }
 
-    internal static void ValidateInstallerLocation(
-        string path,
-        string version,
-        string updatesRoot,
-        bool portable = false
-    )
+    internal static void ValidateArchiveLocation(string path, string version, string updatesRoot)
     {
         if (
             !UpdateProtocol.ReleaseVersion(version)
-            || !Equal(
-                path,
-                Path.Combine(
-                    Local(updatesRoot),
-                    "installers",
-                    version,
-                    portable ? "archive.zip" : "installer.exe"
-                )
-            )
+            || !Equal(path, Path.Combine(Local(updatesRoot), "installers", version, "archive.zip"))
         )
-            throw new InvalidDataException("Installer is outside its version cache.");
+            throw new InvalidDataException("Archive is outside its version cache.");
     }
 
     internal static string ValidateHostLocation(string path, string updatesRoot)

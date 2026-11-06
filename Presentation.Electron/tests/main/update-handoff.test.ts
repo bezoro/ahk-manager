@@ -39,10 +39,27 @@ test('the copied update host starts in its operation folder even when Manager is
   const helper = path.join(application, 'backend', 'update', 'AhkManager.UpdateHost.exe');
   await fs.mkdir(path.dirname(helper), { recursive: true });
   await fs.writeFile(helper, 'immutable helper fixture');
-  const installerPath = path.join(store.root, 'installers', '1.6.0', 'installer.exe');
-  const contents = Buffer.from('immutable installer fixture');
-  await fs.mkdir(path.dirname(installerPath), { recursive: true });
-  await fs.writeFile(installerPath, contents);
+  const archivePath = path.join(store.root, 'installers', '1.6.0', 'archive.zip');
+  const contents = Buffer.from('immutable archive fixture');
+  await fs.mkdir(path.dirname(archivePath), { recursive: true });
+  await fs.writeFile(archivePath, contents);
+  await fs.writeFile(
+    path.join(path.dirname(archivePath), 'release.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      updateProtocol: 2,
+      version: '1.6.0',
+      commit: 'a'.repeat(40),
+      publishedAt: '2026-11-06T00:00:00.000Z',
+      notes: 'Portable handoff fixture.',
+      archive: {
+        name: 'AHK-Manager-1.6.0-Portable-x64.zip',
+        bytes: contents.length,
+        sha256: createHash('sha256').update(contents).digest('hex'),
+        sha512: createHash('sha512').update(contents).digest('base64'),
+      },
+    }),
+  );
   const operationId = randomUUID();
   const directory = path.join(store.root, 'operations', operationId);
   let unref = 0;
@@ -65,6 +82,11 @@ test('the copied update host starts in its operation folder even when Manager is
     const planBytes = fsSync.readFileSync(args[1]!);
     assert.equal(args[3], createHash('sha256').update(planBytes).digest('hex'));
     const plan = JSON.parse(planBytes.toString('utf8'));
+    assert.equal(plan.schemaVersion, 2);
+    assert.equal(plan.deployment, 'portable');
+    assert.equal(plan.installerPath, archivePath);
+    assert.equal(plan.installerSha256, createHash('sha256').update(contents).digest('hex'));
+    assert.equal(Object.hasOwn(plan, 'archivePath'), false);
     fsSync.writeFileSync(
       path.join(directory, 'ready.json'),
       JSON.stringify({
@@ -85,7 +107,7 @@ test('the copied update host starts in its operation folder even when Manager is
       operationId,
       {
         version: '1.6.0',
-        installerPath,
+        archivePath,
         sha256: createHash('sha256').update(contents).digest('hex'),
         bytes: contents.length,
       },

@@ -17,13 +17,13 @@ const SHA512 = Buffer.alloc(64, 0x5a).toString('base64');
 function fixture(version = '1.2.7', id = 10) {
   const manifest = {
     schemaVersion: 1,
-    updateProtocol: 1,
+    updateProtocol: 2,
     version,
     commit: COMMIT,
     publishedAt: DATE,
     notes: 'Startup fix.',
-    installer: {
-      name: `AHK-Manager-${version}-Setup-x64.exe`,
+    archive: {
+      name: `AHK-Manager-${version}-Portable-x64.zip`,
       sha256: 'b'.repeat(64),
       sha512: SHA512,
       bytes: 123456,
@@ -39,17 +39,17 @@ function fixture(version = '1.2.7', id = 10) {
     assets: [
       {
         id: id * 10,
-        name: 'ahk-manager-release.json',
+        name: 'ahk-manager-portable-release.json',
         size: Buffer.byteLength(JSON.stringify(manifest)),
         state: 'uploaded',
         url: 'https://untrusted.example/manifest',
       },
       {
         id: id * 10 + 1,
-        name: manifest.installer.name,
-        size: manifest.installer.bytes,
+        name: manifest.archive.name,
+        size: manifest.archive.bytes,
         state: 'uploaded',
-        url: 'https://untrusted.example/installer.exe',
+        url: 'https://untrusted.example/archive.zip',
       },
     ],
   };
@@ -129,7 +129,9 @@ test('only complete stable protocol releases are offered, sorted by version, usi
     sha256: 'b'.repeat(64),
     sha512: SHA512,
     bytes: 123456,
-    installerName: newest.manifest.installer.name,
+    archiveName: newest.manifest.archive.name,
+    deployment: 'portable',
+    manifestText: JSON.stringify(newest.manifest),
   });
   assert.equal(result[1]!.metadataOnly, true);
   assert.equal(result[1]!.sha256, '');
@@ -275,7 +277,7 @@ test('older manifests are checked before installation while unknown IDs cannot s
             ? latest.manifest
             : {
                 ...previous.manifest,
-                installer: { ...previous.manifest.installer, sha256: 'bad' },
+                archive: { ...previous.manifest.archive, sha256: 'bad' },
               },
         ),
   );
@@ -287,7 +289,7 @@ test('older manifests are checked before installation while unknown IDs cannot s
   assert.equal(history[1]!.commit, '');
   await assert.rejects(client.resolve('github:10'), /invalid/);
   const count = calls.length;
-  for (const id of ['github:999', assetUrl(100), '../installer.exe'])
+  for (const id of ['github:999', assetUrl(100), '../archive.zip'])
     await assert.rejects(client.resolve(id), /checked history/);
   assert.equal(calls.length, count);
 });
@@ -315,7 +317,7 @@ test('replacement asset IDs cause the manifest to be fetched and checked again',
   assert.ok(calls.some((call) => call.url === assetUrl(200)));
 });
 
-test('manifest identity, protocol, installer size, path and both checksum encodings are required', async () => {
+test('manifest identity, protocol, archive size, path and both checksum encodings are required', async () => {
   const mutations: Array<(value: ReturnType<typeof fixture>['manifest']) => unknown> = [
     (value) => ({ ...value, schemaVersion: 2 }),
     (value) => ({ ...value, updateProtocol: 0 }),
@@ -326,17 +328,17 @@ test('manifest identity, protocol, installer size, path and both checksum encodi
     (value) => ({ ...value, notes: 'a'.repeat(8001) }),
     (value) => ({ ...value, notes: 'a\0b' }),
     (value) => ({ ...value, extra: 'unrecognized' }),
-    (value) => ({ ...value, installer: { ...value.installer, name: '../installer.exe' } }),
-    (value) => ({ ...value, installer: { ...value.installer, bytes: value.installer.bytes + 1 } }),
-    (value) => ({ ...value, installer: { ...value.installer, sha256: 'B'.repeat(64) } }),
+    (value) => ({ ...value, archive: { ...value.archive, name: '../archive.zip' } }),
+    (value) => ({ ...value, archive: { ...value.archive, bytes: value.archive.bytes + 1 } }),
+    (value) => ({ ...value, archive: { ...value.archive, sha256: 'B'.repeat(64) } }),
     (value) => ({
       ...value,
-      installer: { ...value.installer, sha512: Buffer.alloc(32).toString('base64') },
+      archive: { ...value.archive, sha512: Buffer.alloc(32).toString('base64') },
     }),
-    (value) => ({ ...value, installer: { ...value.installer, sha512: 'A'.repeat(85) + 'B==' } }),
+    (value) => ({ ...value, archive: { ...value.archive, sha512: 'A'.repeat(85) + 'B==' } }),
     (value) => ({
       ...value,
-      installer: { ...value.installer, url: 'https://untrusted.example/setup.exe' },
+      archive: { ...value.archive, url: 'https://untrusted.example/archive.zip' },
     }),
   ];
   for (const mutate of mutations) {

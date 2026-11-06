@@ -255,18 +255,3 @@ test('an initial runtime admission refusal rejects startup without an after-admi
   assert.deepEqual(failures, []);
   assert.equal(native.events.at(-1), 'exit:0');
 });
-
-test('installed runtime profiles do not start a portable namespace lease', async (t) => {
-  const f = await fixture(t);
-  const layout = {
-    ...f.layout,
-    mode: 'installed' as const,
-    portableRoot: null,
-    configurationPath: null,
-  };
-  const lease = await acquirePortableStorageLease(layout, undefined, () => {
-    throw new Error('Unexpected helper');
-  });
-  lease.check();
-  await lease.close();
-});

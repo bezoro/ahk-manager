@@ -21,7 +21,6 @@ app.commandLine.appendSwitch('disable-gpu');
 
 const API = 'https://api.github.com/repos/bezoro/ahk-manager/releases';
 const CDN = 'https://release-assets.githubusercontent.com';
-const legacyCommit = 'ff035abbf8fb53348a38cbd60e36287a82f5ec6f';
 const checks: Array<{ name: string; passed: boolean }> = [];
 const failures: string[] = [];
 const requests: Array<{
@@ -33,18 +32,17 @@ const requests: Array<{
 }> = [];
 let stage = 'setup';
 let mode: 'normal' | 'untrusted' | 'loop' | 'oversized' | 'delayed' = 'normal';
-let legacyCause: string | null = null;
 
 function fixture(version: string, id: number, prerelease = false) {
   const manifest = {
     schemaVersion: 1,
-    updateProtocol: 1,
+    updateProtocol: 2,
     version,
     commit: 'a'.repeat(40),
     publishedAt: '2026-10-29T00:00:00.000Z',
     notes: 'Network fixture release.',
-    installer: {
-      name: `AHK-Manager-${version}-Setup-x64.exe`,
+    archive: {
+      name: `AHK-Manager-${version}-Portable-x64.zip`,
       sha256: 'b'.repeat(64),
       sha512: Buffer.alloc(64, 90).toString('base64'),
       bytes: 123456,
@@ -61,14 +59,14 @@ function fixture(version: string, id: number, prerelease = false) {
     assets: [
       {
         id: id * 10,
-        name: 'ahk-manager-release.json',
+        name: 'ahk-manager-portable-release.json',
         size: Buffer.byteLength(JSON.stringify(manifest)),
         state: 'uploaded',
       },
       {
         id: id * 10 + 1,
-        name: manifest.installer.name,
-        size: manifest.installer.bytes,
+        name: manifest.archive.name,
+        size: manifest.archive.bytes,
         state: 'uploaded',
       },
     ],
@@ -128,7 +126,7 @@ const deadline = setTimeout(() => {
   failures.push('The isolated network harness exceeded its deadline.');
   fs.writeFileSync(
     path.join(output, 'summary.json'),
-    JSON.stringify({ fixture: true, checks, failures, legacyCause }),
+    JSON.stringify({ fixture: true, checks, failures }),
   );
   app.exit(1);
 }, 60000);
@@ -140,7 +138,7 @@ app
     session.defaultSession.webRequest.onBeforeRequest((_details, callback) =>
       callback({ cancel: true }),
     );
-    const network = session.fromPartition('electron-updater', { cache: false });
+    const network = session.fromPartition('portable-updates', { cache: false });
     configureUpdateNetwork(network);
     await network.protocol.handle('https', async (request) => {
       const url = new URL(request.url);
@@ -220,26 +218,6 @@ app
       },
     );
     await check(
-      'the shipped 1.2.16 client reproduces Electron manual-redirect cancellation',
-      async () => {
-        const legacy = require(path.join(__dirname, 'legacy-client.cjs')) as {
-          GitHubUpdateClient: new (fetcher: typeof fetch) => {
-            releases(token: null): Promise<unknown>;
-          };
-        };
-        const original = (async (input, init) => {
-          try {
-            return await network.fetch(input instanceof URL ? input.href : input, init);
-          } catch (error) {
-            legacyCause = error instanceof Error ? error.message : 'Unknown transport failure.';
-            throw error;
-          }
-        }) as typeof fetch;
-        await assert.rejects(new legacy.GitHubUpdateClient(original).releases(null));
-        assert.equal(legacyCause, 'Redirect was cancelled');
-      },
-    );
-    await check(
       'the production transport resolves the stable manifest through a real Chromium redirect',
       async () => {
         const result = await new GitHubUpdateClient(fetcher).releases('stable');
@@ -248,7 +226,7 @@ app
           ['1.3.1', '1.3.0'],
         );
         assert.equal(result[0]!.metadataOnly, undefined);
-        assert.equal(result[0]!.sha256, stable.manifest.installer.sha256);
+        assert.equal(result[0]!.sha256, stable.manifest.archive.sha256);
       },
     );
     await check(
@@ -258,13 +236,10 @@ app
         const result = await client.releases('test');
         assert.deepEqual(
           result.map((release) => release.version),
-          ['1.3.2-test.40.1.2', '1.3.1', '1.3.0'],
+          [portableManifest.version, '1.3.2-test.40.1.2', '1.3.1', '1.3.0'],
         );
-        assert.equal(
-          (await client.resolve('github:10')).sha256,
-          previous.manifest.installer.sha256,
-        );
-        assert.equal((await client.releases('test'))[0]!.sha256, preview.manifest.installer.sha256);
+        assert.equal((await client.resolve('github:10')).sha256, previous.manifest.archive.sha256);
+        assert.equal((await client.releases('test'))[0]!.sha256, portableManifest.archive.sha256);
       },
     );
     await check('a redirect outside the asset allowlist cannot become a manifest', async () => {
@@ -298,7 +273,7 @@ app
       async () => {
         const client = new GitHubUpdateClient(fetcher, 'portable');
         const choices = await client.releases('test');
-        assert.equal(choices.length, 1);
+        assert.equal(choices.length, 4);
         const release = choices[0]!;
         assert.equal(release.version, portableManifest.version);
         const store = new UpdateStore(path.join(output, 'portable-cache'), 'portable');
@@ -309,12 +284,12 @@ app
         });
         const cached = await store.cache(release.version, source, release.sha256, release.bytes);
         await store.verify(cached);
-        assert.deepEqual(fs.readFileSync(cached.installerPath), portableBody);
+        assert.deepEqual(fs.readFileSync(cached.archivePath), portableBody);
         assert.equal(
-          fs.readFileSync(path.join(path.dirname(cached.installerPath), 'release.json'), 'utf8'),
+          fs.readFileSync(path.join(path.dirname(cached.archivePath), 'release.json'), 'utf8'),
           JSON.stringify(portableManifest),
         );
-        assert.deepEqual(await new UpdateStore(store.root).cached(), []);
+        assert.deepEqual(await new UpdateStore(store.root).cached(), [cached]);
       },
     );
     await check('AbortSignal cancels a pending Chromium update request', async () => {
@@ -347,14 +322,11 @@ app
           fixture: true,
           electron: process.versions.electron,
           node: process.versions.node,
-          legacyCommit,
-          legacyCause,
           productionSessionPolicy: true,
           checks,
           failures,
           requests,
           credentialsProvided: false,
-          installersDownloadedOrExecuted: false,
           portablePackageDownloaded: true,
           portablePackageExecuted: false,
         },
@@ -367,7 +339,6 @@ app
         passed: failures.length === 0,
         checks: checks.length,
         failures,
-        legacyCause,
       }),
     );
     app.exit(failures.length ? 1 : 0);

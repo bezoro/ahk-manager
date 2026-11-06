@@ -63,7 +63,7 @@ internal sealed class PortableApplyEffects(
         return RecoveryState = new(backup, original.Descriptor.Version);
     }
 
-    public async Task<InstallerRun> Install()
+    public async Task<PackageApplyResult> Install()
     {
         string stage = "validate-portable-layout";
         try
@@ -71,7 +71,7 @@ internal sealed class PortableApplyEffects(
             CheckCancellation();
             layout.Revalidate();
             stage = "verify-cached-package";
-            package.Verify(plan.InstallerSha256);
+            package.Verify(plan.ArchiveSha256);
             stage = "extract-portable-payload";
             await PortablePayload
                 .Extract(package, Stage, plan.Version, verifyImage)
@@ -134,7 +134,7 @@ internal sealed class PortableApplyEffects(
         }
         catch (Exception ex) when (UpdateProtocol.Known(ex))
         {
-            // All effects are in this process; there is no unobserved installer
+            // All effects are in this process; there is no external executable
             // dispatch. A caught failure can enter verified snapshot recovery.
             log?.Invoke("Portable promotion failed: " + ex.GetType().Name);
             ApplyDiagnostics.Failure(log, stage, ex);
@@ -204,7 +204,7 @@ internal sealed class PortableApplyEffects(
             || outcome.OperationId != plan.OperationId
             || outcome.Outcome != "Installed"
             || outcome.Version != plan.Version
-            || outcome.InstallerExitCode != 0
+            || outcome.ApplyExitCode != 0
             || outcome.BackupDirectory != Path.Combine(operationDirectory, "backup-installation")
             || snapshot is null
             || !applicationMoved

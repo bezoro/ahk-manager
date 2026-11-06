@@ -13,7 +13,5 @@
         <PackageReference Include="System.Management" Version="[10.0.13]" />
         <InternalsVisibleTo Include="AhkManager.Backend" />
         <InternalsVisibleTo Include="Tests.Backend" />
-        <InternalsVisibleTo Include="Bezoro.AhkManager.WinUI" />
-        <InternalsVisibleTo Include="Bezoro.AhkManager.WinUI.Tests" />
     </ItemGroup>
 </Project>

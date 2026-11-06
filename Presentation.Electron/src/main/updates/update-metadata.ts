@@ -1,7 +1,7 @@
 export class UpdateRequestError extends Error {}
 export const invalidUpdateMetadata = (): UpdateRequestError =>
   new UpdateRequestError(
-    'The published release has invalid update metadata. No files were installed.',
+    'The published release has invalid update metadata. No application files were changed.',
   );
 
 // JSON.parse already verifies grammar. This pass rejects duplicate object keys,

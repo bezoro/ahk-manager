@@ -17,7 +17,7 @@ foreach ($rejected in @('1.3.0-beta.1', '1.3.0-test.0.1.2', '1.3.0-test.01.1.2',
 $repository = [pscustomobject]@{ full_name = 'bezoro/ahk-manager'; id = 1430333503 }
 $run = [pscustomobject]@{ id = 7L; status = 'completed'; conclusion = 'success'; event = 'pull_request'; name = 'Windows CI'; path = '.github/workflows/windows-ci.yml'; repository = $repository; head_repository = $repository; head_sha = ('a' * 40); run_number = 20; run_attempt = 1; head_branch = 'feature' }
 $pull = [pscustomobject]@{ number = 2; state = 'open'; head = [pscustomobject]@{ sha = $run.head_sha; repo = $repository }; base = [pscustomobject]@{ ref = 'main'; repo = $repository } }
-$artifact = [pscustomobject]@{ id = 9L; name = 'windows-installer-test-1'; expired = $false; size_in_bytes = 1000L; digest = ('sha256:' + ('b' * 64)); workflow_run = [pscustomobject]@{ id = 7L; head_sha = $run.head_sha; head_repository_id = $repository.id } }
+$artifact = [pscustomobject]@{ id = 9L; name = 'windows-portable-test-1'; expired = $false; size_in_bytes = 1000L; digest = ('sha256:' + ('b' * 64)); workflow_run = [pscustomobject]@{ id = 7L; head_sha = $run.head_sha; head_repository_id = $repository.id } }
 $base = 'https://api.github.com/repos/bezoro/ahk-manager'
 $responses = @{
     "$base/actions/runs/7" = $run
@@ -38,7 +38,7 @@ foreach ($case in @(
     @{ object = $pull; field = 'state'; value = 'closed'; name = 'closed PR' },
     @{ object = $pull.head; field = 'sha'; value = ('c' * 40); name = 'stale PR head' },
     @{ object = $artifact; field = 'expired'; value = $true; name = 'expired artifact' },
-    @{ object = $artifact; field = 'name'; value = 'windows-installer-test-2'; name = 'another run attempt artifact' },
+    @{ object = $artifact; field = 'name'; value = 'windows-portable-test-2'; name = 'another run attempt artifact' },
     @{ object = $artifact; field = 'size_in_bytes'; value = (2GB + 1L); name = 'oversized archive' },
     @{ object = $artifact.workflow_run; field = 'head_sha'; value = ('c' * 40); name = 'artifact from another source' },
     @{ object = $artifact; field = 'digest'; value = 'sha256:invalid'; name = 'missing artifact integrity' }
@@ -69,13 +69,13 @@ $selected = @(Get-TestReleaseCandidates -Repository $repository.full_name -RunId
 Assert-Preview ($selected.Count -eq 0) 'bootstrap backfill skips PRs closed since their CI completed'
 $pull.state = 'open'
 
-$installerName = "AHK-Manager-$version-Setup-x64.exe"
-$installer = Join-Path $OutputRoot $installerName
-[IO.File]::WriteAllBytes($installer, [byte[]](1..255))
-$manifestPath = Join-Path $OutputRoot 'ahk-manager-release.json'
-& (Join-Path $PSScriptRoot 'New-ReleaseManifest.ps1') -InstallerPath $installer -OutputPath $manifestPath -Version $version -Commit $run.head_sha -Notes 'Prévia do canal de testes.'
+$archiveName = "AHK-Manager-$version-Portable-x64.zip"
+$archivePath = Join-Path $OutputRoot $archiveName
+[IO.File]::WriteAllBytes($archivePath, [byte[]](1..255))
+$manifestPath = Join-Path $OutputRoot 'ahk-manager-portable-release.json'
+& (Join-Path $PSScriptRoot 'New-PortableReleaseManifest.ps1') -ArchivePath $archivePath -OutputPath $manifestPath -Version $version -Commit $run.head_sha -Notes 'Test-channel preview.'
 $manifestText = [IO.File]::ReadAllText($manifestPath)
-$entries = @(@{ name = $installerName; value = [IO.File]::ReadAllBytes($installer) }, @{ name = 'ahk-manager-release.json'; value = [Text.Encoding]::UTF8.GetBytes($manifestText) }, @{ name = 'SHA256.txt'; value = [Text.Encoding]::UTF8.GetBytes('fixture') })
+$entries = @(@{ name = $archiveName; value = [IO.File]::ReadAllBytes($archivePath) }, @{ name = 'ahk-manager-portable-release.json'; value = [Text.Encoding]::UTF8.GetBytes($manifestText) }, @{ name = 'SHA256.txt'; value = [Text.Encoding]::UTF8.GetBytes('fixture') })
 function New-PreviewZip([string]$Name, [object[]]$Entries) {
     $path = Join-Path $OutputRoot ($Name + '.zip')
     $archive = [IO.Compression.ZipFile]::Open($path, [IO.Compression.ZipArchiveMode]::Create)
@@ -93,9 +93,9 @@ $validZip = New-PreviewZip 'valid' $entries
 $identity = Read-TestReleaseArtifactIdentity $validZip
 $extracted = Join-Path $OutputRoot 'extracted'
 Expand-TestReleaseArtifact -ArchivePath $validZip -OutputRoot $extracted -Version $version
-& (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') -InstallerPath (Join-Path $extracted $installerName) -ManifestPath (Join-Path $extracted 'ahk-manager-release.json') -Repository $repository.full_name -Commit $run.head_sha -ValidateOnly
-Assert-Preview ($identity.Version -ceq $version -and $identity.Commit -ceq $run.head_sha -and (Get-FileHash (Join-Path $extracted $installerName)).Hash -ceq (Get-FileHash $installer).Hash) 'preview manifest and extracted executable retain their exact hash and source identity without execution'
-foreach ($name in @('../escape.exe', '/absolute.exe', 'folder/installer.exe', 'SHA256.TXT')) {
+& (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') -PortableArchivePath (Join-Path $extracted $archiveName) -PortableManifestPath (Join-Path $extracted 'ahk-manager-portable-release.json') -Repository $repository.full_name -Commit $run.head_sha -ValidateOnly
+Assert-Preview ($identity.Version -ceq $version -and $identity.Commit -ceq $run.head_sha -and (Get-FileHash (Join-Path $extracted $archiveName)).Hash -ceq (Get-FileHash $archivePath).Hash) 'preview manifest and extracted archive retain their exact hash and source identity without execution'
+foreach ($name in @('../escape.exe', '/absolute.exe', 'folder/package.zip', 'SHA256.TXT')) {
     $bad = @($entries[0], $entries[1], @{ name = $name; value = [byte[]](1) })
     $zip = New-PreviewZip ('unsafe-' + [Guid]::NewGuid().ToString('N')) $bad
     Assert-Refused { Expand-TestReleaseArtifact -ArchivePath $zip -OutputRoot (Join-Path $OutputRoot ([Guid]::NewGuid().ToString('N'))) -Version $version } 'preview ZIP refuses traversal, absolute, nested or case-conflicting names'
@@ -103,12 +103,12 @@ foreach ($name in @('../escape.exe', '/absolute.exe', 'folder/installer.exe', 'S
 $duplicate = New-PreviewZip 'duplicate' @($entries[0], $entries[1], $entries[1])
 Assert-Refused { Read-TestReleaseArtifactIdentity $duplicate } 'duplicate manifests are rejected before extraction'
 $duplicateFields = $manifestText.Replace('"schemaVersion": 1', '"schemaVersion": 1, "schemaVersion": 1')
-$zip = New-PreviewZip 'duplicate-fields' @($entries[0], @{ name = 'ahk-manager-release.json'; value = [Text.Encoding]::UTF8.GetBytes($duplicateFields) }, $entries[2])
+$zip = New-PreviewZip 'duplicate-fields' @($entries[0], @{ name = 'ahk-manager-portable-release.json'; value = [Text.Encoding]::UTF8.GetBytes($duplicateFields) }, $entries[2])
 Assert-Refused { Read-TestReleaseArtifactIdentity $zip } 'duplicate JSON identity fields are rejected'
 
 # Exercise the actual publisher, including its last provenance check, with no
 # network fallback and no executable launched from the fixture artifact.
-$global:AhkPreviewPublisherFixture = @{ Responses = $responses; Release = $null; Tag = $null; Calls = [Collections.Generic.List[string]]::new(); Created = $null; Published = $null; ChangeHead = $false; FailAssetName = $null; MutatePathAfterSetup = $null }
+$global:AhkPreviewPublisherFixture = @{ Responses = $responses; Release = $null; Tag = $null; Calls = [Collections.Generic.List[string]]::new(); Created = $null; Published = $null; ChangeHead = $false; FailAssetName = $null; MutatePathAfterArchive = $null }
 function Invoke-RestMethod {
     param($Uri, $Method = 'Get', $Headers, $ContentType, $Body, $InFile)
     $fixture = $global:AhkPreviewPublisherFixture
@@ -139,9 +139,9 @@ function Invoke-RestMethod {
         if ($fixture.FailAssetName -ceq $file.Name) { throw 'Injected portable asset upload interruption.' }
         $asset = [pscustomobject]@{ name = $file.Name; size = $file.Length; state = 'uploaded'; digest = ('sha256:' + (Get-FileHash -LiteralPath $InFile -Algorithm SHA256).Hash.ToLowerInvariant()) }
         $fixture.Release.assets += $asset
-        if ($null -ne $fixture.MutatePathAfterSetup -and $file.Extension -ceq '.exe') {
-            [IO.File]::WriteAllBytes($fixture.MutatePathAfterSetup, [byte[]](3, 1, 4, 1, 5, 8))
-            $fixture.MutatePathAfterSetup = $null
+        if ($null -ne $fixture.MutatePathAfterArchive -and $file.Extension -ceq '.zip') {
+            [IO.File]::WriteAllBytes($fixture.MutatePathAfterArchive, [byte[]](3, 1, 4, 1, 5, 8))
+            $fixture.MutatePathAfterArchive = $null
         }
         return $asset
     }
@@ -162,7 +162,7 @@ try {
     $env:GITHUB_ACTIONS = 'true'; $env:GITHUB_EVENT_NAME = 'workflow_run'; $env:GITHUB_REF = 'refs/heads/main'
     $env:AHK_PUBLISHER_NAME = ''; $env:CSC_LINK = ''; $env:CSC_KEY_PASSWORD = ''
     $env:GITHUB_REPOSITORY = 'bezoro/ahk-manager'; $env:GITHUB_SHA = 'b' * 40; $env:GITHUB_TOKEN = 'fixture-only'
-    $parameters = @{ InstallerPath = $installer; ManifestPath = $manifestPath; Repository = $env:GITHUB_REPOSITORY; Commit = $run.head_sha; Channel = 'test'; TestRunId = 7 }
+    $parameters = @{ PortableArchivePath = $archivePath; PortableManifestPath = $manifestPath; Repository = $env:GITHUB_REPOSITORY; Commit = $run.head_sha; Channel = 'test'; TestRunId = 7 }
     & (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') @parameters
     $fixture = $global:AhkPreviewPublisherFixture
     Assert-Preview ($fixture.Created.prerelease -eq $true -and $fixture.Created.make_latest -ceq 'false' -and $fixture.Published.prerelease -eq $true -and $fixture.Published.make_latest -ceq 'false' -and $fixture.Release.draft -eq $false) 'production preview publisher creates a prerelease and never changes stable Latest'
@@ -177,10 +177,10 @@ try {
     $fixture.Release = $null; $fixture.Tag = $null; $fixture.Published = $null; $fixture.ChangeHead = $true
     Assert-Refused { & (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') @parameters } 'PR head changes during upload prevent the final publication'
     Assert-Preview ($null -eq $fixture.Published -and $fixture.Release.draft) 'a stale preview remains a draft and never reaches the test channel'
-    & (Join-Path $PSScriptRoot 'Test-PortableReleaseTooling.ps1') -OutputRoot (Join-Path $OutputRoot 'portable') -FixtureRoot $OutputRoot -Version $version -Commit $run.head_sha -RequestFixture $fixture -SourceManifestPath $manifestPath -InstallerPath $installer -LegacyEntries $entries
+    & (Join-Path $PSScriptRoot 'Test-PortableReleaseTooling.ps1') -OutputRoot (Join-Path $OutputRoot 'portable') -FixtureRoot $OutputRoot -Version $version -Commit $run.head_sha -RequestFixture $fixture -SourceManifestPath $manifestPath
 }
 finally {
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
     Remove-Variable AhkPreviewPublisherFixture -Scope Global -ErrorAction SilentlyContinue
 }
-[IO.File]::WriteAllText((Join-Path $OutputRoot 'summary.json'), (@{ passed = $true; checks = $checks.ToArray(); network = 'mocked'; published = $false; executedInstaller = $false } | ConvertTo-Json -Depth 4))
+[IO.File]::WriteAllText((Join-Path $OutputRoot 'summary.json'), (@{ passed = $true; checks = $checks.ToArray(); network = 'mocked'; published = $false; executedPayload = $false } | ConvertTo-Json -Depth 4))

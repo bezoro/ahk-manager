@@ -266,7 +266,7 @@ internal static class PortableInitialization
         if (
             !UpdateProtocol.Portable(plan)
             || plan.OperationId != operationId
-            || !UpdatePaths.Equal(plan.InstallDirectory, layout.Application)
+            || !UpdatePaths.Equal(plan.ApplicationDirectory, layout.Application)
         )
             throw new InvalidDataException(
                 "Portable recovery state belongs to another application."

@@ -1,7 +1,7 @@
 import { bool, nullable, oneOf, shape, text } from './validation.js';
 
 export const storageState = shape({
-  mode: oneOf('installed', 'portable'),
+  mode: oneOf('portable'),
   currentDataDirectory: text(32760),
   defaultDataDirectory: text(32760),
   pendingDataDirectory: nullable(text(32760)),

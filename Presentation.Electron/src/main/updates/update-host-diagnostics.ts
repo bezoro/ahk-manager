@@ -23,9 +23,7 @@ const phases = new Set([
   'operation-log',
   'package',
   'fallback-package',
-  'registration',
   'parent-identity',
-  'installed-image',
   'cancellation',
   'readiness',
   'apply',
@@ -122,7 +120,8 @@ export function observeUpdateHost(child: Pick<ChildProcess, 'stderr' | 'once'>):
 }
 
 export function updateHostRefusalMessage(refusal: UpdateHostRefusal | null): string {
-  const fallback = 'The update helper rejected the update. The installation has been preserved.';
+  const fallback =
+    'The update helper rejected the update. The portable application has been preserved.';
   if (refusal?.schemaVersion !== 1 || !phases.has(refusal.phase) || !codes.has(refusal.code))
     return fallback;
   if (refusal.code === 'unsupported-filesystem')
@@ -131,10 +130,8 @@ export function updateHostRefusalMessage(refusal: UpdateHostRefusal | null): str
     return 'Some application or update files are not available locally. Make the complete portable folder available offline in your sync app, wait for syncing to finish, then try the update again. Nothing was changed.';
   if (refusal.code === 'redirected-path')
     return 'The application or update path contains a symbolic link, junction or unsupported redirect. Use a local folder without redirected path components. Nothing was changed.';
-  if (refusal.phase === 'registration' && refusal.code === 'invalid-data')
-    return 'This copy of Manager is not registered for in-app updates. Run Manager Setup once, then open Manager from its installed shortcut. Your profile and scripts will be preserved.';
   if (['installation-ownership', 'installation-parent-ownership'].includes(refusal.phase))
-    return 'The installation folder or its parent could not be verified as a private, trusted location. Check its permissions or install Manager in the default per-user folder. Nothing was changed.';
+    return 'The portable folder or its parent could not be verified as a private, trusted location. Check its permissions or move Manager to a private NTFS folder. Nothing was changed.';
   if (
     ['cache-ownership', 'host-ownership', 'operation-ownership', 'package-ownership'].includes(
       refusal.phase,

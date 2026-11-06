@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-
 namespace Bezoro.AhkManager.UpdateHost;
 
 internal static class Program
@@ -75,14 +73,20 @@ internal static class Program
                 throw new InvalidDataException(
                     "Use --plan <absolute path> --sha256 <plan checksum>."
                 );
-            var portable = PortableLayout.FromParent();
+            var portable =
+                PortableLayout.FromParent()
+                ?? throw new InvalidDataException(
+                    "The authenticated Manager must use a portable layout."
+                );
             // App itself must be renameable during promotion, but retain the
             // dedicated container and every ancestor through the whole apply.
             // A permissive repository parent cannot swap the validated namespace.
-            using var portableDirectories = portable is null
-                ? null
-                : new DirectoryLease([portable.Root, portable.Data, portable.Updates]);
-            string root = portable?.Updates ?? UpdatePaths.UpdatesRoot;
+            using var portableDirectories = new DirectoryLease([
+                portable.Root,
+                portable.Data,
+                portable.Updates,
+            ]);
+            string root = portable.Updates;
             phase = UpdatePhase.HostLocation;
             string ownPath =
                 Environment.ProcessPath
@@ -108,14 +112,7 @@ internal static class Program
             );
             phase = UpdatePhase.PlanValidation;
             UpdateProtocol.Validate(plan);
-            if (UpdateProtocol.Portable(plan) != (portable is not null))
-                throw new InvalidDataException(
-                    "The update deployment does not match the authenticated Manager."
-                );
-            if (
-                portable is not null
-                && !UpdatePaths.Equal(plan.InstallDirectory, portable.Application)
-            )
+            if (!UpdatePaths.Equal(plan.ApplicationDirectory, portable.Application))
                 throw new InvalidDataException(
                     "The portable update targets another application directory."
                 );
@@ -123,8 +120,8 @@ internal static class Program
             UpdatePaths.ValidatePlanLocation(args[1], plan, root);
             plan = plan with
             {
-                InstallDirectory = UpdatePaths.Local(plan.InstallDirectory),
-                InstallerPath = UpdatePaths.Local(plan.InstallerPath),
+                ApplicationDirectory = UpdatePaths.Local(plan.ApplicationDirectory),
+                ArchivePath = UpdatePaths.Local(plan.ArchivePath),
             };
             string operation = UpdatePaths.OperationDirectory(root, plan.OperationId);
             phase = UpdatePhase.OperationOwnership;
@@ -143,75 +140,66 @@ internal static class Program
             log = new OperationLog(operation);
             UpdateWorkingDirectory.Detach(operation);
             log.Write("Update helper working directory detached into its validated operation.");
-            log.Write("Validating pinned installer and installation ownership.");
+            log.Write("Validating pinned portable archive and application ownership.");
             phase = UpdatePhase.PackageOwnership;
-            ProfileOwnership.Verify(Path.GetDirectoryName(plan.InstallerPath)!);
+            ProfileOwnership.Verify(Path.GetDirectoryName(plan.ArchivePath)!);
             phase = UpdatePhase.InstallationPaths;
-            UpdatePaths.NoRedirects(plan.InstallDirectory);
+            UpdatePaths.NoRedirects(plan.ApplicationDirectory);
             if (
-                plan.InstallDirectory.Equals(
-                    Path.GetPathRoot(plan.InstallDirectory),
+                plan.ApplicationDirectory.Equals(
+                    Path.GetPathRoot(plan.ApplicationDirectory),
                     StringComparison.OrdinalIgnoreCase
                 )
-                || UpdatePaths.Equal(plan.InstallDirectory, root)
-                || plan.InstallDirectory.StartsWith(
+                || UpdatePaths.Equal(plan.ApplicationDirectory, root)
+                || plan.ApplicationDirectory.StartsWith(
                     root + Path.DirectorySeparatorChar,
                     StringComparison.OrdinalIgnoreCase
                 )
                 || root.StartsWith(
-                    plan.InstallDirectory + Path.DirectorySeparatorChar,
+                    plan.ApplicationDirectory + Path.DirectorySeparatorChar,
                     StringComparison.OrdinalIgnoreCase
                 )
             )
                 throw new InvalidDataException("Installation and update cache overlap.");
-            phase = UpdatePhase.Registration;
-            var registry = portable is null
-                ? InstallationRegistration.Capture(plan.InstallDirectory)
-                : null;
             phase = UpdatePhase.InstallationOwnership;
-            ProfileOwnership.Verify(plan.InstallDirectory);
+            ProfileOwnership.Verify(plan.ApplicationDirectory);
             phase = UpdatePhase.InstallationParentOwnership;
-            ProfileOwnership.Verify(Path.GetDirectoryName(plan.InstallDirectory)!);
+            ProfileOwnership.Verify(Path.GetDirectoryName(plan.ApplicationDirectory)!);
             phase = UpdatePhase.Package;
             using var package = new PackageLease(
-                plan.InstallerPath,
+                plan.ArchivePath,
                 plan.Version,
-                plan.InstallerSha256,
-                root,
-                portable is not null
+                plan.ArchiveSha256,
+                root
             );
-            if (portable is not null)
-                _ = PortablePayload.ValidateArchive(package, plan.Version);
+            _ = PortablePayload.ValidateArchive(package, plan.Version);
             phase = UpdatePhase.FallbackPackage;
             using var fallback = plan.Fallback is { } previous
                 ? new PackageLease(
-                    previous.InstallerPath,
+                    previous.ArchivePath,
                     previous.Version,
-                    previous.InstallerSha256,
-                    root,
-                    portable is not null
+                    previous.ArchiveSha256,
+                    root
                 )
                 : null;
             phase = UpdatePhase.ParentIdentity;
             using var parent = new ParentLease(plan);
-            using var original = portable is null ? null : new PortableInventory(portable.Root);
-            string installedVersion = registry?.Version ?? original!.Descriptor.Version;
+            using var original = new PortableInventory(portable.Root);
+            string installedVersion = original.Descriptor.Version;
             if (
                 plan.Fallback is { } old
                 && !UpdateProtocol.SameVersion(old.Version, installedVersion)
             )
                 throw new InvalidDataException("Fallback does not identify the installed version.");
-            IApplyEffects effects = portable is null
-                ? new NativeApplyEffects(plan, operation, parent, package, registry!, log.Write)
-                : new PortableApplyEffects(
-                    plan,
-                    operation,
-                    parent,
-                    package,
-                    portable,
-                    original!,
-                    log.Write
-                );
+            var effects = new PortableApplyEffects(
+                plan,
+                operation,
+                parent,
+                package,
+                portable,
+                original,
+                log.Write
+            );
             phase = UpdatePhase.InstalledImage;
             effects.VerifyInstalled(installedVersion);
             phase = UpdatePhase.Cancellation;
@@ -228,8 +216,8 @@ internal static class Program
             log.Write(result.Outcome + ": " + result.Detail);
             phase = UpdatePhase.Outcome;
             Evidence.WriteNew(Path.Combine(operation, "outcome.json"), result);
-            if (result.Outcome == "Installed" && effects is PortableApplyEffects portableEffects)
-                _ = portableEffects.CleanupCompleted();
+            if (result.Outcome == "Installed")
+                _ = effects.CleanupCompleted();
             return result.Outcome is "Installed" or "RolledBack" ? 0
                 : result.Outcome == "Unknown" ? 75
                 : 20;

@@ -224,10 +224,12 @@ test('backend traces correlate with their UI command and retain protocol error c
   assert.doesNotMatch(text, /private-protocol-error-secret|parentCreated|hostExecutable|payload/);
 });
 
-test('an installed OS spawn failure is logged before profile initialization and keeps diagnostics available', async (t) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-installed-spawn-log-'));
-  const profile = path.join(directory, 'Bezoro', 'AhkManagerElectron');
-  const log = createCommandLog({ mode: 'installed', dataDirectory: profile }, directory);
+test('a portable OS spawn failure is logged before profile initialization and keeps diagnostics available', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-portable-spawn-log-'));
+  const data = path.join(directory, 'Data');
+  fs.mkdirSync(data);
+  const profile = path.join(data, 'Profile');
+  const log = createCommandLog({ dataDirectory: data });
   t.after(() => {
     log.close();
     fs.rmSync(directory, { recursive: true, force: true });

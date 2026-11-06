@@ -34,20 +34,15 @@ try {
     $env:AHK_SOURCE_COMMIT = $Commit
     Push-Location (Join-Path $repository 'Presentation.Electron')
     try {
-        # --dir builds the real signed/fused application, without another NSIS setup.
+        # Build a separate signed/fused portable application payload.
         & node node_modules/electron-builder/cli.js --config electron-builder.cjs --win --x64 --dir --publish never
         if ($LASTEXITCODE -ne 0) { throw 'Portable baseline application packaging failed.' }
     }
     finally { Pop-Location }
     $application = Join-Path $env:AHK_PACKAGE_OUT 'win-unpacked'
-    # electron-builder omits its update policy for a dir-only target. Reuse the
-    # exact candidate policy rather than changing publisher requirements in CI.
     $candidatePolicy = Join-Path $CandidateApplicationRoot 'resources/app-update.yml'
     $baselinePolicy = Join-Path $application 'resources/app-update.yml'
-    if (Test-Path -LiteralPath $baselinePolicy) {
-        if ((Get-FileHash -LiteralPath $candidatePolicy -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $baselinePolicy -Algorithm SHA256).Hash) { throw 'The baseline changed the exact candidate publisher policy.' }
-    }
-    else { [IO.File]::Copy($candidatePolicy, $baselinePolicy, $false) }
+    if ((Get-FileHash -LiteralPath $candidatePolicy -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $baselinePolicy -Algorithm SHA256).Hash) { throw 'The baseline changed the exact candidate publisher policy.' }
     $launcher = Join-Path $OutputRoot 'launcher'
     & (Join-Path $PSScriptRoot 'Build-PortableLauncher.ps1') -OutputRoot $launcher -Version $Version -IconPath (Join-Path $frontend 'app.ico')
     $packages = Join-Path $OutputRoot 'package'

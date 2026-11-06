@@ -23,7 +23,7 @@ import {
 const REPOSITORY_API = 'https://api.github.com/repos/bezoro/ahk-manager';
 const METADATA_LIMIT = 2 * 1024 * 1024;
 const MANIFEST_LIMIT = 64 * 1024;
-const INSTALLER_LIMIT = 1024 * 1024 * 1024;
+const ARCHIVE_LIMIT = 1024 * 1024 * 1024;
 const ASSET_HOSTS = new Set([
   'release-assets.githubusercontent.com',
   'objects.githubusercontent.com',
@@ -39,7 +39,7 @@ export interface RemoteUpdateRelease {
   sha256: string;
   sha512: string;
   bytes: number;
-  installerName: string;
+  archiveName: string;
   metadataOnly?: boolean;
   deployment?: UpdateDeployment;
   manifestText?: string;
@@ -84,7 +84,7 @@ interface Candidate {
   target: string;
   notes: string;
   manifest: ReleaseAsset;
-  installer: ReleaseAsset;
+  archive: ReleaseAsset;
   deployment: UpdateDeployment;
   signature: ReleaseAsset | null;
 }
@@ -103,14 +103,14 @@ function candidate(
     return null;
   if (!Array.isArray(value.assets) || value.assets.length > 100) throw invalidManifest();
   const manifests = value.assets.filter(
-    (asset) => object(asset) && asset.name === releaseManifestName(deployment),
+    (asset) => object(asset) && asset.name === releaseManifestName(),
   );
-  if (!manifests.length) return null; // Releases preceding update protocol 1 stay outside this channel.
-  const installerName = releasePackageName(version, deployment);
-  const installers = value.assets.filter((asset) => object(asset) && asset.name === installerName);
+  if (!manifests.length) return null; // Releases without the portable manifest are outside the portable channel.
+  const archiveName = releasePackageName(version);
+  const archives = value.assets.filter((asset) => object(asset) && asset.name === archiveName);
   if (
     manifests.length !== 1 ||
-    installers.length !== 1 ||
+    archives.length !== 1 ||
     !positiveId(value.id) ||
     !isoDate(value.published_at) ||
     typeof value.target_commitish !== 'string' ||
@@ -131,12 +131,9 @@ function candidate(
       throw invalidManifest();
     return { id: input.id, name: input.name, size: input.size };
   };
-  const signatures =
-    deployment === 'portable'
-      ? value.assets.filter(
-          (entry) => object(entry) && entry.name === releaseManifestName(deployment) + '.p7s',
-        )
-      : [];
+  const signatures = value.assets.filter(
+    (entry) => object(entry) && entry.name === releaseManifestName() + '.p7s',
+  );
   if (signatures.length > 1) throw invalidManifest();
   return {
     id: value.id,
@@ -145,7 +142,7 @@ function candidate(
     target: value.target_commitish,
     notes: typeof value.body === 'string' ? value.body.slice(0, 8000).replaceAll('\0', '') : '',
     manifest: asset(manifests[0], MANIFEST_LIMIT),
-    installer: asset(installers[0], INSTALLER_LIMIT),
+    archive: asset(archives[0], ARCHIVE_LIMIT),
     deployment,
     signature: signatures[0] ? asset(signatures[0], MANIFEST_LIMIT) : null,
   };
@@ -158,18 +155,18 @@ function releaseFromMetadata(release: Candidate): RemoteUpdateRelease {
     publishedAt: release.publishedAt,
     notes: release.notes,
     commit: exactCommit(release.target) ? release.target : '',
-    assetId: release.installer.id,
+    assetId: release.archive.id,
     sha256: '',
     sha512: '',
-    bytes: release.installer.size,
-    installerName: release.installer.name,
+    bytes: release.archive.size,
+    archiveName: release.archive.name,
     metadataOnly: true,
-    ...(release.deployment === 'portable' ? { deployment: 'portable' as const } : {}),
+    deployment: 'portable',
   };
 }
 
 function releaseFromManifest(value: unknown, release: Candidate): RemoteUpdateRelease {
-  const packageKey = release.deployment === 'portable' ? 'archive' : 'installer';
+  const packageKey = 'archive';
   if (
     !object(value) ||
     !exactKeys(value, [
@@ -182,7 +179,7 @@ function releaseFromManifest(value: unknown, release: Candidate): RemoteUpdateRe
       packageKey,
     ]) ||
     value.schemaVersion !== 1 ||
-    value.updateProtocol !== packageProtocol(release.deployment) ||
+    value.updateProtocol !== packageProtocol() ||
     value.version !== release.version ||
     !exactCommit(value.commit) ||
     (release.target !== value.commit &&
@@ -193,37 +190,33 @@ function releaseFromManifest(value: unknown, release: Candidate): RemoteUpdateRe
     value.notes.includes('\0')
   )
     throw invalidManifest();
-  const installer = value[packageKey];
+  const archive = value[packageKey];
   if (
-    !object(installer) ||
-    !exactKeys(installer, ['name', 'sha256', 'sha512', 'bytes']) ||
-    installer.name !== release.installer.name ||
-    installer.bytes !== release.installer.size ||
-    typeof installer.sha256 !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(installer.sha256) ||
-    typeof installer.sha512 !== 'string' ||
-    !/^[A-Za-z0-9+/]{86}==$/.test(installer.sha512)
+    !object(archive) ||
+    !exactKeys(archive, ['name', 'sha256', 'sha512', 'bytes']) ||
+    archive.name !== release.archive.name ||
+    archive.bytes !== release.archive.size ||
+    typeof archive.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(archive.sha256) ||
+    typeof archive.sha512 !== 'string' ||
+    !/^[A-Za-z0-9+/]{86}==$/.test(archive.sha512)
   )
     throw invalidManifest();
-  const hash = Buffer.from(installer.sha512, 'base64');
-  if (hash.length !== 64 || hash.toString('base64') !== installer.sha512) throw invalidManifest();
+  const hash = Buffer.from(archive.sha512, 'base64');
+  if (hash.length !== 64 || hash.toString('base64') !== archive.sha512) throw invalidManifest();
   return {
     id: `github:${release.id}`,
     version: release.version,
     publishedAt: release.publishedAt,
     notes: value.notes,
     commit: value.commit,
-    assetId: release.installer.id,
-    sha256: installer.sha256,
-    sha512: installer.sha512,
-    bytes: release.installer.size,
-    installerName: release.installer.name,
-    ...(release.deployment === 'portable'
-      ? {
-          deployment: 'portable' as const,
-          ...(release.signature ? { signatureAssetId: release.signature.id } : {}),
-        }
-      : {}),
+    assetId: release.archive.id,
+    sha256: archive.sha256,
+    sha512: archive.sha512,
+    bytes: release.archive.size,
+    archiveName: release.archive.name,
+    deployment: 'portable',
+    ...(release.signature ? { signatureAssetId: release.signature.id } : {}),
   };
 }
 
@@ -235,7 +228,7 @@ export class GitHubUpdateClient {
   private generation = 0;
   constructor(
     private readonly fetcher: typeof fetch = globalThis.fetch,
-    readonly deployment: UpdateDeployment = 'installed',
+    readonly deployment: UpdateDeployment = 'portable',
   ) {
     if (!validUpdateDeployment(deployment)) throw new Error('The update deployment is invalid.');
   }
@@ -363,7 +356,7 @@ export class GitHubUpdateClient {
   }
 
   private key(item: Candidate): string {
-    return `${item.id}:${item.manifest.id}:${item.installer.id}:${item.signature?.id ?? 0}`;
+    return `${item.id}:${item.manifest.id}:${item.archive.id}:${item.signature?.id ?? 0}`;
   }
 
   private cached(item: Candidate): RemoteUpdateRelease | undefined {
@@ -371,8 +364,8 @@ export class GitHubUpdateClient {
     if (
       release &&
       (release.version !== item.version ||
-        release.bytes !== item.installer.size ||
-        release.installerName !== item.installer.name ||
+        release.bytes !== item.archive.size ||
+        release.archiveName !== item.archive.name ||
         (item.target !== release.commit &&
           (isTestUpdateVersion(item.version) || item.target !== 'main')))
     )
@@ -401,10 +394,8 @@ export class GitHubUpdateClient {
       ),
       item,
     );
-    if (item.deployment === 'portable') {
-      if (!manifestText) throw invalidManifest();
-      release.manifestText = manifestText;
-    }
+    if (!manifestText) throw invalidManifest();
+    release.manifestText = manifestText;
     this.manifests.set(this.key(item), release);
     if (this.manifests.size > 600) this.manifests.delete(this.manifests.keys().next().value!);
     return release;
@@ -511,8 +502,7 @@ export class GitHubUpdateClient {
       let text: string;
       try {
         const raw = Buffer.concat(parts);
-        if (this.deployment === 'portable' && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf)
-          throw invalidManifest();
+        if (raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf) throw invalidManifest();
         text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
       } catch {
         throw invalidManifest();
