@@ -1,4 +1,4 @@
-import { array, bool, nullable, oneOf, shape, text } from './validation.js';
+import { array, bool, guid, nullable, oneOf, shape, text } from './validation.js';
 
 const finiteProgress = (value: unknown): boolean =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
@@ -10,6 +10,8 @@ export const updateState = shape({
   lastCheckedAt: nullable(text(64)),
   error: nullable(text(4000)),
   progress: nullable(finiteProgress),
+  downloadId: nullable(guid),
+  downloadCancellation: nullable(oneOf('canceling', 'canceled')),
   releases: array(
     shape({
       id: text(100),
@@ -24,3 +26,5 @@ export const updateState = shape({
     1000,
   ),
 });
+
+export const cancelUpdateDownloadResult = oneOf('accepted', 'unavailable');

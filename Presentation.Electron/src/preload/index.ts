@@ -24,7 +24,7 @@ import {
   requireValid,
   type Validator,
 } from '../shared/validation.js';
-import { updateState } from '../shared/update-validation.js';
+import { cancelUpdateDownloadResult, updateState } from '../shared/update-validation.js';
 import { storageChangeResult, storageState } from '../shared/storage-validation.js';
 import { startupRepairPreview } from '../shared/startup-repair-validation.js';
 
@@ -119,6 +119,7 @@ const api: AhkManagerApi = {
   getUpdateState: () => checked('getUpdateState', {}, updateState),
   checkUpdates: () => checked('checkUpdates', {}, updateState),
   installUpdate: (id) => checked('installUpdate', { id }, updateState),
+  cancelUpdateDownload: (id) => checked('cancelUpdateDownload', { id }, cancelUpdateDownloadResult),
   setUpdateChannel: (channel) => checked('setUpdateChannel', { channel }, updateState),
   onUpdates: (listener) => subscribe('manager:updates', listener, updateState),
   requestAdministration: () => checked('requestAdministration', {}, operationResult),

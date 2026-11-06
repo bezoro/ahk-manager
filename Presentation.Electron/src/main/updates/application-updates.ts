@@ -54,14 +54,15 @@ export async function createApplicationUpdates(
   const client = new GitHubUpdateClient(fetcher, deployment);
   const download: UpdateBoundary['download'] =
     deployment === 'portable'
-      ? (release, progress) =>
+      ? (release, progress, signal) =>
           downloadPortableRelease(release, progress, {
             store,
             fetcher,
             verifyManifest: verifyPortableManifestPolicy,
+            signal,
           })
       : downloadRelease;
-  const preserveCurrent: UpdateBoundary['preserveCurrent'] = async (progress) => {
+  const preserveCurrent: UpdateBoundary['preserveCurrent'] = async (transfer) => {
     const current = (await store.cached()).find((item) => item.version === app.getVersion());
     if (current) {
       try {
@@ -80,7 +81,7 @@ export async function createApplicationUpdates(
     const release = await client.resolveVersion(app.getVersion());
     if (options.currentCommit && release.commit !== options.currentCommit)
       throw new Error('The published portable package does not match this running build.');
-    const source = await download(release, progress);
+    const source = await transfer(release);
     const saved = await store.cache(release.version, source, release.sha256, release.bytes);
     await store.verify(saved);
     await verifyCachedPortablePackageSignature(saved.installerPath);

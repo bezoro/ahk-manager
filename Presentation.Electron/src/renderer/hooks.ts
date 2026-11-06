@@ -75,7 +75,10 @@ export function useNarrow(): boolean {
   return narrow;
 }
 
-export function useUpdates(): { state: UpdateState; accept(value: UpdateState): void } {
+export function useUpdates(): {
+  state: UpdateState;
+  accept(value: UpdateState, before: UpdateState): void;
+} {
   const [state, setState] = React.useState<UpdateState>(emptyUpdateState);
   React.useEffect(() => {
     let alive = true,
@@ -102,5 +105,8 @@ export function useUpdates(): { state: UpdateState; accept(value: UpdateState): 
       off();
     };
   }, []);
-  return { state, accept: setState };
+  return {
+    state,
+    accept: (value, before) => setState((current) => (current === before ? value : current)),
+  };
 }

@@ -89,6 +89,7 @@ function fixture() {
       snapshot: updateState,
       check: async () => updateState,
       install: async () => updateState,
+      cancelDownload: () => 'unavailable',
       setChannel: async () => updateState,
     },
     preflight: new AdministrationPreflight(),
@@ -539,6 +540,42 @@ test('channel changes cannot bypass a pending application transition', async () 
     await assert.rejects(invoke('setUpdateChannel', { channel: 'test' }));
     assert.equal(requests, 0);
   }
+});
+
+test('canceling a transfer requires an authenticated document, exact GUID and idle request policy', async () => {
+  const f = fixture();
+  const id = '42eca1f3-8051-4e89-9fd6-3f0ce4f88629';
+  const requested: string[] = [];
+  f.context.updates.cancelDownload = (value) => {
+    requested.push(value);
+    return value === id ? 'accepted' : 'unavailable';
+  };
+  registerHandlers(f.context);
+  const invoke = await f.connect();
+  await assert.rejects(
+    f.ipc.invoke('manager:cancelUpdateDownload', f.event, {
+      token: 'forged',
+      body: { id },
+    }),
+    /Stale IPC document/,
+  );
+  for (const body of [{}, { id: null }, { id: 'github:42' }, { id, force: true }])
+    await assert.rejects(invoke('cancelUpdateDownload', body), /Invalid/);
+  for (const phase of [
+    'quitting',
+    'updateApplying',
+    'adoptionPending',
+    'administrationPending',
+  ] as const) {
+    f.setPolicy({ [phase]: true });
+    await assert.rejects(invoke('cancelUpdateDownload', { id }));
+    f.setPolicy({ [phase]: false });
+  }
+  assert.deepEqual(requested, []);
+  const stale = '39713d17-b1bc-42dc-a1f5-95a51a91d966';
+  assert.equal(await invoke('cancelUpdateDownload', { id: stale }), 'unavailable');
+  assert.equal(await invoke('cancelUpdateDownload', { id }), 'accepted');
+  assert.deepEqual(requested, [stale, id]);
 });
 
 test('the public updater does not register a GitHub credential endpoint', async () => {

@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory = $true)][string]$CandidateManifest,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
-    [ValidateSet('default', 'custom-data', 'foreign-root')][string]$Scenario = 'default',
+    [ValidateSet('default', 'custom-data', 'foreign-root', 'download-cancel')][string]$Scenario = 'default',
     [ValidateRange(60, 900)][int]$TimeoutSeconds = 300
 )
 $ErrorActionPreference = 'Stop'
@@ -49,6 +49,7 @@ $retiredDataHashes = @{}
 $signingFixture = $null
 $signingFixtureCleanup = 'NotCreated'
 $shortcutSharingProbe = $null
+$downloadProxy = $null
 
 function Check([bool]$Condition, [string]$Name) {
     $checks.Add([ordered]@{ name = $Name; passed = $Condition })
@@ -353,9 +354,11 @@ function Seed-Package($Release, [string]$Archive, [string]$Manifest, [string]$Si
     [IO.Directory]::CreateDirectory($directory) | Out-Null
     [IO.File]::Copy($Archive, (Join-Path $directory 'archive.zip'), $false)
     [IO.File]::Copy($Manifest, (Join-Path $directory 'release.json'), $false)
-    $signatureFile = Get-Item -LiteralPath $Signature
-    if ($signatureFile -isnot [IO.FileInfo] -or $signatureFile.Length -le 0 -or $signatureFile.Length -gt 65536) { throw 'The isolated portable manifest signature is absent or oversized.' }
-    [IO.File]::Copy($Signature, (Join-Path $directory 'release.json.p7s'), $false)
+    if ($Signature) {
+        $signatureFile = Get-Item -LiteralPath $Signature
+        if ($signatureFile -isnot [IO.FileInfo] -or $signatureFile.Length -le 0 -or $signatureFile.Length -gt 65536) { throw 'The isolated portable manifest signature is absent or oversized.' }
+        [IO.File]::Copy($Signature, (Join-Path $directory 'release.json.p7s'), $false)
+    }
     $receipt = [ordered]@{ schemaVersion = 1; updateProtocol = 2; version = $Release.Version; sha256 = $Release.Sha256; bytes = $Release.ArchiveBytes }
     [IO.File]::WriteAllText((Join-Path $directory 'receipt.json'), ($receipt | ConvertTo-Json -Compress), $utf8)
 }
@@ -476,20 +479,117 @@ function Move-PortableData {
     Close-PortableSession $session
     $script:session = $null
 }
-function Run-Update([string]$Phase, $Target) {
+function Read-PinnedPortableTarget {
+    $api = 'https://api.github.com/repos/bezoro/ahk-manager/releases'
+    $sha = 'bee6fedaf2420bb5e63c34a83063b08b9f8f8b4f2562f0b5cacdafc7c732ed5c'
+    $metadata = Invoke-RestMethod -Uri "$api/tags/v1.6.2" -TimeoutSec 20 -MaximumRedirection 0
+    $archive = @($metadata.assets | Where-Object name -CEQ 'AHK-Manager-1.6.2-Portable-x64.zip')
+    $manifest = @($metadata.assets | Where-Object name -CEQ 'ahk-manager-portable-release.json')
+    Check ($metadata.tag_name -ceq 'v1.6.2' -and -not $metadata.draft -and -not $metadata.prerelease -and
+        $archive.Count -eq 1 -and $archive[0].id -eq 705660061 -and $archive[0].size -eq 234252955 -and $archive[0].digest -ceq "sha256:$sha" -and
+        $manifest.Count -eq 1 -and $manifest[0].id -eq 705660452 -and $manifest[0].size -eq 873 -and
+        -not @($metadata.assets | Where-Object name -IEQ 'ahk-manager-portable-release.json.p7s').Count) 'published stable metadata binds the exact unsigned portable fixture assets'
+    $path = Join-Path $OutputRoot 'cancel-target-manifest.json'
+    Invoke-WebRequest -Uri "$api/assets/705660452" -Headers @{ Accept = 'application/octet-stream'; 'X-GitHub-Api-Version' = '2022-11-28' } -TimeoutSec 20 -MaximumRedirection 3 -OutFile $path
+    Check ((Get-Item -LiteralPath $path).Length -eq 873 -and (Hash $path) -ceq '24c4b58edb4e49413f1e2bcad24c5ad2e48d7a1cb7b927d72937138164044fa0') 'the exact public manifest matches the pinned bytes'
+    $target = ConvertFrom-PortableReleaseJson ([IO.File]::ReadAllText($path, $utf8))
+    Check ($target.Version -ceq '1.6.2' -and $target.ArchiveName -ceq $archive[0].name -and $target.ArchiveBytes -eq $archive[0].size -and $target.Sha256 -ceq $sha) 'the portable manifest and GitHub asset metadata agree'
+    Write-Json 'cancel-target-identity.json' @{ assetId = $archive[0].id; manifestId = $manifest[0].id; release = $target }
+    return $target
+}
+
+function Invoke-PortableButton([string]$Label, [string]$Version = '') {
+    $labelJson = ConvertTo-Json -InputObject $Label -Compress
+    $versionJson = ConvertTo-Json -InputObject $Version -Compress
+    return Invoke-PortableEvaluation $session @"
+(() => {
+  const version = $versionJson;
+  const scope = version ? [...document.querySelectorAll('.update-release')].find(row => row.querySelector('h3')?.textContent.trim() === version) : document;
+  const button = [...(scope?.querySelectorAll('button') ?? [])].find(item => item.textContent.trim() === $labelJson);
+  if (!button || button.disabled || !button.getClientRects().length) return false;
+  button.click();
+  return true;
+})()
+"@
+}
+
+function Save-PortableScreenshot([string]$Name) {
+    $capture = Invoke-PortableCdp $session 'Page.captureScreenshot' @{ format = 'png'; fromSurface = $true }
+    [IO.File]::WriteAllBytes((Join-Path $OutputRoot $Name), [Convert]::FromBase64String($capture.data))
+}
+
+function Confirm-CanceledDownload($Target, $Choice, [string]$Action) {
+    $cache = Join-Path $updatesRoot "installers/$($Target.Version)"
+    $downloads = Join-Path $updatesRoot 'downloads'
+    $candidateCache = Join-Path $updatesRoot "installers/$currentVersion"
+    $images = @('Bezoro.AhkManager.exe', 'App/Bezoro.AhkManager.exe', 'App/resources/app.asar')
+    $imageHashes = @{}
+    foreach ($image in $images) { $imageHashes[$image] = Hash (Join-Path $portableRoot $image) }
+    Check (-not (Test-Path -LiteralPath $cache) -and -not (Test-Path -LiteralPath $downloads)) 'the published target has no pre-existing cache or staging'
+    Check (@($downloadProxy.Tunnels | Where-Object { $_.Host -eq 'api.github.com' -and $_.DownstreamBytes -gt 0 }).Count -gt 0) 'the exact packaged updater completed release discovery through its loopback tunnel'
+    $downloadProxy.Hold = $true
+    Check (Invoke-PortableButton $Action $Target.Version) 'the real Updates history action starts the published target download'
+    $confirmed = $false
+    $held = @()
+    $partial = @()
+    $state = $null
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        if ($session.Process.HasExited) { break }
+        if (-not $confirmed) { $confirmed = [AhkManager.TestSupport.InstalledUpdaterUi]::Confirm($session.Process.Id, $session.Image, $session.Started, $Target.Version) }
+        $state = Invoke-PortableEvaluation $session 'window.ahkManager.getUpdateState()'
+        $held = @($downloadProxy.Tunnels | Where-Object { $_.HeldAtUtc -and -not $_.ClientClosedAtUtc })
+        $partial = @(Get-ChildItem -LiteralPath $downloads -Directory -Filter 'portable-*' -ErrorAction SilentlyContinue | ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName 'archive.zip') -ErrorAction SilentlyContinue })
+        if ($confirmed -and $held.Count -eq 1 -and $partial.Count -eq 1 -and $partial[0].Length -gt 0 -and $state.phase -ceq 'downloading' -and $state.progress -gt 0 -and $state.downloadId) { break }
+        if ($state.phase -ceq 'error') { break }
+        Start-Sleep -Milliseconds 100
+    } while ($deadline.Elapsed.TotalSeconds -lt 60)
+    Write-Json 'cancel-held.json' @{ consent = $confirmed; state = $state; tunnels = $downloadProxy.Tunnels; partial = @($partial | Select-Object FullName, Length) }
+    Check ($confirmed -and $held.Count -eq 1 -and $partial.Count -eq 1 -and $partial[0].Length -gt 0 -and $partial[0].Length -lt $Target.ArchiveBytes -and $state.phase -ceq 'downloading' -and $state.progress -gt 0 -and $state.downloadId) 'native consent leads to one held TLS tunnel, a real partial ZIP and positive progress'
+    Save-PortableScreenshot 'cancel-in-progress.png'
+    $staging = $partial[0].DirectoryName
+    $tunnel = $held[0]
+    $clickedAt = [DateTimeOffset]::UtcNow
+    $deadline.Restart()
+    Check (Invoke-PortableButton 'Cancel download') 'the visible portable cancellation button is clicked'
+    do {
+        $state = Invoke-PortableEvaluation $session 'window.ahkManager.getUpdateState()'
+        $terminal = Invoke-PortableEvaluation $session 'document.querySelector(".updates-page")?.innerText.includes("Download canceled.") === true'
+        $discarded = -not (Test-Path -LiteralPath $staging)
+        if ($terminal -and $discarded -and $tunnel.ClientClosedAtUtc) { break }
+        Start-Sleep -Milliseconds 50
+    } while ($deadline.Elapsed.TotalSeconds -lt 10)
+    Write-Json 'cancel-terminal.json' @{ clickedAtUtc = $clickedAt.ToString('O'); elapsedMilliseconds = $deadline.ElapsedMilliseconds; terminal = $terminal; discarded = $discarded; state = $state; tunnel = $tunnel }
+    Check ($deadline.Elapsed.TotalSeconds -le 10 -and $terminal -and $discarded -and $tunnel.ClientClosedAtUtc -and [DateTimeOffset]$tunnel.ClientClosedAtUtc -ge $clickedAt -and
+        $state.phase -ceq 'idle' -and $state.downloadCancellation -ceq 'canceled' -and $null -eq $state.progress -and $null -eq $state.downloadId -and
+        @($state.releases | Where-Object { $_.id -ceq $Choice.id -and $_.canInstall -and -not $_.cached }).Count -eq 1) 'browser closure, exact staging removal and reusable canceled state are observed within ten seconds'
+    Save-PortableScreenshot 'cancel-complete.png'
+    Check (-not (Test-Path -LiteralPath $cache) -and -not @(Get-ChildItem -LiteralPath (Join-Path $updatesRoot 'operations') -Directory -ErrorAction SilentlyContinue).Count) 'cancellation publishes no target cache or native operation'
+    Wait-Ready $session $currentVersion
+    foreach ($image in $images) { Check ((Hash (Join-Path $portableRoot $image)) -ceq $imageHashes[$image]) "cancellation preserves $image" }
+    Check ((Hash (Join-Path $candidateCache 'archive.zip')) -ceq $candidate.Sha256 -and (Hash (Join-Path $candidateCache 'release.json')) -ceq $candidate.ManifestSha256 -and
+        (Hash $stateSentinel) -ceq $stateHash -and (Hash $scriptFile) -ceq $scriptHash -and (Hash (Join-Path $portableRoot 'portable.json')) -ceq $markerHash -and
+        $state.channel -ceq 'stable') 'cancellation preserves the verified rollback package, profile, script, update channel and portable configuration'
+    $downloadProxy.Hold = $false
+    return $tunnel.Id
+}
+
+function Run-Update([string]$Phase, $Target, [switch]$RemoteCancel) {
     $phaseRoot = Join-Path $OutputRoot $Phase
     [IO.Directory]::CreateDirectory($phaseRoot) | Out-Null
-    $script:session = Start-PortableSession -Root $portableRoot -EvidenceRoot $phaseRoot
+    $proxyPort = if ($RemoteCancel) { $downloadProxy.Port } else { 0 }
+    $script:session = Start-PortableSession -Root $portableRoot -EvidenceRoot $phaseRoot -ProxyPort $proxyPort
     Wait-Ready $session $currentVersion
+    if ($RemoteCancel) { Check (Invoke-PortableButton 'Updates') 'the real portable Updates screen opens' }
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     do {
         $update = Invoke-PortableEvaluation $session 'window.ahkManager.getUpdateState()'
-        $choice = @($update.releases | Where-Object { $_.version -ceq $Target.Version -and $_.cached -and $_.canInstall }) | Select-Object -First 1
+        $choice = @($update.releases | Where-Object { $_.version -ceq $Target.Version -and $_.cached -eq (-not $RemoteCancel) -and $_.canInstall }) | Select-Object -First 1
         if ($choice -and $update.phase -notin @('checking', 'downloading', 'installing')) { break }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     Write-Json ("$Phase-before.json") $update
-    Check ($null -ne $choice) 'the actual portable updater exposes the exact verified cached target'
+    Check ($null -ne $choice -and (-not $RemoteCancel -or $update.phase -ceq 'idle')) 'the actual portable updater exposes the exact target in the expected cache state'
     Invoke-PortableCdp $session 'Page.bringToFront' | Out-Null
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
@@ -501,8 +601,16 @@ function Run-Update([string]$Phase, $Target) {
     Check ($ready.visible -and $ready.focused -and $ready.mounted -and -not $ready.dialog) 'the real portable renderer is visible, focused and ready for update consent'
     Invoke-PortableEvaluation $session 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))' | Out-Null
     $before = @(Get-ChildItem -LiteralPath (Join-Path $updatesRoot 'operations') -Directory -ErrorAction SilentlyContinue | ForEach-Object Name)
-    $id = ConvertTo-Json -InputObject $choice.id -Compress
-    Invoke-PortableEvaluation $session ("globalThis.__portableUpdate = { pending: true }; void window.ahkManager.installUpdate($id).then(value => globalThis.__portableUpdate = {pending:false,value}, error => globalThis.__portableUpdate = {pending:false,error:String(error)}); true") | Out-Null
+    if ($RemoteCancel) {
+        $action = 'Return to this version'
+        $heldId = Confirm-CanceledDownload $Target $choice $action
+        $retryBaseline = @{}
+        foreach ($tunnel in $downloadProxy.Tunnels) { $retryBaseline[$tunnel.Id] = $tunnel.DownstreamBytes }
+        Check (Invoke-PortableButton $action $Target.Version) 'the same real history action starts a fresh retry'
+    } else {
+        $id = ConvertTo-Json -InputObject $choice.id -Compress
+        Invoke-PortableEvaluation $session ("globalThis.__portableUpdate = { pending: true }; void window.ahkManager.installUpdate($id).then(value => globalThis.__portableUpdate = {pending:false,value}, error => globalThis.__portableUpdate = {pending:false,error:String(error)}); true") | Out-Null
+    }
     $script:helperInFlight = $true
     $confirmed = $false
     $result = $null
@@ -510,9 +618,14 @@ function Run-Update([string]$Phase, $Target) {
     do {
         if ($session.Process.HasExited) { break }
         if (-not $confirmed -and [AhkManager.TestSupport.InstalledUpdaterUi]::Confirm($session.Process.Id, $session.Image, $session.Started, $Target.Version)) { $confirmed = $true; Trace "$Phase native consent confirmed for $($Target.Version)." }
-        try { $result = Invoke-PortableEvaluation $session 'globalThis.__portableUpdate' }
+        try {
+            if ($RemoteCancel) {
+                $result = Invoke-PortableEvaluation $session 'window.ahkManager.getUpdateState()'
+                if ($result.phase -ceq 'error') { throw "The portable retry failed: $($result.error)" }
+            } else { $result = Invoke-PortableEvaluation $session 'globalThis.__portableUpdate' }
+        }
         catch { if ($confirmed -and $session.Socket.State -ne [Net.WebSockets.WebSocketState]::Open -and $session.Process.WaitForExit(30000)) { break }; throw }
-        if ($result -and -not $result.pending) { break }
+        if (-not $RemoteCancel -and $result -and -not $result.pending) { break }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     Check $confirmed 'the actual portable update received exact-version native consent'
@@ -534,6 +647,18 @@ function Run-Update([string]$Phase, $Target) {
     Save-OperationEvidence $Phase $operation
     Check ($outcome.operationId -eq $plan.operationId -and $outcome.outcome -ceq 'Installed' -and $outcome.version -ceq $Target.Version) 'the real native portable transaction installs the exact requested package'
     $script:helperInFlight = $false
+    if ($RemoteCancel) {
+        $retryTunnels = @($downloadProxy.Tunnels | Where-Object { $_.Id -ne $heldId -and $_.Host -ne 'api.github.com' -and ($_.DownstreamBytes - [long]$retryBaseline[$_.Id]) -ge $Target.ArchiveBytes })
+        Check ($retryTunnels.Count -eq 1 -and -not $retryTunnels[0].HeldAtUtc) 'one distinct unthrottled TLS tunnel carries the full retried package'
+        $cache = Join-Path $updatesRoot "installers/$($Target.Version)"
+        $archive = Join-Path $cache 'archive.zip'
+        $receipt = Get-Content -LiteralPath (Join-Path $cache 'receipt.json') -Raw | ConvertFrom-Json
+        Write-Json 'cancel-retry-receipt.json' $receipt
+        Check ($receipt.schemaVersion -eq 1 -and $receipt.updateProtocol -eq 2 -and $receipt.version -ceq $Target.Version -and $receipt.bytes -eq $Target.ArchiveBytes -and $receipt.sha256 -ceq $Target.Sha256 -and
+            (Hash $archive) -ceq $Target.Sha256 -and
+            [Convert]::ToBase64String([Convert]::FromHexString((Get-FileHash -LiteralPath $archive -Algorithm SHA512).Hash)) -ceq $Target.Sha512 -and
+            (Hash (Join-Path $cache 'release.json')) -ceq (Hash (Join-Path $OutputRoot 'cancel-target-manifest.json'))) 'the retried cache, receipt, exact manifest and both archive digests bind the package sent to native apply'
+    }
     Check ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $portableRoot 'App/Bezoro.AhkManager.exe')).FileVersion -ceq $Target.Version -and [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $portableRoot 'Bezoro.AhkManager.exe')).FileVersion -ceq $Target.Version) 'both root launcher and application retain the exact requested release resources'
     Check (No-Registration) 'portable initialization and updates create no installer or uninstall registration'
     Check ((Hash (Join-Path $portableRoot 'portable.json')) -ceq $markerHash -and (Hash $stateSentinel) -ceq $stateHash -and (Hash $scriptFile) -ceq $scriptHash) 'portable configuration, user Data and external script bytes are preserved'
@@ -634,7 +759,8 @@ try {
     Set-Acl -LiteralPath $parent -AclObject $acl
     $parentAcl = (Get-Acl -LiteralPath $parent).Sddl
     $portableRoot = Join-Path $parent 'Portable Manager'
-    [IO.Compression.ZipFile]::ExtractToDirectory($BaselineArchive, $portableRoot)
+    $clientArchive = if ($Scenario -eq 'download-cancel') { $CandidateArchive } else { $BaselineArchive }
+    [IO.Compression.ZipFile]::ExtractToDirectory($clientArchive, $portableRoot)
     $publisherPolicyPath = Join-Path (Split-Path -Parent $BaselineManifest) 'publisher-policy.json'
     $policyFile = Get-Item -LiteralPath $publisherPolicyPath
     if ($policyFile -isnot [IO.FileInfo] -or $policyFile.Length -le 0 -or $policyFile.Length -gt 65536) { throw 'The test-only application publisher policy is absent or oversized.' }
@@ -658,10 +784,23 @@ try {
     }
     finally { $candidateZip.Dispose() }
     Check ($policy.sourceCommit -ceq $SourceCommit -and $policy.candidatePolicySha256 -ceq $policyHash) 'the exact candidate archive publisher policy matches the source-bound production parser metadata'
-    $signingFixture = New-PortableSigningFixture -ApplicationRoot (Join-Path $portableRoot 'App') -CandidateManifestPath $CandidateManifest -BaselineManifestPath $BaselineManifest -PublisherPolicyPath $publisherPolicyPath -OutputRoot (Join-Path $OutputRoot 'signing-fixture')
-    $signingFixtureCleanup = 'Pending'
-    Write-Json 'portable-signing-proof.json' $signingFixture.Proof
-    Check ($null -ne $signingFixture -and (Test-Path -LiteralPath $signingFixture.CandidateSignaturePath -PathType Leaf) -and (Test-Path -LiteralPath $signingFixture.BaselineSignaturePath -PathType Leaf)) 'both exact portable manifests have authenticated fixture signatures before any cache entry is seeded'
+    if ($Scenario -eq 'download-cancel') {
+        Check ($policy.schemaVersion -eq 1 -and $policy.names -is [array] -and $policy.names.Count -eq 0 -and
+            (Hash (Join-Path $portableRoot 'App/resources/app-update.yml')) -ceq $policyHash) 'the exact extracted candidate uses the empty packaged publisher policy'
+        $target = Read-PinnedPortableTarget
+        $clientVersion = $candidate.Version
+        Check ([version]($clientVersion.Split('-')[0]) -gt [version]$target.Version) 'the candidate has a distinct version newer than the pinned history target'
+        Write-Json 'cancel-client-identity.json' @{ sourceCommit = $SourceCommit; version = $clientVersion; archiveSha256 = $candidate.Sha256; manifestSha256 = $candidate.ManifestSha256; publisherPolicySha256 = $policyHash; publisherNames = $policy.names }
+        Add-Type -Path (Join-Path $PSScriptRoot 'test-support/PortableDownloadProxy.cs')
+        $downloadProxy = [AhkManager.TestSupport.PortableDownloadProxy]::new()
+        Write-Json 'cancel-fixture-flags.json' @{ flags = @("--proxy-server=http://127.0.0.1:$($downloadProxy.Port)", '--disable-http2'); holdAfterBytes = [AhkManager.TestSupport.PortableDownloadProxy]::HoldAfterBytes }
+    } else {
+        $clientVersion = $baseline.Version
+        $signingFixture = New-PortableSigningFixture -ApplicationRoot (Join-Path $portableRoot 'App') -CandidateManifestPath $CandidateManifest -BaselineManifestPath $BaselineManifest -PublisherPolicyPath $publisherPolicyPath -OutputRoot (Join-Path $OutputRoot 'signing-fixture')
+        $signingFixtureCleanup = 'Pending'
+        Write-Json 'portable-signing-proof.json' $signingFixture.Proof
+        Check ($null -ne $signingFixture -and (Test-Path -LiteralPath $signingFixture.CandidateSignaturePath -PathType Leaf) -and (Test-Path -LiteralPath $signingFixture.BaselineSignaturePath -PathType Leaf)) 'both exact portable manifests have authenticated fixture signatures before any cache entry is seeded'
+    }
     $dataRoot = Join-Path $portableRoot 'Data'
     if ($Scenario -eq 'custom-data') {
         $customParent = Join-Path $OutputRoot 'custom-state-parent'
@@ -743,7 +882,7 @@ try {
         foreach ($argument in @('-NoProfile', '-NonInteractive', '-Command', '[Console]::In.ReadLine() | Out-Null')) { $waiter.ArgumentList.Add($argument) }
         $inert = [Diagnostics.Process]::Start($waiter)
         $session = Start-PortableSession -Root $portableRoot -EvidenceRoot $OutputRoot -ViaLauncher
-        Wait-Ready $session $baseline.Version
+        Wait-Ready $session $clientVersion
         Check-SearchShortcut 'initial'
         Capture-Preferences
         Check ((Is-Private $portableRoot) -and (Is-Private (Join-Path $portableRoot 'App')) -and (Is-Private $dataRoot)) 'first real launch secures only the dedicated portable runtime and Data folders'
@@ -758,28 +897,38 @@ try {
         $stateSentinel = Join-Path $profile 'ci-state-sentinel.txt'
         [IO.File]::WriteAllText($stateSentinel, 'Portable user state survives update and rollback.', $utf8)
         $stateHash = Hash $stateSentinel
-        Seed-Package $baseline $BaselineArchive $BaselineManifest $signingFixture.BaselineSignaturePath
-        Seed-Package $candidate $CandidateArchive $CandidateManifest $signingFixture.CandidateSignaturePath
-        [IO.File]::WriteAllText((Join-Path $updatesRoot 'update-channel.json'), '{"schemaVersion":1,"channel":"test"}', $utf8)
-        if ($Scenario -eq 'custom-data') {
-            $moveRoot = Join-Path $OutputRoot 'before-data-move'
-            [IO.Directory]::CreateDirectory($moveRoot) | Out-Null
-            $session = Start-PortableSession -Root $portableRoot -EvidenceRoot $moveRoot -ViaLauncher
-            Wait-Ready $session $baseline.Version
-            Move-PortableData
+        if ($Scenario -eq 'download-cancel') {
+            Seed-Package $candidate $CandidateArchive $CandidateManifest
+            [IO.File]::WriteAllText((Join-Path $updatesRoot 'update-channel.json'), '{"schemaVersion":1,"channel":"stable"}', $utf8)
+            $currentVersion = $clientVersion
+            $phaseStarted = [DateTime]::UtcNow
+            Run-Update 'download-cancel' $target -RemoteCancel
+            $finalVersion = $target.Version
+        } else {
+            Seed-Package $baseline $BaselineArchive $BaselineManifest $signingFixture.BaselineSignaturePath
+            Seed-Package $candidate $CandidateArchive $CandidateManifest $signingFixture.CandidateSignaturePath
+            [IO.File]::WriteAllText((Join-Path $updatesRoot 'update-channel.json'), '{"schemaVersion":1,"channel":"test"}', $utf8)
+            if ($Scenario -eq 'custom-data') {
+                $moveRoot = Join-Path $OutputRoot 'before-data-move'
+                [IO.Directory]::CreateDirectory($moveRoot) | Out-Null
+                $session = Start-PortableSession -Root $portableRoot -EvidenceRoot $moveRoot -ViaLauncher
+                Wait-Ready $session $baseline.Version
+                Move-PortableData
+            }
+            $currentVersion = $baseline.Version
+            $phaseStarted = [DateTime]::UtcNow
+            Run-Update 'update' $candidate
+            $currentVersion = $candidate.Version
+            $phaseStarted = [DateTime]::UtcNow
+            Run-Update 'rollback' $baseline
+            if ($Scenario -eq 'default') { Move-PortableRoot }
+            $finalVersion = $baseline.Version
         }
-        $currentVersion = $baseline.Version
-        $phaseStarted = [DateTime]::UtcNow
-        Run-Update 'update' $candidate
-        $currentVersion = $candidate.Version
-        $phaseStarted = [DateTime]::UtcNow
-        Run-Update 'rollback' $baseline
-        if ($Scenario -eq 'default') { Move-PortableRoot }
         $finalRoot = Join-Path $OutputRoot 'final-launch'
         [IO.Directory]::CreateDirectory($finalRoot) | Out-Null
         if ($Scenario -eq 'default') { $shortcutSharingProbe = [AhkManager.TestSupport.PortableShortcutSharingProbe]::new($searchShortcutPath, (Join-Path $dataRoot 'Logs')) }
         $session = Start-PortableSession -Root $portableRoot -EvidenceRoot $finalRoot -ViaLauncher
-        Wait-Ready $session $baseline.Version
+        Wait-Ready $session $finalVersion
         if ($shortcutSharingProbe) {
             $deadline = [DateTime]::UtcNow.AddSeconds(10)
             while (-not $shortcutSharingProbe.Observed -and -not $shortcutSharingProbe.Released -and [string]::IsNullOrEmpty($shortcutSharingProbe.Failure) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 10 }
@@ -807,6 +956,11 @@ try {
 }
 catch { $failure = $_.Exception.Message; Write-Error -ErrorAction Continue $failure }
 finally {
+    if ($downloadProxy) {
+        try { $downloadProxy.Dispose() }
+        catch { if (-not $failure) { $failure = 'The loopback CONNECT fixture did not stop: ' + $_.Exception.Message } }
+        Write-Json 'cancel-proxy-tunnels.json' $downloadProxy.Tunnels
+    }
     if ($shortcutSharingProbe) {
         try { if ($outputCreated) { Save-SharingProbeEvidence $(if ($session) { $session.Process.Id } else { 0 }) } }
         finally { $shortcutSharingProbe.Dispose(); $shortcutSharingProbe = $null }

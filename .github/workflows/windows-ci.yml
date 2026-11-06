@@ -534,7 +534,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        location: [default, custom-data, foreign-root]
+        location: [default, custom-data, foreign-root, download-cancel]
     defaults:
       run:
         shell: pwsh
@@ -557,7 +557,7 @@ jobs:
           name: portable-regression-baseline-${{ github.run_attempt }}
           path: portable-updater-baseline
 
-      - name: Exercise real portable import, update and rollback without Setup
+      - name: Exercise the selected portable updater scenario without Setup
         env:
           TEST_LOCATION: ${{ matrix.location }}
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}

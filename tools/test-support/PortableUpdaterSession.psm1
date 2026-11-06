@@ -40,7 +40,7 @@ function Invoke-PortableEvaluation {
 }
 
 function Start-PortableSession {
-    param([string]$Root, [string]$EvidenceRoot, [switch]$ViaLauncher, [switch]$ExpectStartupRefusal)
+    param([string]$Root, [string]$EvidenceRoot, [switch]$ViaLauncher, [switch]$ExpectStartupRefusal, [ValidateRange(0, 65535)][int]$ProxyPort = 0)
     $application = Join-Path $Root 'App/Bezoro.AhkManager.exe'
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Start()
@@ -54,6 +54,10 @@ function Start-PortableSession {
     $start.RedirectStandardOutput = -not $ViaLauncher
     $start.RedirectStandardError = -not $ViaLauncher
     foreach ($argument in @('--foreground', '--remote-debugging-address=127.0.0.1', "--remote-debugging-port=$port")) { $start.ArgumentList.Add($argument) }
+    if ($ProxyPort) {
+        $start.ArgumentList.Add("--proxy-server=http://127.0.0.1:$ProxyPort")
+        $start.ArgumentList.Add('--disable-http2')
+    }
     $process = [Diagnostics.Process]::Start($start)
     if ($ViaLauncher) {
         try { if (-not $process.WaitForExit(10000) -or $process.ExitCode -ne 0) { throw 'The portable root launcher did not dispatch normally.' } }
