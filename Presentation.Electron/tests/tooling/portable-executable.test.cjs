@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { NtExecutable, NtExecutableResource, Resource } = require('resedit');
+const crypto = require('node:crypto');
+const { NtExecutable, NtExecutableResource, Resource, Format } = require('resedit');
 const { verifyPortableExecutable } = require('../../scripts/verify-portable-executable.cjs');
 
 function image(
@@ -105,4 +106,37 @@ test('PE verification CLI writes fresh evidence and preserves an existing receip
   assert.equal(JSON.parse(original).requestedExecutionLevel, 'requireAdministrator');
   assert.notEqual(spawnSync(process.execPath, args, { encoding: 'utf8' }).status, 0);
   assert.deepEqual(fs.readFileSync(out), original);
+});
+
+// Inert WIN_CERTIFICATE data exercises the parser's certificate-table gate.
+// It is not a cryptographic signature and is never presented as one.
+function certificateBearing(file) {
+  const original = fs.readFileSync(file);
+  const offset = Math.ceil(original.length / 8) * 8;
+  const certificate = Buffer.alloc(16);
+  certificate.writeUInt32LE(certificate.length, 0);
+  certificate.writeUInt16LE(0x0200, 4);
+  certificate.writeUInt16LE(0x0002, 6);
+  const bytes = Buffer.concat([original, Buffer.alloc(offset - original.length), certificate]);
+  const dos = Format.ImageDosHeader.from(bytes);
+  Format.ImageNtHeaders.from(bytes, dos.newHeaderAddress).optionalHeaderDataDirectory.set(
+    Format.ImageDirectoryEntry.Certificate,
+    { virtualAddress: offset, size: certificate.length },
+  );
+  fs.writeFileSync(file, bytes);
+  return bytes;
+}
+
+test('certificate-bearing PE inspection preserves certificate bytes and enforces elevation', (t) => {
+  const root = temporary(t);
+  const file = image(root, 'certificate-bearing', '2.0.0');
+  const bytes = certificateBearing(file);
+  assert.throws(() => NtExecutable.from(bytes), /signed executable binary/);
+  const result = verifyPortableExecutable(file, '2.0.0');
+  assert.equal(result.sha256, crypto.createHash('sha256').update(bytes).digest('hex'));
+  assert.equal(result.bytes, bytes.length);
+  assert.deepEqual(fs.readFileSync(file), bytes);
+  const normal = image(root, 'certificate-normal', '2.0.0', 'asInvoker');
+  certificateBearing(normal);
+  assert.throws(() => verifyPortableExecutable(normal, '2.0.0'), /administrator access/);
 });

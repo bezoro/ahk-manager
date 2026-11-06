@@ -18,7 +18,9 @@ function verifyPortableExecutable(file, version) {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 ** 3)
     throw new Error('A bounded regular executable is required.');
   const bytes = fs.readFileSync(file);
-  const resources = NtExecutableResource.from(NtExecutable.from(bytes));
+  // Read resources from signed images too. Hash the original bytes below; this
+  // inspection neither rewrites the PE nor replaces package signature checks.
+  const resources = NtExecutableResource.from(NtExecutable.from(bytes, { ignoreCert: true }));
   const manifests = resources.entries.filter((entry) => entry.type === 24 && entry.id === 1);
   if (!manifests.length) throw new Error('The executable has no embedded application manifest.');
   for (const entry of manifests) {
