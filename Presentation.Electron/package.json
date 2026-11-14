@@ -4,7 +4,7 @@
   "version": "1.2.1",
   "description": "AutoHotkey v2 script manager for Windows 11",
   "author": "Bezoro",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "main": "dist/main/index.cjs",
   "scripts": {
