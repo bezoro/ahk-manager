@@ -148,3 +148,7 @@ Keep process/persistence rules in Core, protocol validation in Backend, native i
 When contracts change, review `Core/Models`, `Backend/Protocol.cs`, `Presentation.Electron/src/shared`, JSON contexts, and runtime validators together. Preserve existing profile, registry, and mutex identifiers. Format changes need prior-profile and invalid-data coverage.
 
 Describe the reproduction, resulting behavior, and relevant validation in the PR. Inspect harness screenshots for visual changes. CI preserves logs and artifacts on failure. [VALIDATION.md](VALIDATION.md) describes the evidence required to support a result and its limits.
+
+## License
+
+Contributions are licensed under the project's [MIT License](LICENSE). Preserve third-party copyright notices and license terms when adding or updating dependencies.

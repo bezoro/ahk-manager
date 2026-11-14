@@ -58,7 +58,10 @@ module.exports = {
     '!scripts/**',
   ],
   extraFiles: [{ from: backend, to: 'backend', filter: ['**/*'] }],
-  extraResources: [{ from: path.join(frontend, 'tray.png'), to: 'tray.png' }],
+  extraResources: [
+    { from: path.join(frontend, 'tray.png'), to: 'tray.png' },
+    { from: path.join(__dirname, '..', 'LICENSE'), to: 'AHK-MANAGER-LICENSE.txt' },
+  ],
   extraMetadata: {
     version: releaseVersion,
     updateProtocol: 2,

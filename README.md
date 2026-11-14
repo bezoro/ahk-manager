@@ -49,3 +49,9 @@ Use English for code, comments, documentation, commits, issues and pull requests
 | `tools/`                 | Build, portable distribution, publication and validation                     |
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup and commands, [ARCHITECTURE.md](ARCHITECTURE.md) for boundaries, and [SAFE-TESTS.md](SAFE-TESTS.md) for test isolation. Windows CI checks the portable product and preserves logs and interface captures. [VALIDATION.md](VALIDATION.md) describes the evidence and its limits.
+
+## License
+
+Licensed under the [MIT License](LICENSE).
+
+Third-party dependencies retain their own licenses and notices. Portable builds include the project license as `App/resources/AHK-MANAGER-LICENSE.txt`.
