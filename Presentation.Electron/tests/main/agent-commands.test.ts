@@ -302,6 +302,64 @@ test('private cancellation invalidates preparation and only a matching delivery 
   }
 });
 
+test('a late receipt cannot enable a timed-out effect or disconnect the next request', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const reader = new AgentFrameReader();
+  const frames: unknown[] = [];
+  const effects: boolean[] = [];
+  const failures: unknown[] = [];
+  const first = randomUUID();
+  const second = randomUUID();
+  const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
+  output.on('data', (data: Buffer) => reader.push(data, (value) => frames.push(value)));
+  const close = serveAgentTransport(
+    input,
+    output,
+    { version: '1.2.1', generation: 'fixture' },
+    async (_request, alive) => ({
+      ...ok({ alive: alive() }),
+      afterReply: (delivered) => {
+        effects.push(delivered && alive());
+      },
+    }),
+    () => {},
+    (error) => failures.push(error),
+  );
+  try {
+    input.write(agentFrame({ ...agentRequest('first'), requestId: first }));
+    await drain();
+    assert.equal(frames.length, 1);
+    t.mock.timers.tick(5_100);
+    await drain();
+    assert.deepEqual(effects, [false]);
+
+    // The native side may finish writing its receipt just after the host times out.
+    const late = agentFrame({ protocol: 1, requestId: first, delivered: true });
+    input.write(late);
+    input.write(agentFrame({ ...agentRequest('second'), requestId: second }));
+    await drain();
+    assert.deepEqual(failures, []);
+    assert.deepEqual(frames.at(-1), {
+      protocol: 1,
+      requestId: second,
+      version: '1.2.1',
+      generation: 'fixture',
+      ...ok({ alive: true }),
+    });
+    input.write(agentFrame({ protocol: 1, requestId: second, delivered: true }));
+    await drain();
+    assert.deepEqual(effects, [false, true]);
+
+    input.write(late);
+    assert.equal(failures.length, 1);
+    assert.match(String(failures[0]), /Unexpected agent receipt/);
+  } finally {
+    close();
+  }
+});
+
 test('a worker receipt requires the expected reopened version, and cancelled moves remain cancelled', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ahk-agent-receipts-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

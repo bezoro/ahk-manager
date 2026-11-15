@@ -9,6 +9,7 @@ export const MAX_AGENT_REQUEST = 1024 * 1024;
 export const MAX_AGENT_RESPONSE = 8 * 1024 * 1024;
 const MAX_IN_FLIGHT = 8;
 const ACK_DEADLINE_MS = 5_000;
+const MAX_EXPIRED_RECEIPTS = 64;
 
 export interface AgentRequest {
   protocol: 1;
@@ -98,6 +99,7 @@ export function serveAgentTransport(
 ): (error?: unknown) => void {
   const frames = new AgentFrameReader();
   const tracking = new Map<string, Tracking>();
+  const expiredReceipts = new Map<string, 'waiting' | 'consumed'>();
   let closed = false;
 
   function disconnect(error?: unknown): void {
@@ -105,6 +107,7 @@ export function serveAgentTransport(
     closed = true;
     for (const pending of tracking.values()) pending.acknowledge?.(false);
     tracking.clear();
+    expiredReceipts.clear();
     input.pause();
     output.destroy();
     terminate();
@@ -113,7 +116,7 @@ export function serveAgentTransport(
 
   async function respond(value: AgentRequest): Promise<void> {
     const key = value.requestId;
-    if (tracking.has(key) || tracking.size >= MAX_IN_FLIGHT)
+    if (tracking.has(key) || expiredReceipts.has(key) || tracking.size >= MAX_IN_FLIGHT)
       throw new Error('Invalid agent concurrency.');
     const pending: Tracking = { canceled: false };
     tracking.set(key, pending);
@@ -142,7 +145,14 @@ export function serveAgentTransport(
       frame = agentFrame({ ...identity, ...reply });
     }
     const receipt = new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), ACK_DEADLINE_MS);
+      const timer = setTimeout(() => {
+        // The native relay can still be finishing its own receipt wait.
+        if (expiredReceipts.size >= MAX_EXPIRED_RECEIPTS)
+          expiredReceipts.delete(expiredReceipts.keys().next().value!);
+        expiredReceipts.set(key, 'waiting');
+        pending.acknowledge = undefined;
+        resolve(false);
+      }, ACK_DEADLINE_MS);
       pending.acknowledge = (delivered) => {
         clearTimeout(timer);
         resolve(delivered);
@@ -166,6 +176,10 @@ export function serveAgentTransport(
         }
         if (ack(value)) {
           const message = value as AgentAck;
+          if (expiredReceipts.get(message.requestId) === 'waiting') {
+            expiredReceipts.set(message.requestId, 'consumed');
+            return;
+          }
           const pending = tracking.get(message.requestId);
           if (!pending?.acknowledge) throw new Error('Unexpected agent receipt.');
           pending.acknowledge(message.delivered);
