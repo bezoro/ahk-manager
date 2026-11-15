@@ -36,6 +36,14 @@ internal static partial class SelfTests
                 "portable plans retain the deployed protocol 2 JSON keys without adding another format"
             );
         }
+        var quiet = plan with { QuietAgentHost = true };
+        var quietBytes = JsonSerializer.SerializeToUtf8Bytes(quiet, UpdateProtocol.Json);
+        check(
+            UpdateProtocol.Read<UpdatePlan>(quietBytes) == quiet
+                && PortableApplyEffects.LaunchArgument(quiet) == "--agent-host"
+                && PortableApplyEffects.LaunchArgument(plan) == "--foreground",
+            "authenticated agent updates preserve quiet restart and legacy plans retain foreground"
+        );
         var withFallback = plan with
         {
             Fallback = new CachedPackage(

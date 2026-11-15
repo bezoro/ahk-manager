@@ -161,11 +161,14 @@ internal sealed class PortableApplyEffects(
             UseShellExecute = false,
             WorkingDirectory = layout.Root,
         };
-        start.ArgumentList.Add("--foreground");
+        start.ArgumentList.Add(LaunchArgument(plan));
         using var process =
             Process.Start(start)
             ?? throw new InvalidOperationException("Portable Manager launch was not confirmed.");
     }
+
+    internal static string LaunchArgument(UpdatePlan plan) =>
+        plan.QuietAgentHost ? "--agent-host" : "--foreground";
 
     internal bool CleanupCompleted()
     {
