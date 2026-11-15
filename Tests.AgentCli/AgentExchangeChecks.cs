@@ -8,6 +8,93 @@ internal static class AgentExchangeChecks
     {
         await CheckCallerLoss();
         await CheckReceipt();
+        await CheckHostDeadline();
+        await CheckHostShutdown();
+    }
+
+    static async Task CheckHostDeadline()
+    {
+        var id = Guid.NewGuid();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var connection = new ClientStream();
+        var privateWrites = Channel.CreateUnbounded<byte[]>();
+        var reply = new TaskCompletionSource<byte[]>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var relay = AgentExchange.Relay(
+            connection,
+            Request(id),
+            id,
+            reply.Task,
+            (bytes, _) => privateWrites.Writer.WriteAsync(bytes).AsTask(),
+            deadline.Token,
+            TimeSpan.FromMilliseconds(30)
+        );
+
+        _ = AgentProtocol.ReadRequest(await privateWrites.Reader.ReadAsync(deadline.Token));
+        await ReadCancellation(privateWrites, id, deadline.Token);
+        await CheckReceipt();
+        if (
+            await Task.WhenAny(relay, Task.Delay(60, deadline.Token)) == relay
+            || privateWrites.Reader.TryRead(out _)
+        )
+            throw new InvalidOperationException(
+                "The relay released admission or acknowledged delivery before the late host response."
+            );
+
+        reply.SetResult("late response"u8.ToArray());
+        var receipt = AgentProtocol.ReadReceipt(
+            await privateWrites.Reader.ReadAsync(deadline.Token)
+        );
+        if (receipt != new AgentReceipt(1, id, false) || connection.Outgoing.Reader.TryRead(out _))
+            throw new InvalidOperationException(
+                "A timed-out caller cannot receive the late host response."
+            );
+        await relay.WaitAsync(deadline.Token);
+    }
+
+    static async Task CheckHostShutdown()
+    {
+        var id = Guid.NewGuid();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        using var connection = new ClientStream();
+        var privateWrites = Channel.CreateUnbounded<byte[]>();
+        var reply = new TaskCompletionSource<byte[]>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var relay = AgentExchange.Relay(
+            connection,
+            Request(id),
+            id,
+            reply.Task,
+            (bytes, _) => privateWrites.Writer.WriteAsync(bytes).AsTask(),
+            stopping.Token,
+            TimeSpan.FromMilliseconds(30)
+        );
+
+        _ = AgentProtocol.ReadRequest(await privateWrites.Reader.ReadAsync(deadline.Token));
+        await ReadCancellation(privateWrites, id, deadline.Token);
+        stopping.Cancel();
+        try
+        {
+            await relay.WaitAsync(deadline.Token);
+        }
+        catch (OperationCanceledException) when (!deadline.IsCancellationRequested) { }
+        if (privateWrites.Reader.TryRead(out _))
+            throw new InvalidOperationException(
+                "Host shutdown cannot acknowledge an absent response."
+            );
+    }
+
+    static async Task ReadCancellation(Channel<byte[]> privateWrites, Guid id, CancellationToken ct)
+    {
+        var canceled = JsonSerializer.Deserialize(
+            await privateWrites.Reader.ReadAsync(ct),
+            AgentJson.Default.AgentCancellation
+        );
+        if (canceled != new AgentCancellation(1, id, true))
+            throw new InvalidOperationException("Expected a correlated cancellation.");
     }
 
     static async Task CheckCallerLoss()

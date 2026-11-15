@@ -12,12 +12,13 @@ internal static class AgentExchange
         Guid requestId,
         Task<byte[]> pending,
         Func<byte[], int, Task> send,
-        CancellationToken stopping
+        CancellationToken stopping,
+        TimeSpan? responseTimeout = null
     )
     {
         using var connection = CancellationTokenSource.CreateLinkedTokenSource(stopping);
         using var responseDeadline = CancellationTokenSource.CreateLinkedTokenSource(stopping);
-        responseDeadline.CancelAfter(TimeSpan.FromSeconds(115));
+        responseDeadline.CancelAfter(responseTimeout ?? TimeSpan.FromSeconds(115));
         Task<byte[]> receipt = AgentProtocol.Read(pipe, AgentProtocol.MaxReceipt, connection.Token);
         if (receipt.IsCompleted)
         {
@@ -26,20 +27,23 @@ internal static class AgentExchange
         }
 
         bool forwarded = false;
-        bool canceled = false;
         bool delivered = false;
         try
         {
             await send(request, AgentProtocol.MaxRequest);
             forwarded = true;
-            await Task.WhenAny(pending, receipt).WaitAsync(responseDeadline.Token);
-            if (receipt.IsCompleted)
+            try
             {
-                await Cancel();
-                // Preserve the concurrency bound through late host completion.
-                await pending.WaitAsync(responseDeadline.Token);
+                await Task.WhenAny(pending, receipt).WaitAsync(responseDeadline.Token);
+            }
+            catch (OperationCanceledException) when (!stopping.IsCancellationRequested)
+            {
+                // The public client has its own reply deadline. Do not forward
+                // a late host result to it after this relay has timed out.
                 return;
             }
+            if (receipt.IsCompleted)
+                return;
             byte[] response = await pending;
             using var delivery = CancellationTokenSource.CreateLinkedTokenSource(stopping);
             delivery.CancelAfter(TimeSpan.FromSeconds(5));
@@ -59,32 +63,46 @@ internal static class AgentExchange
             );
             if (forwarded && !stopping.IsCancellationRequested)
             {
-                if (!delivered)
-                    await Cancel();
-                var acknowledgment = new AgentReceipt(AgentProtocol.Version, requestId, delivered);
-                await send(
-                    JsonSerializer.SerializeToUtf8Bytes(
-                        acknowledgment,
-                        AgentJson.Default.AgentReceipt
-                    ),
-                    AgentProtocol.MaxReceipt
-                );
+                try
+                {
+                    if (!delivered)
+                    {
+                        var cancellation = new AgentCancellation(
+                            AgentProtocol.Version,
+                            requestId,
+                            true
+                        );
+                        await send(
+                            JsonSerializer.SerializeToUtf8Bytes(
+                                cancellation,
+                                AgentJson.Default.AgentCancellation
+                            ),
+                            AgentProtocol.MaxReceipt
+                        );
+                    }
+                }
+                finally
+                {
+                    // The host only expects a receipt after producing its reply.
+                    // Keep this pipe slot reserved until then or until the host stops.
+                    await pending.WaitAsync(stopping);
+                    if (!stopping.IsCancellationRequested)
+                    {
+                        var acknowledgment = new AgentReceipt(
+                            AgentProtocol.Version,
+                            requestId,
+                            delivered
+                        );
+                        await send(
+                            JsonSerializer.SerializeToUtf8Bytes(
+                                acknowledgment,
+                                AgentJson.Default.AgentReceipt
+                            ),
+                            AgentProtocol.MaxReceipt
+                        );
+                    }
+                }
             }
-        }
-
-        async Task Cancel()
-        {
-            if (canceled)
-                return;
-            canceled = true;
-            var cancellation = new AgentCancellation(AgentProtocol.Version, requestId, true);
-            await send(
-                JsonSerializer.SerializeToUtf8Bytes(
-                    cancellation,
-                    AgentJson.Default.AgentCancellation
-                ),
-                AgentProtocol.MaxReceipt
-            );
         }
     }
 }
