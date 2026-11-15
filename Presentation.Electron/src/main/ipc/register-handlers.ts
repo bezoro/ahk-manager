@@ -98,12 +98,14 @@ export function registerHandlers(context: IpcContext): void {
         const command = registry.prepare(name, validated.body);
         assertRequestAllowed(name, context.policy());
         const invoke = () =>
-          context.documentScope.run(
-            () => guard.current(validated.lease),
-            command,
-          );
+          context.documentScope.run(() => guard.current(validated.lease), command);
         const value = context.commandLog
-          ? await context.commandLog.run('ui', 'dispatch.' + name, invoke, commandDetails(validated.body))
+          ? await context.commandLog.run(
+              'ui',
+              'dispatch.' + name,
+              invoke,
+              commandDetails(validated.body),
+            )
           : await invoke();
         if (!guard.current(validated.lease)) throw new Error(t.documentChanged);
         return value;

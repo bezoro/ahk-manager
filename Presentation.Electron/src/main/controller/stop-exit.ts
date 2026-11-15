@@ -30,6 +30,7 @@ export interface StopExitReceipt {
 }
 export interface StopExitOptions {
   cancelled(): boolean;
+  explicit?: boolean;
   now?(): number;
   progress?: (completed: number, total: number) => void;
   finalObservation?: (
@@ -87,6 +88,7 @@ export class StopExitCoordinator {
       this.boundary.setSnapshot(fresh);
       return fresh;
     };
+    let confirming = false;
     try {
       // Prior work, initial observation and native consent do not spend the dispatch budget.
       await this.boundary.drain();
@@ -135,13 +137,16 @@ export class StopExitCoordinator {
         (item) => item.reason !== 'None' && item.reason !== 'NotDispatched',
       );
       options.progress?.(0, approved.length);
-      if (approved.length) {
+      if (approved.length || options.explicit) {
         const detail = t.stopExitConsent(receipt.items);
         if (detail.length > 64000) {
           receipt.problems.push('ConfirmationTooLarge');
           return receipt;
         }
-        if (!(await this.boundary.native.confirm(t.stopExitTitle, detail))) {
+        confirming = true;
+        const confirmed = await this.boundary.native.confirm(t.stopExitTitle, detail, cohort);
+        confirming = false;
+        if (!confirmed) {
           receipt.cancelled = true;
           return receipt;
         }
@@ -294,6 +299,7 @@ export class StopExitCoordinator {
         );
       return receipt;
     } catch (error) {
+      if (confirming && options.explicit) throw error;
       receipt.problems.push(error instanceof Error ? error.message : 'Unknown');
       return receipt;
     } finally {

@@ -1,4 +1,3 @@
-
 import { requireValid, type Validator } from '../shared/validation.js';
 
 export class CommandRegistry {

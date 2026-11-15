@@ -53,6 +53,7 @@ export class DataLocationController {
       this.layout,
       directory,
       this.boundary.preparePrivateDirectory,
+      () => this.boundary.alive(),
     );
     this.error = null;
     return result;
@@ -65,6 +66,9 @@ export class DataLocationController {
       if (!this.boundary.alive()) throw new Error('The application page changed. Try again.');
       return this.prepare(directory);
     });
+
+  prepareExplicit = (directory: string): Promise<StorageChangeResult> =>
+    this.mutate(() => this.prepare(directory));
 
   restoreDefault = (): Promise<StorageChangeResult> =>
     this.mutate(() => this.prepare(this.layout.defaultDataDirectory));

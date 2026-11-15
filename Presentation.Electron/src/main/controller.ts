@@ -189,13 +189,14 @@ export class ManagerController {
       return this.authority.request('saveMetadata', { scriptId, metadata, startupConsent });
     });
   }
-  async locate(selection: SelectionContext): Promise<OperationResult> {
+  async locate(selection: SelectionContext, explicit = false): Promise<OperationResult> {
     const epoch = this.selectionEpoch;
     return this.serialize(async () => {
       const valid = () =>
         this.native.alive() &&
-        epoch === this.selectionEpoch &&
-        selectionKey(selection) === selectionKey(this.selection) &&
+        (explicit ||
+          (epoch === this.selectionEpoch &&
+            selectionKey(selection) === selectionKey(this.selection))) &&
         this.matches(selection.stateRevision);
       if (!valid()) return stale();
       const script = this.requireReady().scripts.find((s) => s.id === selection.scriptId);
@@ -210,12 +211,14 @@ export class ManagerController {
       if (!paths.length) return cancelled();
       if (paths.length !== 1 || !valid()) return stale();
       let startupConsent = false;
-      if (script.runAtLogin === true) {
-        startupConsent = await this.native.confirm(
+      if (script.runAtLogin === true || explicit) {
+        const approved = await this.native.confirm(
           t.locateStartupTitle,
           t.locateStartupDetail(paths[0]!),
+          { scriptId: script.id, oldPath: script.path, replacement: paths[0] },
         );
-        if (!startupConsent) return cancelled();
+        if (!approved) return cancelled();
+        startupConsent = script.runAtLogin === true;
       }
       if (!valid()) return stale();
       return this.authority.request('relink', {
@@ -226,15 +229,16 @@ export class ManagerController {
       });
     });
   }
-  async deleteFile(selection: SelectionContext): Promise<OperationResult> {
+  async deleteFile(selection: SelectionContext, explicit = false): Promise<OperationResult> {
     const epoch = this.selectionEpoch;
     return this.serialize(async () => {
       const authority = this.authority;
       const valid = () =>
         this.native.alive() &&
         authority === this.authority &&
-        epoch === this.selectionEpoch &&
-        selectionKey(selection) === selectionKey(this.selection) &&
+        (explicit ||
+          (epoch === this.selectionEpoch &&
+            selectionKey(selection) === selectionKey(this.selection))) &&
         selectionVisible(this.requireReady(), selection);
       if (!valid() || !this.matches(selection.stateRevision) || this.requireReady().readOnly)
         return stale();
@@ -259,6 +263,7 @@ export class ManagerController {
         !(await this.native.confirm(
           t.deleteTitle,
           t.deleteDetail(plan.path, plan.expectedIdentity?.pid ?? null),
+          { file: plan.file, process: plan.expectedIdentity },
         ))
       )
         return cancelled();
@@ -276,8 +281,9 @@ export class ManagerController {
         return (
           this.native.alive() &&
           authority === this.authority &&
-          epoch === this.selectionEpoch &&
-          selectionKey(selection) === selectionKey(this.selection) &&
+          (explicit ||
+            (epoch === this.selectionEpoch &&
+              selectionKey(selection) === selectionKey(this.selection))) &&
           this.state.connection === 'ready' &&
           !!current &&
           !current.readOnly &&
@@ -351,8 +357,15 @@ export class ManagerController {
       }
     });
   }
-  async saveCollection(collectionId: string | null, name: string): Promise<OperationResult> {
-    return this.serialize(() => this.authority.request('saveCollection', { collectionId, name }));
+  async saveCollection(
+    collectionId: string | null,
+    name: string,
+    revision?: string,
+  ): Promise<OperationResult> {
+    return this.serialize(() => {
+      if (revision !== undefined && !this.matches(revision)) return Promise.resolve(stale());
+      return this.authority.request('saveCollection', { collectionId, name });
+    });
   }
   async removeCollection(collectionId: string, revision: string): Promise<OperationResult> {
     return this.serialize(async () => {
@@ -370,13 +383,18 @@ export class ManagerController {
       return this.authority.request('removeCollection', { collectionId });
     });
   }
-  async operate(operation: ScriptOperation, selection: SelectionContext): Promise<OperationResult> {
+  async operate(
+    operation: ScriptOperation,
+    selection: SelectionContext,
+    explicit = false,
+  ): Promise<OperationResult> {
     const requestedEpoch = this.selectionEpoch;
     return this.serialize(async () => {
       const valid = () =>
         this.native.alive() &&
-        this.selectionEpoch === requestedEpoch &&
-        selectionKey(selection) === selectionKey(this.selection) &&
+        (explicit ||
+          (this.selectionEpoch === requestedEpoch &&
+            selectionKey(selection) === selectionKey(this.selection))) &&
         selectionVisible(this.requireReady(), selection);
       if (!valid() || !this.matches(selection.stateRevision)) return stale();
       const prepared = await this.authority.request<PreparedOperation>('prepare', {
@@ -393,7 +411,7 @@ export class ManagerController {
       if (!valid()) return stale();
       const target = this.state.snapshot!.scripts.find((s) => s.id === selection.scriptId)!;
       let confirmed = false;
-      if (prepared.plan.requiresConfirmation) {
+      if (prepared.plan.requiresConfirmation || explicit) {
         confirmed = await this.native.confirm(
           t.operationTitle,
           t.operationDetail(
@@ -402,6 +420,12 @@ export class ManagerController {
             target.path,
             target.process?.identity.pid ?? null,
           ),
+          {
+            scriptId: target.id,
+            operation,
+            path: target.path,
+            process: prepared.plan.expectedIdentity,
+          },
         );
         if (!confirmed) return cancelled();
       }
@@ -422,14 +446,20 @@ export class ManagerController {
     if (value && this.native.alive()) this.paths.add(path.normalize(value).toLowerCase());
     return this.native.alive() ? value : null;
   }
-  async saveSettings(proposed: ManagerSettings): Promise<OperationResult> {
+  async saveSettings(
+    proposed: ManagerSettings,
+    explicit = false,
+    revision?: string,
+  ): Promise<OperationResult> {
     return this.serialize(async () => {
       const current = this.requireReady();
+      if (revision !== undefined && revision !== current.revision) return stale();
       for (const key of ['interpreterPath', 'editorPath'] as const) {
         const value = proposed[key];
         if (
           value !== null &&
           value !== current.settings[key] &&
+          !explicit &&
           !this.paths.has(path.normalize(value).toLowerCase())
         )
           throw new Error(t.selectExecutable);
@@ -443,6 +473,12 @@ export class ManagerController {
         startupConsent = await this.native.confirm(t.managerStartupTitle, t.managerStartupDetail);
         if (!startupConsent) return cancelled();
       }
+      if (
+        explicit &&
+        !startupConsent &&
+        !(await this.native.confirm(t.managerStartupTitle, t.managerStartupDetail))
+      )
+        return cancelled();
       if (!this.native.alive() || !this.matches(current.revision)) return stale();
       return this.authority.request('saveSettings', {
         settings: { ...proposed, window: this.native.placement() },
@@ -512,10 +548,10 @@ export class ManagerController {
       return { token, preview: result.preview };
     });
   }
-  async commitImport(token: string): Promise<OperationResult> {
+  async commitImport(token: string, explicit = false): Promise<OperationResult> {
     return this.serialize(async () => {
       const held = this.previews.get(token);
-      this.previews.delete(token);
+      if (!explicit) this.previews.delete(token);
       if (!held || held.expires < Date.now() || !held.preview.canImport) return stale();
       if (
         !(await this.native.confirm(
@@ -525,6 +561,7 @@ export class ManagerController {
       )
         return cancelled();
       if (!this.native.alive()) return stale();
+      if (explicit && !this.previews.delete(token)) return stale();
       return this.authority.request('import', { previewId: held.previewId });
     });
   }
@@ -573,6 +610,7 @@ export class ManagerController {
       const confirmed = await this.native.confirm(
         t.transferTitle,
         t.transferDetail(preview.oldExecutable, preview.newExecutable),
+        { oldCommand: preview.oldCommand, newCommand: preview.newCommand },
       );
       if (!this.native.alive()) return stale();
       return this.authority.request('transferStartup', { previewId: preview.previewId, confirmed });

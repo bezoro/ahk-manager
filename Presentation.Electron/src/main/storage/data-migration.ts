@@ -1,3 +1,4 @@
+import type { BigIntStats } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -143,6 +144,15 @@ function readPending(layout: DeploymentLayout): PendingMove | null {
   return pending;
 }
 
+export function pendingMoveIdentity(
+  layout: DeploymentLayout,
+): { operationId: string; destination: string } | null {
+  const pending = readPending(layout);
+  return pending
+    ? { operationId: pending.operationId, destination: pending.destinationDataDirectory }
+    : null;
+}
+
 export function getStorageState(
   layout: DeploymentLayout,
   error: string | null = null,
@@ -200,12 +210,63 @@ async function assertUpdatesSettled(dataDirectory: string): Promise<void> {
   }
 }
 
+export class DataMovePreparationCancelled extends Error {
+  constructor(readonly cleanupConfirmed = true) {
+    super(
+      cleanupConfirmed
+        ? 'Data move preparation was cancelled before publication.'
+        : 'Data move publication was cancelled. Staging cleanup could not be confirmed.',
+    );
+  }
+}
+
+async function removeUnpublishedFile(file: string, identity: BigIntStats | null): Promise<boolean> {
+  try {
+    assertStoragePath(file);
+    const current = await fs.lstat(file, { bigint: true });
+    if (
+      !identity ||
+      !current.isFile() ||
+      current.isSymbolicLink() ||
+      current.nlink !== 1n ||
+      current.dev !== identity.dev ||
+      current.ino !== identity.ino ||
+      current.birthtimeNs !== identity.birthtimeNs
+    )
+      return false;
+    await fs.unlink(file);
+    return true;
+  } catch (error) {
+    return missing(error);
+  }
+}
+
+async function removeUnpublishedStage(
+  directory: string,
+  identity: DirectoryIdentity | null,
+): Promise<boolean> {
+  try {
+    const current = await readDirectoryIdentity(directory);
+    if (!identity || !sameDirectoryIdentity(current, identity)) return false;
+    // Removing only an empty, identified directory preserves concurrently added files.
+    await fs.rmdir(directory);
+    return true;
+  } catch (error) {
+    return missing(error);
+  }
+}
+
 /** Prepare intent only. Operational files can still change until the normal restart. */
 export async function prepareDataMove(
   layout: DeploymentLayout,
   requestedDirectory: string,
   preparePrivateDirectory: (directory: string) => Promise<void>,
+  alive: () => boolean = () => true,
 ): Promise<StorageChangeResult> {
+  const check = () => {
+    if (!alive()) throw new DataMovePreparationCancelled();
+  };
+  check();
   requirePortable(layout);
   const destination = validateDataDirectory(layout.portableRoot, requestedDirectory);
   if (samePath(destination, layout.dataDirectory))
@@ -250,28 +311,45 @@ export async function prepareDataMove(
     throw fail('Choose a folder whose parent already exists.');
   if (await dataDirectoryExists(stagingDirectory))
     throw fail('The data staging folder already exists.');
-  await preparePrivateDirectory(stagingDirectory);
-  await assertEmptyDirectory(stagingDirectory);
-  const stageIdentity = await readDirectoryIdentity(stagingDirectory);
-  const pending: PendingMove = { ...pendingTemplate, stageIdentity };
+  const temporary = path.join(layout.portableRoot, `.portable-data-move-${operationId}.tmp`);
+  let stageIdentity: DirectoryIdentity | null = null;
+  let temporaryIdentity: BigIntStats | null = null;
+  let preparingStage = false;
+  let preparingFile = false;
   try {
+    check();
+    preparingStage = true;
+    await preparePrivateDirectory(stagingDirectory);
+    stageIdentity = await readDirectoryIdentity(stagingDirectory);
+    check();
+    await assertEmptyDirectory(stagingDirectory);
+    const pending: PendingMove = { ...pendingTemplate, stageIdentity };
     assertStoragePath(layout.portableRoot);
-    const temporary = path.join(layout.portableRoot, `.portable-data-move-${operationId}.tmp`);
-    await fs.writeFile(temporary, JSON.stringify(pending), {
-      flag: 'wx',
-      mode: 0o600,
-      flush: true,
-    });
+    check();
+    preparingFile = true;
+    const file = await fs.open(temporary, 'wx', 0o600);
+    try {
+      temporaryIdentity = await file.stat({ bigint: true });
+      check();
+      await file.writeFile(JSON.stringify(pending));
+      await file.sync();
+    } finally {
+      await file.close();
+    }
     const intent = path.join(layout.portableRoot, portableMoveName);
     if (await dataDirectoryExists(intent))
       throw fail('Another data move was prepared before this one completed.');
-    // The live backend's per-user effect lease and the main-process request guard
-    // serialize publication. An interrupted temporary file never becomes intent.
+    // The live backend's per-user effect lease and main-process guard serialize publication.
+    // This check and dispatch run consecutively, so a cancelled request cannot publish intent.
+    check();
     await fs.rename(temporary, intent);
   } catch (error) {
-    // This is the newly created, still-empty stage; do not remove anything added concurrently.
-    if (sameDirectoryIdentity(await readDirectoryIdentity(stagingDirectory), stageIdentity))
-      await fs.rmdir(stagingDirectory).catch(() => {});
+    const [fileRemoved, stageRemoved] = await Promise.all([
+      preparingFile ? removeUnpublishedFile(temporary, temporaryIdentity) : true,
+      preparingStage ? removeUnpublishedStage(stagingDirectory, stageIdentity) : true,
+    ]);
+    if (error instanceof DataMovePreparationCancelled || !alive())
+      throw new DataMovePreparationCancelled(fileRemoved && stageRemoved);
     throw error;
   }
   return { state: getStorageState(layout), restartRequired: true };
@@ -305,6 +383,33 @@ export async function canKeepCurrentData(layout: DeploymentLayout): Promise<bool
       return false;
     readStorageJson(path.join(layout.profileDirectory, 'settings.json'), 8 * 1024 * 1024);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function completedMoveFile(updatesDirectory: string, operationId: string): string {
+  return path.join(updatesDirectory, 'agent-operations', operationId + '-completed-data-move.json');
+}
+
+export async function completedMoveMatches(
+  updatesDirectory: string,
+  operationId: string,
+  dataDirectory: string,
+): Promise<boolean> {
+  if (!guid.test(operationId)) return false;
+  try {
+    const proof = readStorageJson(completedMoveFile(updatesDirectory, operationId), 16384);
+    return (
+      storageObject(proof) &&
+      storageKeys(proof, ['schemaVersion', 'operationId', 'destination', 'identity']) &&
+      proof.schemaVersion === 1 &&
+      proof.operationId === operationId &&
+      typeof proof.destination === 'string' &&
+      samePath(proof.destination, dataDirectory) &&
+      directoryIdentity(proof.identity) &&
+      sameDirectoryIdentity(await readDirectoryIdentity(dataDirectory), proof.identity)
+    );
   } catch {
     return false;
   }
@@ -436,6 +541,25 @@ export async function completePendingDataMove(
     updatesDirectory: path.join(pending.destinationDataDirectory, 'Updates'),
   };
   await removePending(result, pending);
+  try {
+    const proofFile = completedMoveFile(result.updatesDirectory, pending.operationId);
+    assertStoragePath(proofFile);
+    boundary?.check();
+    // The private operations directory, when present, was copied with the data.
+    // Recovery may open a committed pointer without proof. It must leave that result unknown.
+    await fs.writeFile(
+      proofFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        operationId: pending.operationId,
+        destination: result.dataDirectory,
+        identity: pending.stageIdentity,
+      }),
+      { flag: 'wx', mode: 0o600, flush: true },
+    );
+  } catch {
+    // The relocation already succeeded. An unavailable receipt cannot undo it.
+  }
   return result;
 }
 

@@ -51,6 +51,10 @@
     "parameters": {
       "command": "command",
       "arguments": "object"
+    },
+    "example": {
+      "command": "app.stopScriptsAndQuit",
+      "arguments": {}
     }
   },
   {
@@ -85,6 +89,9 @@
     "description": "Register script files",
     "parameters": {
       "paths": "absolute path[]"
+    },
+    "example": {
+      "paths": ["C:\\Scripts\\sample.ahk"]
     }
   },
   {
@@ -148,11 +155,15 @@
   },
   {
     "name": "collections.save",
-    "description": "Create or rename a collection",
+    "description": "Create a collection or rename one at an explicit revision",
     "parameters": {
       "collectionId": "uuid|null",
       "name": "string",
       "revision?": "decimal"
+    },
+    "example": {
+      "collectionId": null,
+      "name": "Utility scripts"
     }
   },
   {
@@ -319,7 +330,10 @@
     "parameters": {
       "id": "release ID"
     },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "example": {
+      "id": "local:1.2.1"
+    }
   },
   {
     "name": "updates.cancelDownload",
@@ -349,7 +363,8 @@
     "description": "Save a diagnostic archive at an absolute path",
     "parameters": {
       "path": "absolute path"
-    }
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
   },
   {
     "name": "diagnostics.openLogs",
@@ -366,6 +381,11 @@
   {
     "name": "administration.status",
     "description": "Get the current authority mode",
+    "parameters": {}
+  },
+  {
+    "name": "administration.request",
+    "description": "Verify the authenticated host already runs with administrator authority",
     "parameters": {}
   }
 ]

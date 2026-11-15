@@ -254,7 +254,7 @@ export class UpdateService {
     }
     return source;
   }
-  async install(id: string): Promise<UpdateState> {
+  async install(id: string, operationId: string = randomUUID()): Promise<UpdateState> {
     if (this.busy) return this.snapshot;
     const choice = this.state.releases.find((item) => item.id === id && item.canInstall);
     if (!choice)
@@ -264,7 +264,6 @@ export class UpdateService {
         downloadCancellation: null,
       });
     this.installing = true;
-    const operationId = randomUUID();
     try {
       if (!(await this.boundary.preflight(operationId, 'begin')))
         return this.publish({
