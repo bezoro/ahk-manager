@@ -143,7 +143,22 @@ try {
     $profileRoot = Join-Path $dataRoot 'Profile'
     Assert-PortablePath $profileRoot Fresh
     $null = [IO.Directory]::CreateDirectory($profileRoot)
-    [IO.File]::WriteAllText((Join-Path $profileRoot 'settings.json'), '{"Schema":1,"Scripts":[],"Collections":[],"Settings":{"LaunchManagerAtLogin":false,"LaunchManagerAsAdministrator":true,"StartInTray":false,"CloseBehavior":1}}')
+    [IO.File]::WriteAllText((Join-Path $profileRoot 'settings.json'), @'
+{
+  "Schema": 1,
+  "Scripts": [],
+  "Collections": [],
+  "LastLoginKey": "",
+  "Settings": {
+    "EditorArguments": [],
+    "LaunchManagerAtLogin": false,
+    "LaunchManagerAsAdministrator": true,
+    "StartInTray": false,
+    "CloseBehavior": 1,
+    "Window": { "X": 100, "Y": 100, "Width": 1200, "Height": 780, "Maximized": false, "Dpi": 96 }
+  }
+}
+'@)
 
     $summary.phase = 'launch-and-connect'
     Assert-PortablePath (Join-Path $portableRoot 'Bezoro.AhkManager.exe') File
