@@ -1,0 +1,391 @@
+[
+  {
+    "name": "app.status",
+    "description": "Get profile, backend and window readiness",
+    "parameters": {}
+  },
+  {
+    "name": "app.show",
+    "description": "Open and focus the manager window",
+    "parameters": {}
+  },
+  {
+    "name": "app.hide",
+    "description": "Hide the manager window to the tray",
+    "parameters": {}
+  },
+  {
+    "name": "app.toggleWindow",
+    "description": "Toggle the manager window",
+    "parameters": {}
+  },
+  {
+    "name": "app.preferences",
+    "description": "Open Preferences",
+    "parameters": {}
+  },
+  {
+    "name": "app.quit",
+    "description": "Quit Manager while leaving scripts running",
+    "parameters": {}
+  },
+  {
+    "name": "app.stopScriptsAndQuit",
+    "description": "Stop scripts and quit once stopping is verified",
+    "parameters": {},
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "app.cancelStopExit",
+    "description": "Request cancellation of the active stop and exit",
+    "parameters": {}
+  },
+  {
+    "name": "app.retryBackend",
+    "description": "Reconnect the backend",
+    "parameters": {}
+  },
+  {
+    "name": "commands.preview",
+    "description": "Review a command that requires confirmation",
+    "parameters": {
+      "command": "command",
+      "arguments": "object"
+    },
+    "example": {
+      "command": "app.stopScriptsAndQuit",
+      "arguments": {}
+    }
+  },
+  {
+    "name": "operations.get",
+    "description": "Read a durable update or relocation receipt",
+    "parameters": {
+      "operationId": "uuid"
+    }
+  },
+  {
+    "name": "state.get",
+    "description": "Get manager state",
+    "parameters": {}
+  },
+  {
+    "name": "theme.get",
+    "description": "Get the desktop theme state",
+    "parameters": {}
+  },
+  {
+    "name": "scripts.list",
+    "description": "List registered scripts and revision",
+    "parameters": {}
+  },
+  {
+    "name": "scripts.refresh",
+    "description": "Refresh script observations",
+    "parameters": {}
+  },
+  {
+    "name": "scripts.addFiles",
+    "description": "Register script files",
+    "parameters": {
+      "paths": "absolute path[]"
+    },
+    "example": {
+      "paths": ["C:\\Scripts\\sample.ahk"]
+    }
+  },
+  {
+    "name": "scripts.addFolder",
+    "description": "Register scripts in a folder",
+    "parameters": {
+      "path": "absolute path"
+    }
+  },
+  {
+    "name": "scripts.remove",
+    "description": "Remove a script from the catalog",
+    "parameters": {
+      "scriptId": "uuid",
+      "revision": "decimal"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "scripts.saveMetadata",
+    "description": "Update script metadata",
+    "parameters": {
+      "scriptId": "uuid",
+      "revision": "decimal",
+      "metadata": "ScriptMetadata"
+    }
+  },
+  {
+    "name": "scripts.locate",
+    "description": "Relink a missing script",
+    "parameters": {
+      "scriptId": "uuid",
+      "revision": "decimal",
+      "path": "absolute path"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "scripts.recycle",
+    "description": "Stop as required and recycle a script file",
+    "parameters": {
+      "scriptId": "uuid",
+      "revision": "decimal"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "scripts.operate",
+    "description": "Start, stop, restart, pause, suspend, edit, open the containing folder or recover a script",
+    "parameters": {
+      "scriptId": "uuid",
+      "revision": "decimal",
+      "operation": "Start | Stop | Restart | TogglePause | ToggleSuspend | Edit | OpenFolder | Recover"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "collections.list",
+    "description": "List collections and revision",
+    "parameters": {}
+  },
+  {
+    "name": "collections.save",
+    "description": "Create a collection or rename one at an explicit revision",
+    "parameters": {
+      "collectionId": "uuid|null",
+      "name": "string",
+      "revision?": "decimal"
+    },
+    "example": {
+      "collectionId": null,
+      "name": "Utility scripts"
+    }
+  },
+  {
+    "name": "collections.remove",
+    "description": "Remove a collection",
+    "parameters": {
+      "collectionId": "uuid",
+      "revision": "decimal"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "settings.get",
+    "description": "Get application settings and revision",
+    "parameters": {}
+  },
+  {
+    "name": "settings.save",
+    "description": "Save settings with explicit executable paths",
+    "parameters": {
+      "revision": "decimal",
+      "settings": "ManagerSettings"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "settings.validateExecutable",
+    "description": "Validate an absolute executable selection",
+    "parameters": {
+      "path": "absolute path"
+    }
+  },
+  {
+    "name": "startup.previewRepair",
+    "description": "Review the saved startup registration",
+    "parameters": {}
+  },
+  {
+    "name": "startup.repair",
+    "description": "Repair the reviewed startup registration",
+    "parameters": {
+      "fingerprint": "preview fingerprint"
+    }
+  },
+  {
+    "name": "startup.transfer",
+    "description": "Transfer registration from a prior installation",
+    "parameters": {},
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "startup.checkAdoption",
+    "description": "Recheck an in-progress startup adoption",
+    "parameters": {}
+  },
+  {
+    "name": "startup.continuation",
+    "description": "Inspect resumable startup work",
+    "parameters": {}
+  },
+  {
+    "name": "startup.resume",
+    "description": "Resume an existing startup continuation",
+    "parameters": {
+      "operationId": "uuid"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "startup.runLogin",
+    "description": "Run the configured scripts at login explicitly",
+    "parameters": {}
+  },
+  {
+    "name": "import.preview",
+    "description": "Preview a catalog import from disk",
+    "parameters": {
+      "path": "absolute path"
+    }
+  },
+  {
+    "name": "import.commit",
+    "description": "Apply a reviewed catalog import",
+    "parameters": {
+      "token": "uuid"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "profile.migrate",
+    "description": "Migrate a prior profile",
+    "parameters": {
+      "path": "absolute path"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "profile.restoreBackup",
+    "description": "Restore the profile backup",
+    "parameters": {},
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "profile.recoverPending",
+    "description": "Reconcile unconfirmed effects",
+    "parameters": {}
+  },
+  {
+    "name": "storage.get",
+    "description": "Get current and pending data paths",
+    "parameters": {}
+  },
+  {
+    "name": "storage.open",
+    "description": "Open the current data folder",
+    "parameters": {}
+  },
+  {
+    "name": "storage.prepare",
+    "description": "Stage a move to an explicit data path",
+    "parameters": {
+      "path": "absolute path"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "storage.restoreDefault",
+    "description": "Stage a move to the default data path",
+    "parameters": {},
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "storage.restart",
+    "description": "Restart Manager to apply a staged move",
+    "parameters": {},
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "storage.cancel",
+    "description": "Cancel a staged move",
+    "parameters": {},
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "updates.get",
+    "description": "Get update state and version history",
+    "parameters": {}
+  },
+  {
+    "name": "updates.check",
+    "description": "Check for versions on the active channel",
+    "parameters": {}
+  },
+  {
+    "name": "updates.setChannel",
+    "description": "Select stable or test updates",
+    "parameters": {
+      "channel": "stable | test"
+    }
+  },
+  {
+    "name": "updates.install",
+    "description": "Install or roll back to an explicit release",
+    "parameters": {
+      "id": "release ID"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "example": {
+      "id": "local:1.2.1"
+    }
+  },
+  {
+    "name": "updates.cancelDownload",
+    "description": "Cancel the active download",
+    "parameters": {
+      "id": "download UUID"
+    }
+  },
+  {
+    "name": "activity.list",
+    "description": "Query the application activity log",
+    "parameters": {
+      "scriptId?": "uuid|null",
+      "outcome?": "outcome|null",
+      "search?": "string"
+    }
+  },
+  {
+    "name": "diagnostics.report",
+    "description": "Return a bounded diagnostic report",
+    "parameters": {
+      "mode": "recent | errors"
+    }
+  },
+  {
+    "name": "diagnostics.export",
+    "description": "Save a diagnostic archive at an absolute path",
+    "parameters": {
+      "path": "absolute path"
+    },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+  },
+  {
+    "name": "diagnostics.openLogs",
+    "description": "Open diagnostic logs in Explorer",
+    "parameters": {}
+  },
+  {
+    "name": "clipboard.write",
+    "description": "Copy text to the desktop clipboard",
+    "parameters": {
+      "text": "string"
+    }
+  },
+  {
+    "name": "administration.status",
+    "description": "Get the current authority mode",
+    "parameters": {}
+  },
+  {
+    "name": "administration.request",
+    "description": "Verify the authenticated host already runs with administrator authority",
+    "parameters": {}
+  }
+]

@@ -1,3 +1,9 @@
+import type { StopExitReceipt } from './controller/stop-exit.js';
+import type { UpdateRelease } from '../shared/updates.js';
+import { AgentReceipts, type AgentTransition } from './agent-receipts.js';
+import { AgentCommandError, AgentCommands, failed, ok, operationReply } from './agent-commands.js';
+import { startAgentTransport, type AgentReply } from './agent-transport.js';
+import { CommandRegistry } from './command-registry.js';
 import {
   app,
   clipboard,
@@ -31,6 +37,7 @@ import {
   shutdownWithinDeadline,
   reportStartupWithContinuation,
   configuredLoginElevation,
+  desktopPreflight,
 } from './lifecycle.js';
 import {
   AdministrationPreflight,
@@ -76,7 +83,9 @@ import {
 import {
   canKeepCurrentData,
   completePendingDataMove,
+  DataMovePreparationCancelled,
   importLegacyUpdateChannel,
+  pendingMoveIdentity,
 } from './storage/data-migration.js';
 import { withDataMoveLease } from './storage/data-move-lease.js';
 import {
@@ -94,7 +103,11 @@ import {
   type DiagnosticReportContext,
 } from './logging/diagnostic-report.js';
 import { createDiagnosticArchive } from './logging/diagnostic-archive.js';
-import { exportDiagnosticArchive, writeDiagnosticArchive } from './logging/diagnostic-export.js';
+import {
+  diagnosticDestinationStamp,
+  exportDiagnosticArchive,
+  writeDiagnosticArchive,
+} from './logging/diagnostic-export.js';
 import {
   acquirePortableStorageLease,
   type PortableStorageLease,
@@ -113,6 +126,16 @@ export function startManager(): void {
   app.setAppUserModelId('Bezoro.AhkManager.Electron');
   const localAppData =
     process.env.LOCALAPPDATA ?? path.join(app.getPath('home'), 'AppData', 'Local');
+  const agentHost = process.argv.includes('--agent-host');
+  const generation = randomUUID();
+  const commands = new CommandRegistry();
+  let agentCommands: AgentCommands | null = null;
+  let closeAgent: (() => Promise<void>) | null = null;
+  let desktopReady = false;
+  let explicitWindowPending = false;
+  let windowLoading: Promise<void> | null = null;
+  let cliExitPending = false;
+  let transitionOperation: string | null = null;
   let deployment: DeploymentLayout;
   let bootstrapLayout: DeploymentLayout | null = null;
   let storageError: string | null = null;
@@ -125,7 +148,7 @@ export function startManager(): void {
     const quiet =
       !process.argv.includes('--foreground') &&
       !process.argv.includes('--request-administrator') &&
-      (process.argv.includes('--login') || process.argv.includes('--background'));
+      (agentHost || process.argv.includes('--login') || process.argv.includes('--background'));
     reportStartupFailure(error, quiet);
     return;
   }
@@ -150,11 +173,14 @@ export function startManager(): void {
   let continuationOffer: StartupContinuationOffer | null = null;
   let administrativeCliPending = initialAdministration === 'request';
   const lifecycle = new LifecycleIntent(
-    !adoptionPending && initialAdministration === 'none' && process.argv.includes('--login'),
+    !agentHost &&
+      !adoptionPending &&
+      initialAdministration === 'none' &&
+      process.argv.includes('--login'),
     (adoptionPending && !quietAdoption) ||
       initialAdministration !== 'none' ||
       process.argv.includes('--foreground'),
-    quietAdoption,
+    quietAdoption || agentHost,
   );
   const preflight = new AdministrationPreflight();
   let administration: ElevationCoordinator | null = null;
@@ -175,8 +201,17 @@ export function startManager(): void {
   let commandLog: CommandLog | null = null;
   const commandTrace: Pick<CommandLogBoundary, 'run'> = { run: trace };
   const documentScope = new AsyncLocalStorage<() => boolean>();
+  const trayScope = new AsyncLocalStorage<() => boolean>();
+  const agentScope = () => agentCommands?.scope.getStore();
   const alive = () =>
-    !quitting && (documentScope.getStore()?.() ?? (window !== null && !window.isDestroyed()));
+    !quitting &&
+    (agentScope()?.alive() ??
+      documentScope.getStore()?.() ??
+      trayScope.getStore()?.() ??
+      (!!window && !window.isDestroyed()));
+  const persistWindow = async (administrative = false) => {
+    if (window && !window.isDestroyed()) await controller?.savePlacement(administrative);
+  };
   const desktopTheme = new DesktopTheme(
     () => window,
     () => controller?.state.snapshot?.settings,
@@ -186,14 +221,24 @@ export function startManager(): void {
   const updateTheme = desktopTheme.update;
   const nativeDialogs = createNativeDialogs(() => window, alive);
   const pick: typeof nativeDialogs.files = (kind) =>
-    trace('ui', 'pick.' + kind, () => nativeDialogs.files(kind));
-  const confirm: typeof nativeDialogs.confirm = (title, detail) =>
-    trace('ui', 'confirm', () => nativeDialogs.confirm(title, detail));
+    trace('ui', 'pick.' + kind, () => agentScope()?.files ?? nativeDialogs.files(kind));
+  const confirm: typeof nativeDialogs.confirm = (title, detail, target) =>
+    trace('ui', 'confirm', async () => {
+      const scope = agentScope();
+      if (scope) return scope.confirm(title, detail, target);
+      const fromTray = trayScope.getStore();
+      if (!fromTray) return nativeDialogs.confirm(title, detail);
+      if (!fromTray() || (!window?.isVisible() && !(await showWindow()))) return false;
+      const owner = window;
+      const confirmed = await nativeDialogs.confirm(title, detail);
+      return confirmed && window === owner && !!owner && !owner.isDestroyed();
+    });
   const single = app.requestSingleInstanceLock();
   if (!single) app.quit();
   else {
     app.on('second-instance', (_event, argv) => {
       void trace('lifecycle', 'secondInstance', () => {
+        if (argv.includes('--agent-host')) return;
         if (
           adoptionPending ||
           argv.some(
@@ -241,7 +286,7 @@ export function startManager(): void {
       }
     });
     app.on('window-all-closed', () => {
-      if (!quitting) void quit();
+      if (!quitting && !agentHost) void quit();
     });
     app.on('will-quit', (event) => {
       commandLog?.close();
@@ -264,7 +309,7 @@ export function startManager(): void {
       })
       .catch((error) => {
         quitComplete = true;
-        reportStartupFailure(error, lifecycle.quietStartup, () => app.quit());
+        reportStartupFailure(error, agentHost || lifecycle.quietStartup, () => app.quit());
       });
   }
   function reportStartupFailure(error: unknown, quiet: boolean, finish = () => app.exit(65)): void {
@@ -349,7 +394,10 @@ export function startManager(): void {
       if (!samePath(previous.dataDirectory, deployment.dataDirectory)) {
         // Electron may have initialized Chromium while the asynchronous copy ran.
         // A fresh process selects the committed data path before Chromium starts.
-        app.relaunch({ execPath: deployment.launchExecutable, args: ['--foreground'] });
+        app.relaunch({
+          execPath: deployment.launchExecutable,
+          args: [agentHost ? '--agent-host' : '--foreground'],
+        });
         storageRestarting = true;
         quitComplete = true;
         app.exit(0);
@@ -380,19 +428,21 @@ export function startManager(): void {
     }
   }
   function show(): void {
-    if (!window || window.isDestroyed() || quitting) return;
+    if (!desktopReady) explicitWindowPending = true;
+    void showWindow().catch((error) => recordFailure('showWindow', error));
+  }
+  async function showWindow(): Promise<boolean> {
+    if (!desktopReady || quitting) return false;
+    await ensureWindow();
+    if (!window || window.isDestroyed() || quitting) return false;
     lifecycle.showWindow(window);
     deliverPreferences();
+    updateTray();
+    return window.isVisible();
   }
   function deliverPreferences(): void {
     if (lifecycle.takePreferences(ready && rendererReady && !!guard?.connected))
       guard?.send('manager:preferences', null);
-  }
-  function showPreferences(): void {
-    if (administration?.active || dataLocation?.active) return;
-    lifecycle.requestPreferences();
-    show();
-    deliverPreferences();
   }
   function placement(): WindowPlacement {
     if (!window || window.isDestroyed())
@@ -411,22 +461,43 @@ export function startManager(): void {
     const physical = screen.dipToScreenRect(window, bounds);
     return { ...physical, maximized, dpi: screen.getDisplayMatching(bounds).scaleFactor * 96 };
   }
+  function reviewDesktop(
+    operationId: string,
+    phase: 'begin' | 'commit',
+    eligible: () => boolean,
+  ): Promise<boolean> {
+    const agent = agentScope();
+    const owner = window;
+    const lease = documentLease;
+    return desktopPreflight(
+      eligible,
+      agent?.alive,
+      owner && !owner.isDestroyed()
+        ? {
+            alive: () => window === owner && !owner.isDestroyed(),
+            focused: () => owner.isFocused(),
+            documentCurrent: () => !!lease && !!guard?.current(lease),
+            review: (valid) =>
+              preflight.check(
+                operationId,
+                phase,
+                (request) => guard?.send('manager:administrationPreflight', request),
+                valid,
+              ),
+          }
+        : undefined,
+    );
+  }
   async function configureUpdates(): Promise<void> {
     const configured = await createApplicationUpdates(
       {
         preflight: (operationId, phase) => {
           if (dataLocation?.state.pendingDataDirectory)
             throw new Error('Restart Manager to complete the data move before updating.');
-          const lease = documentLease;
-          return preflight.check(
+          return reviewDesktop(
             operationId,
             phase,
-            (request) => guard?.send('manager:administrationPreflight', request),
             () =>
-              !!lease &&
-              !!guard?.current(lease) &&
-              !!window?.isFocused() &&
-              !window.isDestroyed() &&
               !quitting &&
               !updateApplying &&
               !dataLocation?.active &&
@@ -434,23 +505,35 @@ export function startManager(): void {
               !adoptionPending &&
               !administration?.active &&
               !stopExit.active &&
+              !cliExitPending &&
               !controller?.state.busy &&
-              !controller?.state.administrationPending,
+              !controller?.state.administrationPending &&
+              (!transitionOperation || transitionOperation === operationId),
           );
         },
-        confirm: (release) =>
-          confirm(
+        confirm: (release) => {
+          const agent = agentScope();
+          if (agent)
+            return Promise.resolve(agent.alive() && agent.updateRelease === releaseKey(release));
+          return confirm(
             compareVersions(release.version, app.getVersion()) < 0
               ? 'Return to version ' + release.version + '?'
               : 'Update to version ' + release.version + '?',
             'The manager will close and reopen. Running scripts will keep running, and your settings will be preserved.',
-          ),
+          );
+        },
         apply: applyUpdate,
         changed: (state) => guard?.send('manager:updates', state),
       },
-      () => !quitting && !updateApplying,
+      () =>
+        !quitting &&
+        !updateApplying &&
+        !transitionOperation &&
+        !dataLocation?.active &&
+        (!agentHost || !!window),
       {
         deployment: deployment.mode,
+        checkOnStart: !agentHost,
         root: deployment.updatesDirectory,
         currentCommit: await runningCommit(),
         commandLog: commandTrace,
@@ -470,23 +553,18 @@ export function startManager(): void {
   async function restartForDataMove(): Promise<void> {
     const operationId = randomUUID();
     let shutdownStarted = false;
-    const lease = documentLease;
     const check = (phase: 'begin' | 'commit') =>
-      preflight.check(
+      reviewDesktop(
         operationId,
         phase,
-        (request) => guard?.send('manager:administrationPreflight', request),
         () =>
-          !!lease &&
-          !!guard?.current(lease) &&
-          !!window?.isFocused() &&
-          !window.isDestroyed() &&
           !quitting &&
           !updateApplying &&
           !updateShutdownInFlight &&
           !adoptionPending &&
           !administration?.active &&
           !stopExit.active &&
+          !cliExitPending &&
           !updates?.busy &&
           dataLocation?.active === true &&
           controller?.state.busy === false,
@@ -504,7 +582,7 @@ export function startManager(): void {
           backendPresent: () => backend !== null,
           backendExited: () => backend?.exited ?? true,
           persistPlacement: async () => {
-            await controller?.savePlacement(true);
+            await persistWindow(true);
           },
           shutdownBackend: async () => {
             if (!backend) return;
@@ -530,22 +608,28 @@ export function startManager(): void {
           unconfirmed: 'Manager shutdown was not confirmed. The data location was preserved.',
         },
       );
-      app.relaunch({ execPath: deployment.launchExecutable, args: ['--foreground'] });
+      await shutdownAgent();
+      app.relaunch({
+        execPath: deployment.launchExecutable,
+        args: [agentScope() || agentHost ? '--agent-host' : '--foreground'],
+      });
       quitting = true;
       tray?.destroy();
       quitComplete = true;
       app.quit();
     } catch (error) {
       if (shutdownStarted || backend?.exited) controller?.setConnection('failed', safeError(error));
-      show();
-      dialog.showErrorBox('Data location', safeError(error));
+      if (!agentScope()) {
+        show();
+        dialog.showErrorBox('Data location', safeError(error));
+      }
       throw error;
     }
   }
   async function applyUpdate(operationId: string, target: CachedPackage): Promise<void> {
     if (
       !updateStore ||
-      !window ||
+      (!window && !agentScope()) ||
       updateApplying ||
       updateShutdownInFlight ||
       quitting ||
@@ -572,6 +656,7 @@ export function startManager(): void {
         target,
         path.dirname(app.getPath('exe')),
         new Date(created).toISOString(),
+        agentScope() !== undefined,
       );
       shutdownStarted = true;
       await shutdownAndCommitUpdate(
@@ -582,7 +667,7 @@ export function startManager(): void {
           backendPresent: () => backend !== null,
           backendExited: () => backend?.exited ?? true,
           persistPlacement: async () => {
-            await controller?.savePlacement(true);
+            await persistWindow(true);
           },
           shutdownBackend: async () => {
             if (!backend) return;
@@ -597,7 +682,11 @@ export function startManager(): void {
           reportPlacementFailure: () => {},
         },
         SHUTDOWN_DEADLINE_MS,
-        () => prepared!.commit(),
+        async () => {
+          // The verifier and the Electron host must release all images in App before replacement.
+          await shutdownAgent();
+          await prepared!.commit();
+        },
       );
       quitting = true;
       tray?.destroy();
@@ -628,11 +717,17 @@ export function startManager(): void {
   function start(): Promise<void> {
     return trace('lifecycle', 'start', startApplication, { version: app.getVersion() });
   }
-  async function startApplication(): Promise<void> {
-    if (initialAdoption.invalid) throw new Error(t.adoptionInvalid);
-    if (process.platform !== 'win32' || !app.isPackaged) throw new Error(t.windowsPackagedRequired);
-    await serveAssets();
-    lockSession();
+  async function ensureWindow(): Promise<void> {
+    if (windowLoading) return windowLoading;
+    if (window && !window.isDestroyed()) return;
+    windowLoading = openWindow();
+    try {
+      await windowLoading;
+    } finally {
+      windowLoading = null;
+    }
+  }
+  async function openWindow(): Promise<void> {
     window = createMainWindow();
     diagnostics = createWindowDiagnostics(window, () => ({
       rendererPid: window?.webContents.getOSProcessId(),
@@ -644,7 +739,6 @@ export function startManager(): void {
       selectedId: diagnosticSelection,
       scriptCount: controller?.state.snapshot?.scripts.length ?? 0,
     }));
-    Menu.setApplicationMenu(null);
     desktopTheme.initialize(window);
     guard = new DocumentGuard(window.webContents);
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -673,6 +767,34 @@ export function startManager(): void {
       event.preventDefault();
       void trace('lifecycle', 'closeWindow', closeWindow);
     });
+    applySavedPlacement();
+    await window.loadURL(APP_URL);
+    if (window.isVisible()) diagnostics?.initialReady();
+  }
+  function applySavedPlacement(): void {
+    const saved = controller?.state.snapshot?.settings.window;
+    if (!saved || !window || window.isDestroyed()) return;
+    const dip = screen.screenToDipRect(window, {
+      x: saved.x,
+      y: saved.y,
+      width: saved.width,
+      height: saved.height,
+    });
+    window.setBounds(restorePlacement({ ...saved, ...dip, dpi: 96 }, screen.getAllDisplays()));
+    lifecycle.deferMaximizedRestore(saved.maximized);
+  }
+  async function startApplication(): Promise<void> {
+    if (
+      initialAdoption.invalid ||
+      (agentHost &&
+        (adoptionPending || initialAdministration !== 'none' || process.argv.includes('--login')))
+    )
+      throw new Error(t.adoptionInvalid);
+    if (process.platform !== 'win32' || !app.isPackaged) throw new Error(t.windowsPackagedRequired);
+    await serveAssets();
+    lockSession();
+    Menu.setApplicationMenu(null);
+    desktopReady = true;
     nativeTheme.on('updated', updateTheme);
     systemPreferences.on('accent-color-changed', updateTheme);
     const native = {
@@ -730,7 +852,7 @@ export function startManager(): void {
         await controller?.drain();
       },
       persistPlacement: async () => {
-        await controller?.savePlacement(true);
+        await persistWindow(true);
       },
       request: (action, payload, timeoutMs) => {
         if (!backend) throw new Error(t.backendUnavailable);
@@ -781,23 +903,18 @@ export function startManager(): void {
     });
     await configureUpdates();
     registerIpc();
-    await window.loadURL(APP_URL);
+    registerCommands();
+    if (!agentHost) await ensureWindow();
     createTray();
     updateTheme();
     await startBackend();
-    const saved = controller.state.snapshot?.settings.window;
-    if (saved) {
-      const dip = screen.screenToDipRect(window, {
-        x: saved.x,
-        y: saved.y,
-        width: saved.width,
-        height: saved.height,
-      });
-      window.setBounds(restorePlacement({ ...saved, ...dip, dpi: 96 }, screen.getAllDisplays()));
-      lifecycle.deferMaximizedRestore(saved.maximized);
-      if (window.isVisible()) show();
-    }
+    applySavedPlacement();
+    if (window?.isVisible()) await showWindow();
     ready = true;
+    if (agentHost) {
+      if (explicitWindowPending) await showWindow();
+      return;
+    }
     if (initialAdministration === 'invalid')
       dialog.showErrorBox(t.title, t.administrationCliInvalid);
     const wantsAdministrator =
@@ -853,7 +970,7 @@ export function startManager(): void {
       )
     )
       show();
-    if (window.isVisible()) diagnostics?.initialReady();
+    if (window?.isVisible()) diagnostics?.initialReady();
   }
   async function startBackend(): Promise<void> {
     if (administration?.active) throw new Error(t.administrationPending);
@@ -861,6 +978,7 @@ export function startManager(): void {
     if (quitting) throw new Error(t.closing);
     if (!controller) throw new Error('Controller unavailable');
     if (backend && !backend.exited) throw new Error(t.backendStillAlive(backend.pid));
+    agentCommands?.invalidate();
     backend = new BackendClient({
       executable: packagedBackend(path.dirname(process.execPath)),
       hostExecutable: process.execPath,
@@ -872,7 +990,10 @@ export function startManager(): void {
     controller.setConnection('starting');
     backend.on('snapshot', (snapshot: ManagerSnapshot) => controller?.setSnapshot(snapshot));
     backend.on('unavailable', (error: Error) => {
-      if (!quitting) controller?.setConnection('failed', error.message);
+      if (!quitting) {
+        agentCommands?.invalidate();
+        controller?.setConnection('failed', error.message);
+      }
     });
     try {
       await trace('backend', 'start', () => backend!.start());
@@ -906,7 +1027,7 @@ export function startManager(): void {
     } catch (error) {
       recordFailure('startBackend', error);
       controller.setConnection('failed', safeError(error));
-      if (!lifecycle.quietStartup) show();
+      if (!agentHost && !lifecycle.quietStartup) show();
     }
   }
   function registerPortableApplication(owner: BackendClient): void {
@@ -989,8 +1110,8 @@ export function startManager(): void {
       lifecycle.quietStartup,
     );
   }
-  async function checkStartupAdoption(): Promise<void> {
-    if (!adoptionPending || !backend?.ready || !controller || quitting) return;
+  async function checkStartupAdoption(quiet = false): Promise<OperationResult | null> {
+    if (!adoptionPending || !backend?.ready || !controller || quitting) return null;
     try {
       const result = await backend.request<OperationResult>('startupAdoptionStatus', {}, 10000);
       adoptionPending = startupAdoptionBlocksInteraction(result);
@@ -998,8 +1119,8 @@ export function startManager(): void {
       controller.setConnection('ready');
       if (backend) registerPortableApplication(backend);
       updateTray();
-      show();
-      if (window)
+      if (!quiet) show();
+      if (window && !quiet)
         await dialog.showMessageBox(window, {
           type: result.outcome === 'Confirmed' ? 'info' : 'warning',
           title: t.loginResultTitle,
@@ -1010,9 +1131,12 @@ export function startManager(): void {
           cancelId: 0,
           noLink: true,
         });
-    } catch {
+      return result;
+    } catch (error) {
+      if (quiet) throw error;
       show();
       dialog.showErrorBox(t.loginResultTitle, t.administrationPending);
+      return null;
     }
   }
   async function requestStartupContinuation(quiet = false): Promise<boolean> {
@@ -1126,14 +1250,381 @@ export function startManager(): void {
       quietStartupTransfer = false;
     }
   }
+  function startAgent(): void {
+    if (closeAgent || !agentCommands || !app.isPackaged || process.platform !== 'win32') return;
+    closeAgent = startAgentTransport(
+      path.join(path.dirname(app.getPath('exe')), 'backend', 'agent', 'ahk-manager.exe'),
+      { version: app.getVersion(), generation },
+      (request, live) =>
+        trace('lifecycle', 'agentDispatch', () => agentCommands!.dispatch(request, live)),
+      (error) => recordFailure('agentChild', error),
+    );
+  }
+  async function shutdownAgent(): Promise<void> {
+    const close = closeAgent;
+    if (!close) return;
+    await close();
+    if (closeAgent === close) closeAgent = null;
+  }
+  function hostReady(): boolean {
+    return (
+      ready && backend?.ready === true && controller?.state.connection === 'ready' && !quitting
+    );
+  }
+  function agentStatus() {
+    return {
+      ready: hostReady(),
+      connection: controller?.state.connection ?? 'starting',
+      authorityMode: controller?.state.authorityMode ?? null,
+      windowOpen: !!window && !window.isDestroyed(),
+      windowVisible: window?.isVisible() === true,
+      stopExit: { active: stopExit.active, ...stopExitProgress },
+      generation,
+    };
+  }
+  async function navigate(
+    command: 'show' | 'hide' | 'toggleWindow' | 'preferences',
+  ): Promise<AgentReply> {
+    if (
+      quitting ||
+      cliExitPending ||
+      updateApplying ||
+      updateShutdownInFlight ||
+      dataLocation?.active
+    )
+      return failed('OperationBlocked');
+    if (command === 'hide' || (command === 'toggleWindow' && window?.isVisible())) {
+      if (window?.isVisible() && !trayRegistered) return failed('TrayUnavailable');
+      window?.hide();
+    } else {
+      if (command === 'preferences') {
+        if (administration?.active) return failed('OperationBlocked');
+        lifecycle.requestPreferences();
+      } else lifecycle.requestExplicitActivation();
+      if (!(await showWindow())) return failed('WindowUnavailable');
+    }
+    updateTray();
+    return ok(agentStatus());
+  }
+  function cancelStop(): AgentReply {
+    if (!stopExit.active) return failed('OperationNotFound');
+    stopExit.cancel();
+    updateTray();
+    return { outcome: 'Accepted', code: 'CancellationAccepted', result: stopExitProgress };
+  }
+  async function requestAgentExit(stopScripts: boolean): Promise<AgentReply> {
+    if (
+      quitting ||
+      cliExitPending ||
+      transitionOperation ||
+      updateApplying ||
+      updateShutdownInFlight ||
+      dataLocation?.active ||
+      updates?.busy ||
+      administration?.active ||
+      adoptionPending ||
+      !ready
+    )
+      return failed('OperationBlocked');
+    let receipt: StopExitReceipt | null = null;
+    if (stopScripts) {
+      receipt = await runStopExit(true);
+      if (!receipt) return failed('OperationInProgress');
+      if (!receipt.canExit) {
+        if (
+          receipt.cancelled &&
+          !receipt.confirmedStops &&
+          !receipt.items.some((item) => item.outcome === 'unknown')
+        )
+          return failed('CancelledBeforeDispatch', receipt);
+        const uncertain = receipt.items.some((item) => item.outcome === 'unknown');
+        return {
+          outcome: receipt.confirmedStops ? 'Partial' : uncertain ? 'Unknown' : 'Failed',
+          code: 'StopExitIncomplete',
+          result: receipt,
+        };
+      }
+    } else if (stopExit.active) return failed('OperationInProgress');
+    if (
+      quitting ||
+      cliExitPending ||
+      transitionOperation ||
+      updateApplying ||
+      updateShutdownInFlight ||
+      dataLocation?.active ||
+      updates?.busy ||
+      administration?.active ||
+      adoptionPending
+    )
+      return receipt
+        ? { outcome: 'Partial', code: 'ShutdownBlocked', result: receipt }
+        : failed('OperationBlocked');
+    cliExitPending = true;
+    updateTray();
+    return {
+      outcome: 'Accepted',
+      code: 'ShutdownAccepted',
+      result: receipt,
+      afterReply: async (delivered) => {
+        cliExitPending = false;
+        updateTray();
+        if (delivered) await quit(false, true);
+      },
+    };
+  }
+  function releaseKey(release: UpdateRelease): string {
+    return JSON.stringify([release.id, release.version, release.commit, release.publishedAt]);
+  }
+  async function reserveTransition(
+    operationId: string,
+    transition: AgentTransition,
+    work: () => Promise<'Dispatched' | 'Cancelled' | 'Failed'>,
+    updateRelease?: string,
+  ): Promise<AgentReply> {
+    const scope = agentScope();
+    if (
+      !scope ||
+      !updateStore ||
+      !hostReady() ||
+      !scope.alive() ||
+      transitionOperation ||
+      cliExitPending ||
+      controller?.state.busy ||
+      updates?.busy ||
+      updateShutdownInFlight ||
+      updateApplying ||
+      adoptionPending ||
+      administration?.active ||
+      stopExit.active ||
+      dataLocation?.active
+    )
+      return failed('OperationBlocked');
+    const owner = backend;
+    const eligible = () =>
+      scope.alive() &&
+      hostReady() &&
+      backend === owner &&
+      !transitionOperation &&
+      !cliExitPending &&
+      !controller?.state.busy &&
+      !updates?.busy &&
+      !updateShutdownInFlight &&
+      !updateApplying &&
+      !adoptionPending &&
+      !administration?.active &&
+      !stopExit.active &&
+      !dataLocation?.active;
+    if (!(await reviewDesktop(operationId, 'begin', eligible)) || !eligible())
+      return failed('PreflightBlocked');
+    transitionOperation = operationId;
+    const receipts = new AgentReceipts(updateStore);
+    let receipt;
+    try {
+      receipt = await receipts.begin(operationId, generation, transition);
+    } catch (error) {
+      transitionOperation = null;
+      throw error;
+    }
+    return {
+      outcome: 'Accepted',
+      code: 'OperationAccepted',
+      result: receipt,
+      afterReply: async (delivered) => {
+        let reconciled: 'Dispatched' | 'Cancelled' | 'Failed' | 'Unknown' = 'Cancelled';
+        let detail: string | undefined;
+        try {
+          if (delivered && scope.alive() && agentCommands) {
+            if (receipt.kind === 'DataMove') await receipts.markDataMoveDispatch(receipt);
+            reconciled = await agentCommands.scope.run(
+              {
+                ...scope,
+                transition: operationId,
+                updateRelease,
+                alive: () => !quitting && transitionOperation === operationId && backend === owner,
+              },
+              work,
+            );
+          }
+        } catch (error) {
+          reconciled = !backend?.ready || quitting ? 'Unknown' : 'Failed';
+          detail = safeError(error);
+        } finally {
+          if (reconciled !== 'Dispatched') {
+            await receipts
+              .settle(receipt, reconciled, detail)
+              .catch((error) => recordFailure('agentReceipt', error));
+            transitionOperation = null;
+            startAgent();
+          }
+        }
+      },
+    };
+  }
+  async function requestAgentUpdate(id: string): Promise<AgentReply> {
+    const choice = updates?.snapshot.releases.find(
+      (release) => release.id === id && release.canInstall,
+    );
+    if (!choice) return failed('UpdateUnavailable');
+    const key = releaseKey(choice);
+    await confirm(
+      'Install version ' + choice.version,
+      'Manager will restart while scripts keep running.',
+      key,
+    );
+    if (!sameRelease(choice)) return failed('ConfirmationChanged');
+    const operationId = randomUUID();
+    return reserveTransition(
+      operationId,
+      { kind: 'Update', version: choice.version },
+      async () => {
+        if (!sameRelease(choice)) return 'Failed';
+        const state = await updates!.install(id, operationId);
+        if (quitting) return 'Dispatched';
+        if (!backend?.ready) throw new Error(state.error ?? 'Update shutdown was unconfirmed.');
+        if (state.downloadCancellation === 'canceled') return 'Cancelled';
+        return 'Failed';
+      },
+      key,
+    );
+  }
+  function sameRelease(choice: UpdateRelease): boolean {
+    return (
+      updates?.snapshot.releases.some(
+        (release) => release.canInstall && releaseKey(release) === releaseKey(choice),
+      ) === true
+    );
+  }
+  async function requestAgentStorageRestart(): Promise<AgentReply> {
+    const move = pendingMoveIdentity(deployment);
+    if (!move || !dataLocation) return failed('OperationNotFound');
+    await confirm('Restart to move data', move.destination, move);
+    return reserveTransition(
+      randomUUID(),
+      { kind: 'DataMove', moveId: move.operationId, destination: move.destination },
+      async () => {
+        const pending = pendingMoveIdentity(deployment);
+        if (
+          pending?.operationId !== move.operationId ||
+          !samePath(pending.destination, move.destination)
+        )
+          return 'Failed';
+        await dataLocation!.restart();
+        return quitting ? 'Dispatched' : 'Failed';
+      },
+    );
+  }
+  function registerCommands(): void {
+    if (!controller) throw new Error('Controller unavailable.');
+    commands.define(
+      'tray.checkAdoption',
+      () => true,
+      () => checkStartupAdoption(),
+    );
+    commands.define(
+      'tray.continueStartup',
+      () => true,
+      () => requestStartupContinuation(),
+    );
+    commands.define(
+      'tray.activate',
+      () => true,
+      () => navigate('show'),
+    );
+    commands.define(
+      'tray.toggleWindow',
+      () => true,
+      () => navigate('toggleWindow'),
+    );
+    commands.define(
+      'tray.preferences',
+      () => true,
+      () => navigate('preferences'),
+    );
+    commands.define(
+      'tray.quit',
+      () => true,
+      () => quit(),
+    );
+    commands.define(
+      'tray.stopScriptsAndQuit',
+      () => true,
+      () => stopScriptsAndQuit(),
+    );
+    commands.define('tray.cancelStopExit', () => true, cancelStop);
+    agentCommands = new AgentCommands({
+      registry: commands,
+      controller,
+      status: agentStatus,
+      ready: hostReady,
+      policy: requestPolicy,
+      navigation: navigate,
+      shutdown: requestAgentExit,
+      cancelStopExit: cancelStop,
+      checkAdoption: async () => {
+        const result = await checkStartupAdoption(true);
+        return result ? operationReply(result) : failed('OperationNotFound');
+      },
+      continuation: async () => {
+        if (!backend?.ready)
+          throw new AgentCommandError('BackendUnavailable', t.backendUnavailable);
+        return backend.request<StartupContinuationOffer | null>('startupContinuation', {});
+      },
+      resumeStartup: async (operationId) => {
+        if (!backend?.ready) return failed('BackendUnavailable');
+        const offer = await backend.request<StartupContinuationOffer | null>(
+          'startupContinuation',
+          {},
+        );
+        if (!offer?.canResume || offer.operationId !== operationId)
+          return failed('OperationNotFound');
+        await confirm(t.continuationTitle, t.continuationDetail(offer.scriptNames), offer);
+        // Startup adoption owns the original normal-to-administrator process handoff.
+        return failed('StartupHandoffRequired');
+      },
+      update: requestAgentUpdate,
+      cancelUpdate: (id) =>
+        updates?.cancelDownload(id) === 'accepted'
+          ? { outcome: 'Accepted', code: 'CancellationAccepted', result: { id } }
+          : failed('OperationNotFound'),
+      prepareStorage: async (directory) => {
+        if (!dataLocation) throw new AgentCommandError('BackendUnavailable', t.backendUnavailable);
+        try {
+          return await (directory === undefined
+            ? dataLocation.restoreDefault()
+            : dataLocation.prepareExplicit(directory));
+        } catch (error) {
+          if (!(error instanceof DataMovePreparationCancelled)) throw error;
+          throw new AgentCommandError(
+            error.cleanupConfirmed ? 'CancelledBeforeDispatch' : 'StoragePreparationUnconfirmed',
+            error.message,
+            error.cleanupConfirmed ? 'Failed' : 'Unknown',
+          );
+        }
+      },
+      restartStorage: requestAgentStorageRestart,
+      report: diagnosticReport,
+      exportDiagnostics: async (destination) => {
+        const stamp = diagnosticDestinationStamp(destination);
+        await confirm('Export diagnostic archive', destination, { destination, stamp });
+        return diagnosticExport(destination, stamp);
+      },
+      receipt: (operationId) =>
+        updateStore
+          ? new AgentReceipts(updateStore).reconcile(operationId, {
+              generation,
+              version: app.getVersion(),
+              ready: hostReady(),
+              directory: deployment.dataDirectory,
+              active: transitionOperation === operationId,
+            })
+          : Promise.resolve(failed('OperationNotFound')),
+      error: safeError,
+    });
+    startAgent();
+  }
   function createTray(): void {
     try {
-      tray = createTrayIcon(() => {
-        void trace('tray', 'activate', () => {
-          lifecycle.requestExplicitActivation();
-          show();
-        });
-      });
+      tray = createTrayIcon(trayAction('activate'));
       trayRegistered = tray !== null;
       updateTray();
     } catch {
@@ -1162,57 +1653,76 @@ export function startManager(): void {
             progress: stopExitProgress,
           },
           {
-            checkAdoption: trayAction('checkAdoption', checkStartupAdoption),
-            continueStartup: trayAction('continueStartup', requestStartupContinuation),
-            activate: trayAction('activate', () => {
-              lifecycle.requestExplicitActivation();
-              show();
-            }),
-            toggleWindow: trayAction('toggleWindow', () => {
-              lifecycle.requestExplicitActivation();
-              if (window?.isVisible()) window.hide();
-              else show();
-              updateTray();
-            }),
-            preferences: trayAction('preferences', showPreferences),
-            quit: trayAction('quit', quit),
-            stopScriptsAndQuit: trayAction('stopScriptsAndQuit', stopScriptsAndQuit),
-            cancelStopExit: trayAction('cancelStopExit', () => {
-              stopExit.cancel();
-              updateTray();
-            }),
+            checkAdoption: trayAction('checkAdoption'),
+            continueStartup: trayAction('continueStartup'),
+            activate: trayAction('activate'),
+            toggleWindow: trayAction('toggleWindow'),
+            preferences: trayAction('preferences'),
+            quit: trayAction('quit'),
+            stopScriptsAndQuit: trayAction('stopScriptsAndQuit'),
+            cancelStopExit: trayAction('cancelStopExit'),
           },
         ),
       ),
     );
   }
-  function trayAction(command: string, action: () => unknown): () => void {
+  function trayAction(command: string): () => void {
     return () => {
-      void trace('tray', command, action).catch((error) => {
-        if (!quitting) dialog.showErrorBox(t.title, safeError(error));
-      });
+      const owner = tray;
+      if (!owner || owner.isDestroyed()) return;
+      let active = true;
+      const valid = () => active && tray === owner && !owner.isDestroyed() && !quitting;
+      void trayScope
+        .run(valid, () => trace('tray', command, () => commands.invoke('tray.' + command, {})))
+        .catch((error) => {
+          if (!quitting) dialog.showErrorBox(t.title, safeError(error));
+        })
+        .finally(() => {
+          active = false;
+        });
     };
   }
-  async function stopScriptsAndQuit(): Promise<void> {
-    if (adoptionPending || administration?.active || quitting || !controller || !stopExit.begin())
-      return;
+  async function runStopExit(explicit: boolean): Promise<StopExitReceipt | null> {
+    if (
+      adoptionPending ||
+      administration?.active ||
+      quitting ||
+      cliExitPending ||
+      transitionOperation ||
+      updateApplying ||
+      updates?.busy ||
+      dataLocation?.active ||
+      !controller ||
+      !stopExit.begin()
+    )
+      return null;
     stopExitProgress = { done: 0, total: 0 };
     updateTray();
     try {
       const receipt = await controller.stopScriptsForExit({
         cancelled: () => stopExit.cancelled,
+        explicit,
         progress: (done, total) => {
           stopExitProgress = { done, total };
           updateTray();
         },
       });
-      if (stopExit.complete(receipt.canExit)) {
+      receipt.canExit = stopExit.complete(receipt.canExit);
+      return receipt;
+    } finally {
+      if (stopExit.active) stopExit.complete(false);
+      updateTray();
+    }
+  }
+  async function stopScriptsAndQuit(): Promise<void> {
+    try {
+      const receipt = await runStopExit(false);
+      if (!receipt) return;
+      if (receipt.canExit) {
         await quit();
         return;
       }
-      updateTray();
-      show();
-      if (window)
+      if ((await showWindow()) && window)
         await dialog.showMessageBox(window, {
           type: 'warning',
           title: t.stopExitPartialTitle,
@@ -1225,13 +1735,12 @@ export function startManager(): void {
         });
     } catch (error) {
       recordFailure('stopScriptsAndQuit', error);
-      stopExit.complete(false);
-      updateTray();
       show();
       dialog.showErrorBox(t.stopExitPartialTitle, safeError(error));
     }
   }
   async function closeWindow(): Promise<void> {
+    if (cliExitPending || transitionOperation) return;
     if (updateApplying || updateShutdownInFlight || dataLocation?.active) {
       show();
       return;
@@ -1261,7 +1770,8 @@ export function startManager(): void {
       updateTray();
     } else await quit();
   }
-  async function quit(administrativeAcknowledgement = false): Promise<void> {
+  async function quit(administrativeAcknowledgement = false, quiet = false): Promise<void> {
+    if (cliExitPending || transitionOperation) return;
     if ((updateApplying || updateShutdownInFlight || dataLocation?.active) && !quitComplete) {
       show();
       return;
@@ -1287,7 +1797,7 @@ export function startManager(): void {
         backendPresent: () => backend !== null,
         backendExited: () => backend?.exited ?? true,
         persistPlacement: async () => {
-          if (!administrativeAcknowledgement) await controller?.savePlacement();
+          if (!administrativeAcknowledgement) await persistWindow();
         },
         shutdownBackend: async () => {
           if (backend) await backend.shutdown();
@@ -1306,13 +1816,15 @@ export function startManager(): void {
           }),
         ]),
       );
+      await shutdownAgent();
       tray?.destroy();
       quitComplete = true;
       app.quit();
     } catch (error) {
       quitting = false;
+      startAgent();
       controller?.setConnection('failed', safeError(error));
-      if (!quietStartupTransfer) {
+      if (!quiet && !quietStartupTransfer) {
         show();
         dialog.showErrorBox(t.shutdownUnconfirmed, safeError(error));
       }
@@ -1320,9 +1832,8 @@ export function startManager(): void {
       clearTimeout(timer);
     }
   }
-  function registerIpc(): void {
-    if (!guard || !controller || !updates) throw new Error('IPC setup unavailable');
-    const diagnosticContext = (): DiagnosticReportContext => ({
+  function diagnosticContext(): DiagnosticReportContext {
+    return {
       version: app.getVersion(),
       platform: process.platform,
       architecture: process.arch,
@@ -1330,11 +1841,69 @@ export function startManager(): void {
       deployment: deployment.mode,
       host: controller?.state ?? null,
       updates: updates?.snapshot ?? null,
+    };
+  }
+  function diagnosticReport(mode: DiagnosticLogMode): string {
+    return createDiagnosticReport(diagnosticContext(), commandLog, mode);
+  }
+  function diagnosticExport(destination?: string, expected?: string | null) {
+    return exportDiagnosticArchive({
+      chooseDestination: async () => {
+        if (destination !== undefined) return destination;
+        const options = {
+          title: 'Save diagnostic archive',
+          defaultPath: path.join(
+            app.getPath('downloads'),
+            `AHK-Manager-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`,
+          ),
+          filters: [{ name: 'ZIP archives', extensions: ['zip'] }],
+        };
+        const result = window
+          ? await dialog.showSaveDialog(window, options)
+          : await dialog.showSaveDialog(options);
+        return result.canceled || !result.filePath ? null : result.filePath;
+      },
+      alive: () => (agentScope() ? alive() : !quitting && documentScope.getStore()?.() === true),
+      build: () =>
+        createDiagnosticArchive({
+          deployment,
+          summary: diagnosticReport('recent'),
+          startupDirectory: startupFailureDirectory(localAppData),
+          runtime: createDiagnosticRuntime(diagnosticContext()),
+          commandLogs: commandLog?.exportFiles() ?? {
+            files: [],
+            issues: [{ file: 'Logs', reason: 'unavailable' }],
+          },
+        }),
+      write: (filename, bytes) => writeDiagnosticArchive(filename, bytes, expected),
     });
-    const diagnosticReport = (mode: DiagnosticLogMode) =>
-      createDiagnosticReport(diagnosticContext(), commandLog, mode);
+  }
+  function requestPolicy() {
+    return {
+      quitting: quitting || cliExitPending,
+      updateApplying:
+        updateApplying ||
+        dataLocation?.active === true ||
+        (transitionOperation !== null && agentScope()?.transition !== transitionOperation),
+      adoptionPending,
+      administrationPending: controller?.state.administrationPending === true,
+    };
+  }
+  function registerIpc(): void {
+    if (!controller || !updates) throw new Error('IPC setup unavailable');
     registerHandlers({
-      guard,
+      registry: commands,
+      guard: {
+        connect: (event) => {
+          if (!guard) throw new Error(t.documentChanged);
+          return guard.connect(event);
+        },
+        validate: (event, envelope) => {
+          if (!guard) throw new Error(t.documentChanged);
+          return guard.validate(event, envelope);
+        },
+        current: (lease) => guard?.current(lease) === true,
+      },
       controller,
       updates,
       preflight,
@@ -1344,38 +1913,7 @@ export function startManager(): void {
       clipboard,
       commandLog: commandTrace,
       diagnosticReport,
-      exportDiagnostics: () => {
-        const currentDocument = documentScope.getStore();
-        return exportDiagnosticArchive({
-          chooseDestination: async () => {
-            const options = {
-              title: 'Save diagnostic archive',
-              defaultPath: path.join(
-                app.getPath('downloads'),
-                `AHK-Manager-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`,
-              ),
-              filters: [{ name: 'ZIP archives', extensions: ['zip'] }],
-            };
-            const result = window
-              ? await dialog.showSaveDialog(window, options)
-              : await dialog.showSaveDialog(options);
-            return result.canceled || !result.filePath ? null : result.filePath;
-          },
-          alive: () => !quitting && currentDocument?.() === true,
-          build: () =>
-            createDiagnosticArchive({
-              deployment,
-              summary: diagnosticReport('recent'),
-              startupDirectory: startupFailureDirectory(localAppData),
-              runtime: createDiagnosticRuntime(diagnosticContext()),
-              commandLogs: commandLog?.exportFiles() ?? {
-                files: [],
-                issues: [{ file: 'Logs', reason: 'unavailable' }],
-              },
-            }),
-          write: writeDiagnosticArchive,
-        });
-      },
+      exportDiagnostics: diagnosticExport,
       openLogs: async () => {
         if (!commandLog?.status().available)
           throw new Error('Diagnostic logging is unavailable. Check access to the data folder.');
@@ -1392,17 +1930,12 @@ export function startManager(): void {
             cancel: dataLocation.cancel,
           }
         : undefined,
-      policy: () => ({
-        quitting,
-        updateApplying: updateApplying || dataLocation?.active === true,
-        adoptionPending,
-        administrationPending: controller!.state.administrationPending,
-      }),
+      policy: requestPolicy,
       requestAdministration,
       retryBackend: async () => {
         if (updateShutdownInFlight) throw new Error('Wait for confirmed backend shutdown.');
         await startBackend();
-        if (backend?.ready) await runLogin();
+        if (backend?.ready && !agentScope() && !agentHost) await runLogin();
         if (backend) registerPortableApplication(backend);
       },
       selectionChanged: (selected) => {

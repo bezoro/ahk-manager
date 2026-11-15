@@ -7,7 +7,7 @@ export interface NativeBoundary {
   files(
     kind: 'scripts' | 'locate' | 'folder' | 'interpreter' | 'editor' | 'import' | 'migration',
   ): Promise<string[]>;
-  confirm(title: string, detail: string): Promise<boolean>;
+  confirm(title: string, detail: string, target?: unknown): Promise<boolean>;
   placement(): WindowPlacement;
   alive(): boolean;
   fileStamp?(file: ScriptFileIdentity): Promise<string>;

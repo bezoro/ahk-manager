@@ -273,3 +273,24 @@ export async function shutdownWithinDeadline(
     active = false;
   }
 }
+
+export interface DesktopPreflightWindow {
+  alive(): boolean;
+  focused(): boolean;
+  documentCurrent(): boolean;
+  review(valid: () => boolean): Promise<boolean>;
+}
+
+/** Agent admission can use a hidden current document, and a windowless host has no document drafts. */
+export function desktopPreflight(
+  eligible: () => boolean,
+  agent: (() => boolean) | undefined,
+  owner: DesktopPreflightWindow | undefined,
+): Promise<boolean> {
+  if (!eligible() || (agent && !agent())) return Promise.resolve(false);
+  if (!owner) return Promise.resolve(agent !== undefined);
+  return owner.review(
+    () =>
+      owner.alive() && owner.documentCurrent() && (agent ? agent() : owner.focused()) && eligible(),
+  );
+}

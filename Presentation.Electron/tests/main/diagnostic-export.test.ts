@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  diagnosticDestinationStamp,
   exportDiagnosticArchive,
   writeDiagnosticArchive,
 } from '../../src/main/logging/diagnostic-export.js';
@@ -139,4 +140,30 @@ test('failed publication preserves the previous archive and cleans only its own 
   rename.mock.restore();
   assert.equal(fs.readFileSync(destination, 'utf8'), 'previous');
   assert.deepEqual(fs.readdirSync(directory), ['report.zip']);
+});
+
+test('an agent review only overwrites the exact destination it observed', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-diagnostic-review-'));
+  t.after(() => {
+    fs.unlinkSync(path.join(root, 'out.zip'));
+    fs.rmdirSync(root);
+  });
+  const output = path.join(root, 'out.zip');
+  assert.equal(diagnosticDestinationStamp(output), null);
+  fs.writeFileSync(output, 'appeared');
+  assert.throws(
+    () => writeDiagnosticArchive(output, Buffer.from('archive'), null),
+    /could not be saved/,
+  );
+  assert.equal(fs.readFileSync(output, 'utf8'), 'appeared');
+  const expected = diagnosticDestinationStamp(output);
+  assert.ok(expected);
+  fs.writeFileSync(output, 'changed after review');
+  assert.throws(
+    () => writeDiagnosticArchive(output, Buffer.from('archive'), expected),
+    /could not be saved/,
+  );
+  assert.equal(fs.readFileSync(output, 'utf8'), 'changed after review');
+  writeDiagnosticArchive(output, Buffer.from('archive'), diagnosticDestinationStamp(output));
+  assert.equal(fs.readFileSync(output, 'utf8'), 'archive');
 });

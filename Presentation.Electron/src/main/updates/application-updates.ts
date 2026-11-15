@@ -20,6 +20,7 @@ type ApplicationUpdateBoundary = Pick<
 
 export interface ApplicationUpdateOptions {
   deployment?: UpdateDeployment;
+  checkOnStart?: boolean;
   root?: string;
   currentCommit?: string;
   commandLog?: Pick<CommandLogBoundary, 'run'>;
@@ -95,7 +96,7 @@ export async function createApplicationUpdates(
     const work = () => service.check();
     return options.commandLog ? options.commandLog.run('updates', 'check', work) : work();
   };
-  void check();
+  if (options.checkOnStart !== false) void check();
   const interval = setInterval(
     () => {
       if (pollAllowed()) void check();

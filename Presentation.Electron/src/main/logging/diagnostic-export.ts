@@ -41,8 +41,19 @@ function inspect(destination: string): Stamp | null {
   }
 }
 
+export function diagnosticDestinationStamp(destination: string): string | null {
+  assertStoragePath(path.dirname(destination));
+  assertStoragePath(destination);
+  const current = inspect(destination);
+  return current ? version(current) : null;
+}
+
 /** Stage and flush before replacing the exact regular file chosen in the native save dialog. */
-export function writeDiagnosticArchive(destination: string, bytes: Buffer): void {
+export function writeDiagnosticArchive(
+  destination: string,
+  bytes: Buffer,
+  expected?: string | null,
+): void {
   let temporary: string | null = null;
   let temporaryIdentity: string | null = null;
   let descriptor: number | null = null;
@@ -61,6 +72,8 @@ export function writeDiagnosticArchive(destination: string, bytes: Buffer): void
       throw new Error('Unsafe archive destination');
     assertStoragePath(destination);
     const before = inspect(destination);
+    if (expected !== undefined && expected !== (before ? version(before) : null))
+      throw new Error('The reviewed archive destination changed');
     temporary = path.join(parent, `.${path.basename(destination)}.${randomUUID()}.tmp`);
     descriptor = fs.openSync(
       temporary,

@@ -299,9 +299,24 @@ jobs:
           & "$env:CI_OUTPUT/backend-publish/update/AhkManager.UpdateHost.exe" --self-test --root "$env:CI_OUTPUT/update-host-tests" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/update-host.log"
           if ($LASTEXITCODE -ne 0) { throw 'Update host policy checks failed.' }
 
+      - name: Build the self-contained Agent CLI and test its native protocol
+        id: agent-cli
+        if: ${{ !cancelled() && steps.production-backend.outcome == 'success' }}
+        run: |
+          dotnet restore AgentCli/ahk-manager.csproj --locked-mode --configfile NuGet.Config -r win-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Agent CLI dependency restore failed.' }
+          dotnet restore Tests.AgentCli/Tests.AgentCli.csproj --locked-mode --configfile NuGet.Config
+          if ($LASTEXITCODE -ne 0) { throw 'Agent CLI test dependency restore failed.' }
+          node.exe Presentation.Electron/scripts/format-dotnet.cjs --check AgentCli Tests.AgentCli
+          if ($LASTEXITCODE -ne 0) { throw 'Agent CLI C# formatting check failed.' }
+          dotnet run --project Tests.AgentCli/Tests.AgentCli.csproj -c Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'Agent CLI protocol tests failed.' }
+          dotnet publish AgentCli/ahk-manager.csproj -c Release -r win-x64 --self-contained true --no-restore -p:DebugType=None -p:DebugSymbols=false "-p:Version=$env:AHK_RELEASE_VERSION" "-p:SourceRevisionId=$env:AHK_SOURCE_COMMIT" -o "$env:CI_OUTPUT/backend-publish/agent"
+          if ($LASTEXITCODE -ne 0) { throw 'Agent CLI publish failed.' }
+
       - name: Build the portable application payload
         id: application-build
-        if: ${{ success() && steps.frontend-build.outcome == 'success' && steps.update-host.outcome == 'success' && steps.electron-runtime.outcome == 'success' }}
+        if: ${{ success() && steps.frontend-build.outcome == 'success' && steps.update-host.outcome == 'success' && steps.agent-cli.outcome == 'success' && steps.electron-runtime.outcome == 'success' }}
         working-directory: Presentation.Electron
         env:
           CSC_LINK: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.WINDOWS_CSC_LINK || '' }}
@@ -334,9 +349,9 @@ jobs:
           ./tools/Test-PortablePackage.ps1 -ArchivePath $portable -ManifestPath $manifest -OutputRoot "$env:CI_OUTPUT/portable-evidence"
           Get-FileHash -LiteralPath $portable -Algorithm SHA256 | Format-List | Out-File "$env:CI_OUTPUT/portable/SHA256.txt"
 
-      - name: Open the verified portable ZIP through its root launcher
+      - name: Test graphical startup and the Agent CLI from the verified portable ZIP
         if: ${{ !cancelled() && steps.portable-verify.outcome == 'success' }}
-        timeout-minutes: 5
+        timeout-minutes: 7
         run: |
           $portable = "$env:CI_OUTPUT/portable/AHK-Manager-$($env:AHK_RELEASE_VERSION)-Portable-x64.zip"
           $manifest = "$env:CI_OUTPUT/portable/ahk-manager-portable-release.json"

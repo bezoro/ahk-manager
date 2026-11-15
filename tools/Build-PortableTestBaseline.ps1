@@ -23,6 +23,8 @@ $backend = Join-Path $OutputRoot 'backend'
 if ($LASTEXITCODE -ne 0) { throw 'Portable baseline backend publish failed.' }
 & dotnet publish (Join-Path $repository 'UpdateHost/AhkManager.UpdateHost.csproj') -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:SourceRevisionId=$Commit" -o (Join-Path $backend 'update')
 if ($LASTEXITCODE -ne 0) { throw 'Portable baseline update host publish failed.' }
+& dotnet publish (Join-Path $repository 'AgentCli/ahk-manager.csproj') -c Release -r win-x64 --self-contained true --no-restore -p:DebugType=None -p:DebugSymbols=false "-p:Version=$Version" "-p:SourceRevisionId=$Commit" -o (Join-Path $backend 'agent')
+if ($LASTEXITCODE -ne 0) { throw 'Portable baseline Agent CLI publish failed.' }
 $environmentNames = @('AHK_FRONTEND_DIST', 'AHK_BACKEND_DIST', 'AHK_PACKAGE_OUT', 'AHK_RELEASE_VERSION', 'AHK_SOURCE_COMMIT')
 $previous = @{}
 foreach ($name in $environmentNames) { $previous[$name] = [Environment]::GetEnvironmentVariable($name) }

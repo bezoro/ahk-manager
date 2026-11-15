@@ -52,6 +52,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Update host publish failed: $LASTEXITCODE" }
     & (Join-Path $stageRoot 'backend/update/AhkManager.UpdateHost.exe') --self-test --root (Join-Path $stageRoot 'update-host-tests')
     if ($LASTEXITCODE -ne 0) { throw "Update host checks failed: $LASTEXITCODE" }
+    & dotnet.exe restore (Join-Path $repoRoot 'AgentCli/ahk-manager.csproj') --locked-mode --packages $PackagesPath --configfile (Join-Path $repoRoot 'NuGet.Config') -r win-x64
+    if ($LASTEXITCODE -ne 0) { throw "Agent CLI restore failed: $LASTEXITCODE" }
+    & dotnet.exe publish (Join-Path $repoRoot 'AgentCli/ahk-manager.csproj') -c Release -r win-x64 --self-contained true --no-restore '-p:DebugType=None' '-p:DebugSymbols=false' "-p:Version=$ReleaseVersion" "-p:SourceRevisionId=$SourceCommit" -o (Join-Path $stageRoot 'backend/agent') --nologo
+    if ($LASTEXITCODE -ne 0) { throw "Agent CLI publish failed: $LASTEXITCODE" }
 } finally {
     Pop-Location
     $env:AHK_RELEASE_VERSION = $previousReleaseVersion

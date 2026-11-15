@@ -128,6 +128,7 @@ export async function prepareUpdate(
   target: CachedPackage,
   installDirectory: string,
   parentStartedAtUtc: string,
+  quietAgentHost = false,
 ): Promise<PreparedUpdate> {
   if (
     !/^[a-f0-9-]{36}$/.test(operationId) ||
@@ -166,6 +167,7 @@ export async function prepareUpdate(
     installerPath: target.archivePath,
     installerSha256: target.sha256,
     version: target.version,
+    ...(quietAgentHost ? { quietAgentHost: true } : {}),
   };
   const bytes = Buffer.from(JSON.stringify(plan), 'utf8');
   const planPath = path.join(directory, 'plan.json');

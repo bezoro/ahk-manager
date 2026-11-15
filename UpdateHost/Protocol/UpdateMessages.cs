@@ -20,7 +20,9 @@ internal sealed record UpdatePlan(
     [property: JsonPropertyName("installerSha256")] string ArchiveSha256,
     string Version,
     CachedPackage? Fallback = null,
-    string? Deployment = null
+    string? Deployment = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        bool QuietAgentHost = false
 );
 
 internal sealed record UpdateReceipt(

@@ -4,13 +4,14 @@ const { spawnSync } = require('node:child_process');
 const repositoryRoot = path.resolve(__dirname, '../..');
 const checking = process.argv.includes('--check');
 const requested = process.argv.slice(2).filter((argument) => argument !== '--check');
-const projects = new Set(['Core', 'Backend', 'Tests.Backend', 'UpdateHost']);
+const defaultProjects = ['Core', 'Backend', 'Tests.Backend', 'UpdateHost'];
+const projects = new Set([...defaultProjects, 'AgentCli', 'Tests.AgentCli']);
 
 if (requested.some((project) => !projects.has(project))) {
   throw new Error(`Use --check and optional project names: ${[...projects].join(', ')}.`);
 }
 
-const selected = requested.length ? requested : [...projects];
+const selected = requested.length ? requested : defaultProjects;
 console.log(`${checking ? 'Checking' : 'Formatting'} ${selected.join(', ')} with CSharpier.`);
 const result = spawnSync(
   'dotnet',

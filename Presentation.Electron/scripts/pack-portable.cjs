@@ -100,6 +100,7 @@ function stagePortablePackage({ sourceRoot, launcherPath, outputRoot, version, c
     'App/resources/app-update.yml',
     'App/backend/AhkManager.Backend.exe',
     'App/backend/update/AhkManager.UpdateHost.exe',
+    'App/backend/agent/ahk-manager.exe',
   ])
     if (!seen.has(required.toLowerCase()))
       throw new Error(`The portable runtime is incomplete: ${required}.`);
@@ -109,6 +110,7 @@ function stagePortablePackage({ sourceRoot, launcherPath, outputRoot, version, c
     'App/resources/app-update.yml',
     'App/backend/AhkManager.Backend.exe',
     'App/backend/update/AhkManager.UpdateHost.exe',
+    'App/backend/agent/ahk-manager.exe',
   ])
     if (
       regular(

@@ -1,13 +1,18 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { readdirSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { AgentReceipts } from '../../src/main/agent-receipts.js';
+import { UpdateStore } from '../../src/main/updates/update-store.js';
+import { DataLocationController } from '../../src/main/desktop/data-location.js';
 import { resolveDeployment } from '../../src/main/storage/deployment.js';
 import {
   canKeepCurrentData,
   cancelPendingMove,
   completePendingDataMove,
+  DataMovePreparationCancelled,
   getStorageState,
   importLegacyUpdateChannel,
   prepareDataMove,
@@ -447,4 +452,185 @@ test('invalid legacy channel data is preserved and never committed into portable
   await assert.rejects(fs.stat(path.join(f.layout.updatesDirectory, 'update-channel.json')), {
     code: 'ENOENT',
   });
+});
+
+for (const action of ['explicit', 'default'] as const) {
+  test(`disconnect during ${action} data preparation leaves no published move or owned staging`, async (t) => {
+    const f = await fixture(t);
+    let alive = true;
+    let staging: string | undefined;
+    let drained = false;
+    let release!: () => void;
+    let entered!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const preparing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const data = new DataLocationController({ ...f.layout, defaultDataDirectory: f.target }, null, {
+      ready: () => true,
+      alive: () => alive,
+      quiesce: (value) => {
+        drained = value;
+      },
+      drain: async () => {},
+      chooseDirectory: async () => null,
+      preparePrivateDirectory: async (directory) => {
+        await f.preparePrivate(directory);
+        staging = directory;
+        entered();
+        await paused;
+      },
+      openDirectory: async () => {},
+      restart: async () => {},
+    });
+    const attempted = action === 'default' ? data.restoreDefault() : data.prepareExplicit(f.target);
+    await preparing;
+    assert.equal(drained, true);
+    alive = false;
+    release();
+    await assert.rejects(attempted, /cancelled/i);
+    assert.equal(data.active, false);
+    assert.equal(drained, false);
+    assert.equal(data.state.pendingDataDirectory, null);
+    assert.equal((await completePendingDataMove(f.layout)).dataDirectory, f.layout.dataDirectory);
+    assert.equal(await fs.readFile(f.marker, 'utf8'), f.initial);
+    assert.ok(staging);
+    await assert.rejects(fs.stat(staging), { code: 'ENOENT' });
+    await assert.rejects(fs.stat(f.target), { code: 'ENOENT' });
+  });
+}
+
+test('cancellation at the publication boundary removes only the owned unpublished files', async (t) => {
+  const f = await fixture(t);
+  let staging = '';
+  let sawWrittenMarker = false;
+  const prepared = prepareDataMove(
+    f.layout,
+    f.target,
+    async (directory) => {
+      staging = directory;
+      await f.preparePrivate(directory);
+    },
+    () => {
+      const temporary = readdirSync(f.root).find(
+        (name) => name.startsWith('.portable-data-move-') && name.endsWith('.tmp'),
+      );
+      if (!temporary || statSync(path.join(f.root, temporary)).size === 0) return true;
+      sawWrittenMarker = true;
+      return false;
+    },
+  );
+  await assert.rejects(
+    prepared,
+    (error) => error instanceof DataMovePreparationCancelled && error.cleanupConfirmed,
+  );
+  assert.equal(sawWrittenMarker, true);
+  assert.equal(getStorageState(f.layout).pendingDataDirectory, null);
+  await assert.rejects(fs.stat(staging), { code: 'ENOENT' });
+  assert.equal(
+    (await fs.readdir(f.root)).some((name) => name.endsWith('.tmp')),
+    false,
+  );
+});
+
+test('a cancelled stage with concurrently added contents remains intact and reports incomplete cleanup', async (t) => {
+  const f = await fixture(t);
+  let alive = true;
+  let preserved = '';
+  const prepared = prepareDataMove(
+    f.layout,
+    f.target,
+    async (directory) => {
+      await f.preparePrivate(directory);
+      preserved = path.join(directory, 'added-by-another-owner');
+      await fs.writeFile(preserved, 'keep');
+      alive = false;
+    },
+    () => alive,
+  );
+  await assert.rejects(
+    prepared,
+    (error) => error instanceof DataMovePreparationCancelled && !error.cleanupConfirmed,
+  );
+  assert.equal(getStorageState(f.layout).pendingDataDirectory, null);
+  assert.equal(await fs.readFile(preserved, 'utf8'), 'keep');
+});
+
+async function markRestart(
+  layout: ReturnType<typeof resolveDeployment>,
+  moveId: string,
+  destination: string,
+) {
+  const receipts = new AgentReceipts(new UpdateStore(layout.updatesDirectory));
+  const attempt = await receipts.begin(randomUUID(), 'old-host', {
+    kind: 'DataMove',
+    moveId,
+    destination,
+  });
+  if (attempt.kind !== 'DataMove') assert.fail('Expected a data move receipt');
+  await receipts.markDataMoveDispatch(attempt);
+  return attempt;
+}
+
+function reopenedMove(layout: ReturnType<typeof resolveDeployment>) {
+  const receipts = new AgentReceipts(new UpdateStore(layout.updatesDirectory));
+  return (operationId: string) =>
+    receipts.reconcile(operationId, {
+      generation: 'new-host',
+      version: '1.2.1',
+      directory: layout.dataDirectory,
+      ready: true,
+      active: false,
+    });
+}
+
+test('a later move to the same destination can confirm only its own relocation attempt', async (t) => {
+  const f = await fixture(t);
+  await prepareDataMove(f.layout, f.target, f.preparePrivate);
+  const former = await markRestart(f.layout, (await f.pending()).operationId, f.target);
+  await cancelPendingMove(f.layout);
+  await prepareDataMove(f.layout, f.target, f.preparePrivate);
+  const later = await markRestart(f.layout, (await f.pending()).operationId, f.target);
+  const relocated = await completePendingDataMove(f.layout);
+  const reconcile = reopenedMove(relocated);
+  assert.notEqual(former.moveId, later.moveId);
+  assert.equal((await reconcile(former.operationId)).outcome, 'Unknown');
+  assert.equal((await reconcile(later.operationId)).outcome, 'Confirmed');
+});
+
+test('clearing an interrupted move marker does not invent successful completion evidence', async (t) => {
+  const f = await fixture(t);
+  await prepareDataMove(f.layout, f.target, f.preparePrivate);
+  const pending = await f.pending();
+  const attempt = await markRestart(f.layout, pending.operationId, f.target);
+  await fs.cp(f.layout.profileDirectory, path.join(pending.stagingDirectory, 'Profile'), {
+    recursive: true,
+  });
+  await fs.cp(f.layout.updatesDirectory, path.join(pending.stagingDirectory, 'Updates'), {
+    recursive: true,
+  });
+  await fs.rename(pending.stagingDirectory, f.target);
+  const published = { ...JSON.parse(f.initial), dataDirectory: f.target };
+  await fs.writeFile(f.marker, JSON.stringify(published));
+  const recovered = await completePendingDataMove(resolveDeployment(f.executable, f.local));
+  assert.equal(getStorageState(recovered).pendingDataDirectory, null);
+  assert.equal((await reopenedMove(recovered)(attempt.operationId)).outcome, 'Unknown');
+});
+
+test('a refused completion proof write leaves the relocated data intact and the attempt unknown', async (t) => {
+  const f = await fixture(t);
+  await prepareDataMove(f.layout, f.target, f.preparePrivate);
+  const { operationId: moveId } = await f.pending();
+  const attempt = await markRestart(f.layout, moveId, f.target);
+  const existing = path.join('agent-operations', moveId + '-completed-data-move.json');
+  await fs.writeFile(path.join(f.layout.updatesDirectory, existing), 'unverified existing bytes');
+  const relocated = await completePendingDataMove(f.layout);
+  assert.equal(relocated.dataDirectory, f.target);
+  assert.equal(
+    await fs.readFile(path.join(relocated.updatesDirectory, existing), 'utf8'),
+    'unverified existing bytes',
+  );
+  assert.equal((await reopenedMove(relocated)(attempt.operationId)).outcome, 'Unknown');
 });

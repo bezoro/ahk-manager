@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AhkManager.UpdateHost", "Up
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AhkManager.Core", "Core\AhkManager.Core.csproj", "{9108544A-25CC-488C-8C13-88244B0EAE42}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ahk-manager", "AgentCli\ahk-manager.csproj", "{5426FF15-263A-4B65-87F7-0BB1072DC1A1}"
+EndProject
 Global
  GlobalSection(SolutionConfigurationPlatforms) = preSolution
   Release|x64 = Release|x64
@@ -23,5 +25,7 @@ Global
   {CEC222A9-4A86-47CF-9A85-A941D45727E0}.Release|x64.Build.0 = Release|x64
   {E55273C9-BE22-43FF-82DD-65996D7254A0}.Release|x64.ActiveCfg = Release|Any CPU
   {E55273C9-BE22-43FF-82DD-65996D7254A0}.Release|x64.Build.0 = Release|Any CPU
+  {5426FF15-263A-4B65-87F7-0BB1072DC1A1}.Release|x64.ActiveCfg = Release|Any CPU
+  {5426FF15-263A-4B65-87F7-0BB1072DC1A1}.Release|x64.Build.0 = Release|Any CPU
  EndGlobalSection
 EndGlobal
