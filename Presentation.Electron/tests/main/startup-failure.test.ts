@@ -12,6 +12,7 @@ import {
   startupFailureDirectory,
   type StartupFailureContext,
 } from '../../src/main/logging/startup-failure.js';
+import { LogonDeploymentError } from '../../src/main/desktop/logon-deployment.js';
 import { createDiagnosticArchive } from '../../src/main/logging/diagnostic-archive.js';
 import { unzipSync } from 'fflate';
 
@@ -195,4 +196,49 @@ test('an early administrator refusal is copyable and exported without touching p
   assert.doesNotMatch(exported, /do-not-export-secret/);
   assert.equal(fs.existsSync(context.layout.portableRoot), false);
   assert.equal(fs.existsSync(context.layout.dataDirectory), false);
+});
+
+test('logon resolution failure records only typed details and participates in legacy report retention', (t) => {
+  const { context } = fixture(t);
+  const legacy = recordStartupFailure(context);
+  assert.ok(legacy.file && legacy.directory);
+  context.login = true;
+  context.background = true;
+  context.layout = null;
+  const diagnostic = {
+    phase: 'PortableMarker',
+    reason: 'ResourceBusy',
+    attempts: 45,
+    durationMs: 44_000,
+    exhausted: true,
+  } as const;
+  context.error = Object.assign(new LogonDeploymentError(diagnostic), {
+    cause: new Error('private raw Windows path or filesystem response'),
+  });
+  const report = recordStartupFailure(context);
+  assert.ok(report.file);
+  const content = JSON.parse(report.text);
+  assert.deepEqual(content.error, {
+    name: 'LogonDeploymentError',
+    message: 'Manager could not resolve portable storage at sign-in.',
+    code: 'PortableDeploymentFailed',
+    diagnostic,
+  });
+  assert.doesNotMatch(report.text + report.summary, /private raw|filesystem response/);
+  assert.match(report.summary, /Reason: ResourceBusy/);
+  assert.match(report.summary, /Attempts: 45/);
+  assert.equal(content.deployment, null);
+
+  const malformedId = '11111111-1111-1111-1111-111111111111';
+  const malformed = path.join(
+    legacy.directory,
+    path.basename(report.file).replace(/-[0-9a-f-]{36}\.json$/, '-' + malformedId + '.json'),
+  );
+  content.id = malformedId;
+  content.error.diagnostic.attempts = 46;
+  fs.writeFileSync(malformed, JSON.stringify(content));
+  for (let index = 0; index < 12; index++) assert.ok(recordStartupFailure(context).file);
+  assert.equal(fs.existsSync(legacy.file), false);
+  assert.equal(fs.existsSync(malformed), true);
+  assert.equal(fs.readdirSync(legacy.directory).length, 11);
 });

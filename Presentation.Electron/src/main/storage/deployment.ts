@@ -27,6 +27,36 @@ export interface DeploymentLayout {
 }
 
 const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+class StoragePathRejected extends Error {}
+class StorageSnapshotChanged extends Error {}
+class PortableMarkerMissing extends Error {}
+
+export const deploymentPhases = ['ApplicationPath', 'PortableMarker', 'DataDirectory'] as const;
+export type DeploymentPhase = (typeof deploymentPhases)[number];
+export const deploymentReasons = [
+  'ResourceBusy',
+  'MarkerMissing',
+  'SnapshotChanged',
+  'AccessDenied',
+  'InvalidPath',
+  'InvalidConfiguration',
+  'IoFailure',
+] as const;
+export type DeploymentReason = (typeof deploymentReasons)[number];
+
+export function classifyDeploymentFailure(
+  phase: DeploymentPhase,
+  error: unknown,
+): DeploymentReason {
+  if (error instanceof StorageSnapshotChanged) return 'SnapshotChanged';
+  if (error instanceof PortableMarkerMissing) return 'MarkerMissing';
+  if (error instanceof StoragePathRejected) return 'InvalidPath';
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (code === 'EBUSY') return 'ResourceBusy';
+  if (code === 'EACCES' || code === 'EPERM') return 'AccessDenied';
+  if (typeof code === 'string') return 'IoFailure';
+  return phase === 'PortableMarker' ? 'InvalidConfiguration' : 'InvalidPath';
+}
 export const samePath = (first: string, second: string): boolean =>
   process.platform === 'win32'
     ? path.resolve(first).toLowerCase() === path.resolve(second).toLowerCase()
@@ -45,9 +75,10 @@ export function assertStoragePath(value: string): void {
   for (let current = path.resolve(value); ; current = path.dirname(current)) {
     try {
       const info = fs.lstatSync(current);
-      if (info.isSymbolicLink()) throw new Error('The data path contains a redirected directory.');
+      if (info.isSymbolicLink())
+        throw new StoragePathRejected('The data path contains a redirected directory.');
       if (current !== path.resolve(value) && !info.isDirectory())
-        throw new Error('A data path parent is not a directory.');
+        throw new StoragePathRejected('A data path parent is not a directory.');
     } catch (error) {
       if (!missing(error)) throw error;
     }
@@ -70,8 +101,8 @@ export function readStorageJson(file: string, maximum: number): unknown {
   try {
     const opened = fs.fstatSync(handle, { bigint: true });
     if (opened.dev !== before.dev || opened.ino !== before.ino)
-      throw new Error('The data settings file changed while it was opened.');
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(fs.readFileSync(handle));
+      throw new StorageSnapshotChanged('The data settings file changed while it was opened.');
+    const contents = fs.readFileSync(handle);
     const after = fs.fstatSync(handle, { bigint: true });
     const current = fs.lstatSync(file, { bigint: true });
     if (
@@ -81,8 +112,8 @@ export function readStorageJson(file: string, maximum: number): unknown {
       current.dev !== before.dev ||
       current.ino !== before.ino
     )
-      throw new Error('The data settings file changed while it was read.');
-    return parseStorageJson(text);
+      throw new StorageSnapshotChanged('The data settings file changed while it was read.');
+    return parseStorageJson(new TextDecoder('utf-8', { fatal: true }).decode(contents));
   } finally {
     fs.closeSync(handle);
   }
@@ -168,7 +199,9 @@ export function parsePortableConfiguration(value: unknown): PortableConfiguratio
 export function resolveDeployment(
   executable: string,
   localAppDataDirectory: string,
+  enterPhase?: (phase: DeploymentPhase) => void,
 ): DeploymentLayout {
+  enterPhase?.('ApplicationPath');
   if (!path.isAbsolute(executable) || !path.isAbsolute(localAppDataDirectory))
     throw new Error('Absolute application and local data paths are required.');
   const applicationDirectory = path.dirname(executable);
@@ -179,15 +212,17 @@ export function resolveDeployment(
     throw new Error(
       'Manager must run from the App folder of a complete portable package. Extract the portable ZIP and open its root launcher.',
     );
+  enterPhase?.('PortableMarker');
   let configuration: PortableConfiguration;
   try {
     configuration = parsePortableConfiguration(readStorageJson(configurationPath, 4096));
   } catch (error) {
     if (!missing(error)) throw error;
-    throw new Error(
+    throw new PortableMarkerMissing(
       'The portable data settings file is missing. Restore portable.json from the complete portable package before opening Manager.',
     );
   }
+  enterPhase?.('DataDirectory');
   assertStoragePath(portableRoot);
   const dataDirectory = validateDataDirectory(portableRoot, configuration.dataDirectory);
   return {

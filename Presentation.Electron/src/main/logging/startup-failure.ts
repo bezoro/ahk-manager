@@ -3,6 +3,10 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { assertStoragePath, type DeploymentLayout } from '../storage/deployment.js';
 import { PortableInitializationError } from '../desktop/storage-bootstrap.js';
+import {
+  LogonDeploymentError,
+  validLogonDeploymentDiagnostic,
+} from '../desktop/logon-deployment.js';
 import { parseStorageJson } from '../storage/json.js';
 
 const applicationId = 'Bezoro.AhkManager.Electron';
@@ -93,7 +97,18 @@ function inspect(file: string): fs.BigIntStats | null {
     )
       return null;
     const problem = value.error;
-    if (exact(problem, ['name', 'message', 'code', 'diagnostic'])) {
+    if (
+      exact(problem, ['name', 'message', 'code', 'diagnostic']) &&
+      problem.name === 'LogonDeploymentError'
+    ) {
+      if (
+        typeof problem.message !== 'string' ||
+        problem.code !== 'PortableDeploymentFailed' ||
+        !exact(problem.diagnostic, ['phase', 'reason', 'attempts', 'durationMs', 'exhausted']) ||
+        !validLogonDeploymentDiagnostic(problem.diagnostic)
+      )
+        return null;
+    } else if (exact(problem, ['name', 'message', 'code', 'diagnostic'])) {
       if (
         problem.name !== 'PortableInitializationError' ||
         typeof problem.message !== 'string' ||
@@ -143,6 +158,7 @@ export function recordStartupFailure(context: StartupFailureContext): StartupFai
   const id = randomUUID();
   const initialization =
     context.error instanceof PortableInitializationError ? context.error : null;
+  const logon = context.error instanceof LogonDeploymentError ? context.error : null;
   const report = {
     schemaVersion: 1,
     applicationId,
@@ -167,19 +183,26 @@ export function recordStartupFailure(context: StartupFailureContext): StartupFai
           code: initialization.code,
           diagnostic: initialization.diagnostic,
         }
-      : {
-          name: 'StartupFailure',
-          message: 'Manager could not complete startup.',
-          code:
-            context.error &&
-            typeof context.error === 'object' &&
-            'code' in context.error &&
-            ['ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS'].includes(
-              String(context.error.code),
-            )
-              ? String(context.error.code)
-              : null,
-        },
+      : logon
+        ? {
+            name: logon.name,
+            message: logon.message,
+            code: 'PortableDeploymentFailed',
+            diagnostic: logon.diagnostic,
+          }
+        : {
+            name: 'StartupFailure',
+            message: 'Manager could not complete startup.',
+            code:
+              context.error &&
+              typeof context.error === 'object' &&
+              'code' in context.error &&
+              ['ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS'].includes(
+                String(context.error.code),
+              )
+                ? String(context.error.code)
+                : null,
+          },
   };
   const text = JSON.stringify(report, null, 2) + '\n';
   const diagnostic = initialization?.diagnostic;
@@ -200,7 +223,16 @@ export function recordStartupFailure(context: StartupFailureContext): StartupFai
       ]
         .filter(Boolean)
         .join('\n')
-    : 'Manager startup did not complete.';
+    : logon
+      ? [
+          logon.message,
+          `Phase: ${logon.diagnostic.phase}`,
+          `Reason: ${logon.diagnostic.reason}`,
+          `Attempts: ${logon.diagnostic.attempts}`,
+          `Elapsed: ${logon.diagnostic.durationMs} ms`,
+          `Retry budget exhausted: ${logon.diagnostic.exhausted ? 'yes' : 'no'}`,
+        ].join('\n')
+      : 'Manager startup did not complete.';
   let descriptor: number | null = null;
   try {
     if (

@@ -64,6 +64,7 @@ import { shutdownAndCommitUpdate } from './updates/update-shutdown.js';
 
 import { serveAssets, lockSession } from './desktop/assets.js';
 import { createMainWindow } from './desktop/main-window.js';
+import { resolveStartupDeployment } from './desktop/logon-deployment.js';
 import { createNativeDialogs } from './desktop/native-dialogs.js';
 import { DesktopTheme } from './desktop/theme.js';
 import { createWindowDiagnostics } from './desktop/window-diagnostics.js';
@@ -141,7 +142,12 @@ export function startManager(): void {
   let storageError: string | null = null;
   let storageRestarting = false;
   try {
-    deployment = resolveDeployment(app.getPath('exe'), localAppData);
+    deployment = resolveStartupDeployment(
+      app.getPath('exe'),
+      localAppData,
+      process.argv,
+      app.isPackaged,
+    );
     bootstrapLayout = deployment;
     initializePortableStorage(deployment);
   } catch (error) {
