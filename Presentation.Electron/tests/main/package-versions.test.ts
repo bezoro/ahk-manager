@@ -66,6 +66,8 @@ test('the production Windows resource editor uses highestAvailable while preserv
       path.join(backend, 'update', 'AhkManager.UpdateHost.exe'),
       'inert staged fixture',
     );
+    fs.mkdirSync(path.join(backend, 'agent'));
+    fs.writeFileSync(path.join(backend, 'agent', 'ahk-manager.exe'), 'inert staged fixture');
     process.env.AHK_FRONTEND_DIST = root;
     process.env.AHK_BACKEND_DIST = backend;
     process.env.AHK_PACKAGE_OUT = path.join(root, 'output');

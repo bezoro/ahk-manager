@@ -46,7 +46,7 @@ if ($fields.Count -ne $expected.Count + 5 -or $fields[0] -cne 'no-console' -or $
 if ($fields[1] -cne 'administrator') { throw 'The actual portable launcher child did not inherit an elevated Windows token.' }
 for ($index = 0; $index -lt $expected.Count; $index++) { if ($fields[$index + 4] -cne $expected[$index]) { throw "Portable argument $index changed during forwarding." } }
 [IO.File]::Delete((Join-Path $root 'portable.json'))
-foreach ($flag in @('--login', '--background')) {
+foreach ($flag in @('--login', '--background', '--agent-host')) {
     $quiet = [Diagnostics.ProcessStartInfo]::new($launcher)
     $quiet.UseShellExecute = $false
     $quiet.WorkingDirectory = $env:TEMP
@@ -55,6 +55,6 @@ foreach ($flag in @('--login', '--background')) {
     try { if (-not $process.WaitForExit(10000) -or $process.ExitCode -eq 0) { throw "A missing portable marker must fail quietly for $flag, without a confirmation dialog." } }
     finally { $process.Dispose() }
 }
-$summary = [ordered]@{ passed = $true; gui = $true; consoleCreated = $false; targetVerified = $true; workingDirectoryVerified = $true; arguments = $expected.Count; launcherExitCode = 0; quietStartupFailureCases = 2; administratorTestHost = $true; elevatedChildTokenVerified = $true; mediumTokenUacObserved = $false; requestedExecutionLevel = 'requireAdministrator'; uiAccess = $false; embeddedManifestVerified = $true; launcherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant(); manifestSha256 = (Get-FileHash -LiteralPath ($LauncherPath + '.manifest.xml') -Algorithm SHA256).Hash.ToLowerInvariant() }
+$summary = [ordered]@{ passed = $true; gui = $true; consoleCreated = $false; targetVerified = $true; workingDirectoryVerified = $true; arguments = $expected.Count; launcherExitCode = 0; quietStartupFailureCases = 3; administratorTestHost = $true; elevatedChildTokenVerified = $true; mediumTokenUacObserved = $false; requestedExecutionLevel = 'requireAdministrator'; uiAccess = $false; embeddedManifestVerified = $true; launcherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant(); manifestSha256 = (Get-FileHash -LiteralPath ($LauncherPath + '.manifest.xml') -Algorithm SHA256).Hash.ToLowerInvariant() }
 [IO.File]::WriteAllText((Join-Path $OutputRoot 'launcher-summary.json'), ($summary | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Write-Host "Portable GUI launcher passed: elevated child token, exact target, root working directory, no console, and $($expected.Count) arguments."

@@ -18,6 +18,10 @@ Manager always runs as administrator. The root launcher requests UAC approval wh
 
 Closing the window can leave Manager in the notification area. **Exit and keep scripts running** preserves independent scripts. **Stop scripts and exit** requests normal shutdown for verified processes and keeps Manager open if it cannot confirm the result. Adding or inspecting files does not execute them.
 
+## Command line
+
+The portable package includes `App/backend/agent/ahk-manager.exe`. Run `commands` to list the available actions. An elevated shell for the same Windows user and session can start Manager without a window, use the catalog and update controls, or exit from the notification area. See [CLI.md](CLI.md) for invocation, permissions, and result codes.
+
 ## Data, cloud folders and moving the app
 
 By default, `Data` beside the launcher contains `Profile`, `Chromium`, `Updates` and `Logs`. **Preferences > Data location** can move it to another dedicated local folder. Script files remain at their original paths; they do not have to be inside `Data`.

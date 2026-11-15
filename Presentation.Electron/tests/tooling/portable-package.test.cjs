@@ -23,6 +23,7 @@ function fixture() {
     'resources/app-update.yml',
     'backend/AhkManager.Backend.exe',
     'backend/update/AhkManager.UpdateHost.exe',
+    'backend/agent/ahk-manager.exe',
     'locales/en-US.pak',
   ]) {
     const file = path.join(sourceRoot, relative);
@@ -48,7 +49,7 @@ test('portable inventory binds every copied runtime file and excludes mutable us
   assert.equal(result.updateProtocol, 2);
   assert.equal(result.version, value.version);
   assert.equal(result.commit, value.commit);
-  assert.equal(result.files.length, 8);
+  assert.equal(result.files.length, 9);
   assert.deepEqual(
     result.files.map((file) => file.path),
     result.files.map((file) => file.path).sort(),
@@ -101,6 +102,7 @@ test('release identity and required runtime files are mandatory', () => {
     'resources/app.asar',
     'resources/app-update.yml',
     'backend/update/AhkManager.UpdateHost.exe',
+    'backend/agent/ahk-manager.exe',
   ]) {
     const value = fixture();
     fs.rmSync(path.join(value.sourceRoot, relative));

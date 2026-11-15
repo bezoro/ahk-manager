@@ -19,6 +19,10 @@ if (sourceCommit !== null && !/^[0-9a-f]{40}$/.test(sourceCommit))
   throw new Error('Invalid source commit');
 if (!fs.existsSync(path.join(backend, 'update', 'AhkManager.UpdateHost.exe')))
   throw new Error('The standalone update host must be staged under backend/update');
+if (
+  !fs.statSync(path.join(backend, 'agent', 'ahk-manager.exe'), { throwIfNoEntry: false })?.isFile()
+)
+  throw new Error('The Windows CLI must be staged under backend/agent');
 const signed = !!process.env.CSC_LINK;
 const publisherName = process.env.AHK_PUBLISHER_NAME || null;
 if (

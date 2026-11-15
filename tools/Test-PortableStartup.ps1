@@ -222,8 +222,11 @@ finally {
         finally { $session.Process.Dispose() }
     }
     if (-not $summary.failure -and -not $summary.shutdownFailure -and $summary.shutdown -ceq 'Confirmed') {
-        $summary.phase = 'verify-isolation'
+        $summary.phase = 'agent-cli'
         try {
+            Import-Module (Join-Path $PSScriptRoot 'test-support/PortableAgentCli.psm1') -Force
+            Test-PortableAgentCli -Root $portableRoot -EvidenceRoot $OutputRoot -Version $Version
+            $summary.phase = 'verify-isolation'
             Assert-NoPortableRegistration $sid
             $summary.phase = 'complete'
         }
