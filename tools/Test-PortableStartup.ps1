@@ -222,9 +222,12 @@ finally {
         finally { $session.Process.Dispose() }
     }
     if (-not $summary.failure -and -not $summary.shutdownFailure -and $summary.shutdown -ceq 'Confirmed') {
-        $summary.phase = 'agent-cli'
+        $summary.phase = 'logon-bootstrap'
         try {
             Import-Module (Join-Path $PSScriptRoot 'test-support/PortableAgentCli.psm1') -Force
+            Assert-PortablePath (Join-Path $portableRoot 'portable.json') File
+            Test-PortableLogonBootstrap -Root $portableRoot -EvidenceRoot $OutputRoot -Version $Version -DataRoot $dataRoot
+            $summary.phase = 'agent-cli'
             Test-PortableAgentCli -Root $portableRoot -EvidenceRoot $OutputRoot -Version $Version
             $summary.phase = 'verify-isolation'
             Assert-NoPortableRegistration $sid

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -26,7 +27,7 @@ async function waitFor<T>(read: () => T | undefined | Promise<T | undefined>): P
   throw new Error('The fixture did not reach the expected state.');
 }
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, busyLogonMarker = false) {
   const staging = process.env.AHK_DIAGNOSTICS_TEST_ROOT;
   assert.ok(staging && path.isAbsolute(staging));
   const root = await fs.mkdtemp(path.join(staging, 'agent-application-'));
@@ -138,8 +139,13 @@ async function fixture(t: TestContext) {
     getVersion: () => '1.2.1',
     getAppPath: () => root,
     getPath: (name: string) => (name === 'exe' ? executable : local),
-    setPath() {},
-    requestSingleInstanceLock: () => true,
+    setPath(name: string, directory: string) {
+      if (busyLogonMarker) events.push(name + '=' + directory);
+    },
+    requestSingleInstanceLock: () => {
+      if (busyLogonMarker) events.push('instance.lock');
+      return true;
+    },
     whenReady: async () => {},
     quit: () => {
       events.push('app.quit');
@@ -207,7 +213,12 @@ async function fixture(t: TestContext) {
         initialize() {}
       },
     },
-    './desktop/storage-bootstrap.js': { initializePortableStorage() {} },
+    './desktop/storage-bootstrap.js': {
+      initializePortableStorage() {
+        if (busyLogonMarker) events.push('storage.initialize');
+      },
+    },
+    './desktop/portable-search-shortcut.js': { ensurePortableSearchShortcut: async () => {} },
     './storage/portable-storage-lease.js': {
       acquirePortableStorageLease: async () => ({ close: async () => {} }),
     },
@@ -269,7 +280,26 @@ async function fixture(t: TestContext) {
   });
   Reflect.set(globalThis, bridge, mocks);
   Reflect.set(process, 'resourcesPath', root);
-  process.argv = [...argv, '--agent-host'];
+  process.argv = busyLogonMarker
+    ? [executable, '--login', '--background']
+    : [...argv, '--agent-host'];
+  if (busyLogonMarker) {
+    const open = fsSync.openSync;
+    let busy = true;
+    t.mock.method(fsSync, 'openSync', (...args: Parameters<typeof open>) => {
+      if (args[0] === layout.configurationPath) {
+        events.push(busy ? 'marker.busy' : 'marker.open');
+        if (busy) {
+          busy = false;
+          throw Object.assign(new Error('fixture sharing violation'), {
+            code: 'EBUSY',
+            syscall: 'open',
+          });
+        }
+      }
+      return open(...args);
+    });
+  }
   const request = (command: string, args: Record<string, unknown> = {}) =>
     dispatch!({ protocol: 1, requestId: randomUUID(), command, arguments: args }, () => true);
   (requireFixture(bundle) as typeof import('../../src/main/application.js')).startManager();
@@ -280,7 +310,7 @@ async function fixture(t: TestContext) {
     const status = await request('app.status');
     return (status.result as { ready: boolean }).ready ? status : undefined;
   });
-  assert.equal(events.includes('window.create'), false);
+  if (!busyLogonMarker) assert.equal(events.includes('window.create'), false);
   return { events, layout, request, menu: () => menu };
 }
 
@@ -332,4 +362,17 @@ test('a cancelled restart receipt remains readable during a fresh explicit retry
   );
   await second.afterReply!(true);
   assert.ok(f.events.includes('app.relaunch'), f.events.join(', '));
+});
+
+test('registered portable logon recovers a busy configuration before any native bootstrap or instance lock', async (t) => {
+  if (process.platform !== 'win32') return t.skip('Packaged Windows logon only');
+  const f = await fixture(t, true);
+  assert.deepEqual(f.events.slice(0, 5), [
+    'marker.busy',
+    'marker.open',
+    'storage.initialize',
+    'userData=' + f.layout.chromiumDirectory,
+    'instance.lock',
+  ]);
+  assert.equal(f.events.filter((event) => event === 'storage.initialize').length, 1);
 });
