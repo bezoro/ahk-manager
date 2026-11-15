@@ -100,6 +100,7 @@ export function serveAgentTransport(
   const frames = new AgentFrameReader();
   const tracking = new Map<string, Tracking>();
   const expiredReceipts = new Map<string, 'waiting' | 'consumed'>();
+  let inFlight = 0;
   let closed = false;
 
   function disconnect(error?: unknown): void {
@@ -116,10 +117,11 @@ export function serveAgentTransport(
 
   async function respond(value: AgentRequest): Promise<void> {
     const key = value.requestId;
-    if (tracking.has(key) || expiredReceipts.has(key) || tracking.size >= MAX_IN_FLIGHT)
+    if (tracking.has(key) || expiredReceipts.has(key) || inFlight >= MAX_IN_FLIGHT)
       throw new Error('Invalid agent concurrency.');
     const pending: Tracking = { canceled: false };
     tracking.set(key, pending);
+    inFlight++;
     let reply: AgentReply;
     try {
       reply = await dispatch(
@@ -145,18 +147,22 @@ export function serveAgentTransport(
       frame = agentFrame({ ...identity, ...reply });
     }
     const receipt = new Promise<boolean>((resolve) => {
+      const settle = (delivered: boolean) => {
+        // Release admission before the frame reader handles the next frame in this chunk.
+        // Keep the identity until afterReply starts so its liveness check still works.
+        pending.acknowledge = undefined;
+        inFlight--;
+        clearTimeout(timer);
+        resolve(delivered);
+      };
       const timer = setTimeout(() => {
         // The native relay can still be finishing its own receipt wait.
         if (expiredReceipts.size >= MAX_EXPIRED_RECEIPTS)
           expiredReceipts.delete(expiredReceipts.keys().next().value!);
         expiredReceipts.set(key, 'waiting');
-        pending.acknowledge = undefined;
-        resolve(false);
+        settle(false);
       }, ACK_DEADLINE_MS);
-      pending.acknowledge = (delivered) => {
-        clearTimeout(timer);
-        resolve(delivered);
-      };
+      pending.acknowledge = settle;
     });
     output.write(frame);
     const delivered = await receipt;

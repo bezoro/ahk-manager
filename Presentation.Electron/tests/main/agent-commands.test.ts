@@ -302,6 +302,61 @@ test('private cancellation invalidates preparation and only a matching delivery 
   }
 });
 
+test('acknowledging a request admits the next request in the same chunk at capacity', async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const reader = new AgentFrameReader();
+  const responses: unknown[] = [];
+  const completed: { requestId: string; delivered: boolean; alive: boolean }[] = [];
+  const failures: unknown[] = [];
+  const requests = Array.from({ length: 9 }, () => ({
+    ...agentRequest('respond'),
+    requestId: randomUUID(),
+  }));
+  const first = requests[0]!;
+  const ninth = requests[8]!;
+  const acknowledge = (requestId: string) =>
+    agentFrame({ protocol: 1, requestId, delivered: true });
+  const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
+  output.on('data', (chunk: Buffer) => reader.push(chunk, (value) => responses.push(value)));
+  const close = serveAgentTransport(
+    input,
+    output,
+    { version: '1.2.1', generation: 'fixture' },
+    async ({ requestId }, alive) => ({
+      ...ok(),
+      afterReply: (delivered) => {
+        completed.push({ requestId, delivered, alive: alive() });
+      },
+    }),
+    () => {},
+    (error) => failures.push(error),
+  );
+  try {
+    input.write(Buffer.concat(requests.slice(0, 8).map(agentFrame)));
+    await drain();
+    assert.equal(responses.length, 8);
+
+    input.write(Buffer.concat([acknowledge(first.requestId), agentFrame(ninth)]));
+    await drain();
+    assert.deepEqual(failures, []);
+    assert.equal(responses.length, 9);
+    assert.equal((responses.at(-1) as { requestId: string }).requestId, ninth.requestId);
+    input.write(acknowledge(ninth.requestId));
+    await drain();
+    assert.deepEqual(
+      completed,
+      [first, ninth].map(({ requestId }) => ({
+        requestId,
+        delivered: true,
+        alive: true,
+      })),
+    );
+  } finally {
+    close();
+  }
+});
+
 test('a late receipt cannot enable a timed-out effect or disconnect the next request', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const input = new PassThrough();
