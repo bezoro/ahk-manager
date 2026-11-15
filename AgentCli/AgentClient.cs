@@ -11,6 +11,7 @@ internal sealed class AgentClient(AgentLayout layout, AgentPeer local)
 
     internal async Task<AgentResponse> Invoke(
         AgentRequest request,
+        byte[] payload,
         bool start,
         CancellationToken ct
     )
@@ -19,7 +20,7 @@ internal sealed class AgentClient(AgentLayout layout, AgentPeer local)
             return (await EnsureReady(ct)) with { RequestId = request.RequestId };
         if (start)
             _ = await EnsureReady(ct);
-        return await Send(request, TimeSpan.FromSeconds(120), ct)
+        return await Send(request, payload, TimeSpan.FromSeconds(120), ct)
             ?? throw new AgentFailure("HostUnavailable");
     }
 
@@ -94,11 +95,10 @@ internal sealed class AgentClient(AgentLayout layout, AgentPeer local)
     {
         try
         {
+            status = status with { RequestId = Guid.NewGuid() };
             return await Send(
-                status with
-                {
-                    RequestId = Guid.NewGuid(),
-                },
+                status,
+                JsonSerializer.SerializeToUtf8Bytes(status, AgentJson.Default.AgentRequest),
                 TimeSpan.FromSeconds(5),
                 ct
             );
@@ -154,14 +154,13 @@ internal sealed class AgentClient(AgentLayout layout, AgentPeer local)
             throw new AgentFailure("StartupFailed");
     }
 
-    async Task<AgentResponse?> Send(AgentRequest request, TimeSpan budget, CancellationToken ct)
+    async Task<AgentResponse?> Send(
+        AgentRequest request,
+        byte[] payload,
+        TimeSpan budget,
+        CancellationToken ct
+    )
     {
-        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
-            request,
-            AgentJson.Default.AgentRequest
-        );
-        if (payload.Length > AgentProtocol.MaxRequest)
-            throw new AgentFailure("InvalidInput");
         using var pipe = await Connect(ct);
         if (pipe is null)
             return null;

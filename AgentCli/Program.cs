@@ -82,20 +82,26 @@ internal static class Program
                 );
             }
             var options = await Parse(args, stopping.Token);
-            using var local = new AgentPeer(Environment.ProcessId);
-            if (!local.Administrator)
-                throw new AgentFailure("ElevationRequired");
             var request = new AgentRequest(
                 AgentProtocol.Version,
                 requestId,
                 args[0],
                 options.Arguments
             );
+            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
+                request,
+                AgentJson.Default.AgentRequest
+            );
+            if (payload.Length > AgentProtocol.MaxRequest)
+                throw new AgentFailure("InvalidInput");
+            using var local = new AgentPeer(Environment.ProcessId);
+            if (!local.Administrator)
+                throw new AgentFailure("ElevationRequired");
             return Write(
                 await new AgentClient(
                     AgentLayout.FromExecutable(local.Stamp.Executable),
                     local
-                ).Invoke(request, options.Start, stopping.Token)
+                ).Invoke(request, payload, options.Start, stopping.Token)
             );
         }
         catch (Exception ex) when (AgentFailure.Expected(ex))
