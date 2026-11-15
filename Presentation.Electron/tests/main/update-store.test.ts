@@ -66,6 +66,111 @@ async function linkOrSkip(t: TestContext, target: string, link: string): Promise
   }
 }
 
+function changeDuringHash(
+  t: TestContext,
+  file: string,
+  changes: ReadonlyMap<number, () => Promise<void>>,
+): () => number {
+  const lstat = fs.lstat;
+  let inspected = 0;
+  t.mock.method(fs, 'lstat', async (...args: Parameters<typeof lstat>) => {
+    if (args[0] === file) await changes.get(++inspected)?.();
+    return lstat(...args);
+  });
+  return () => inspected;
+}
+
+test('a verified file survives one timestamp-only change during a full read', async (t) => {
+  const { store, source, body } = await fixture(t);
+  const inspected = changeDuringHash(
+    t,
+    source,
+    new Map([[2, () => fs.utimes(source, 1_700_000_100, 1_700_000_100)]]),
+  );
+  assert.equal(await store.hash(source), sha(body));
+  assert.equal(inspected(), 4);
+  assert.deepEqual(await fs.readFile(source), body);
+});
+
+test('a second stable read rejects different same-size bytes after timestamp drift', async (t) => {
+  const { store, source, body } = await fixture(t);
+  const other = Buffer.alloc(body.length, 0x41);
+  const inspected = changeDuringHash(
+    t,
+    source,
+    new Map([
+      [
+        2,
+        async () => {
+          await fs.writeFile(source, other);
+          await fs.utimes(source, 1_700_000_100, 1_700_000_100);
+        },
+      ],
+    ]),
+  );
+  await assert.rejects(store.hash(source), /changed during verification/);
+  assert.equal(inspected(), 4);
+  assert.deepEqual(await fs.readFile(source), other);
+});
+
+test('repeated timestamp drift rejects the second read even with identical bytes', async (t) => {
+  const { store, source, body } = await fixture(t);
+  const inspected = changeDuringHash(
+    t,
+    source,
+    new Map([
+      [2, () => fs.utimes(source, 1_700_000_100, 1_700_000_100)],
+      [4, () => fs.utimes(source, 1_700_000_200, 1_700_000_200)],
+    ]),
+  );
+  await assert.rejects(store.hash(source), /changed during verification/);
+  assert.equal(inspected(), 4);
+  assert.deepEqual(await fs.readFile(source), body);
+});
+
+test('an identical replacement file is refused without a retry', async (t) => {
+  const { store, root, source, body } = await fixture(t);
+  const inspected = changeDuringHash(
+    t,
+    source,
+    new Map([
+      [
+        2,
+        async () => {
+          await fs.rename(source, path.join(root, 'renamed-owned-fixture.zip'));
+          await fs.writeFile(source, body);
+        },
+      ],
+    ]),
+  );
+  await assert.rejects(store.hash(source), /changed during verification/);
+  assert.equal(inspected(), 2);
+});
+
+test('a read error closes its retained handle without a retry', async (t) => {
+  const { store, source } = await fixture(t);
+  const open = fs.open;
+  let opened = 0,
+    closed = 0;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+    const file = await open(...args);
+    if (args[0] !== source) return file;
+    opened++;
+    const close = file.close.bind(file);
+    t.mock.method(file, 'read', async () => {
+      throw Object.assign(new Error('fixture read failure'), { code: 'EIO' });
+    });
+    t.mock.method(file, 'close', async () => {
+      closed++;
+      await close();
+    });
+    return file;
+  });
+  await assert.rejects(store.hash(source), { code: 'EIO' });
+  assert.equal(opened, 1);
+  assert.equal(closed, 1);
+});
+
 test('real archive bytes and receipt hashes are verified before becoming a cached version', async (t) => {
   const { store, source, body } = await fixture(t);
   const value = await cache(store, '1.2.4', source, sha(body), body.length);

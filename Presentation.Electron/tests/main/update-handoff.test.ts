@@ -32,13 +32,14 @@ async function fixture(t: TestContext) {
   return { store, control, directory, commit, cancel, operationId, parentStartedAtUtc };
 }
 
-test('the copied update host starts in its operation folder even when Manager is running from App', async (t) => {
+async function portableFixture(t: TestContext) {
   const f = await fixture(t);
   const store = new UpdateStore(path.join(f.store.root, 'Data', 'Updates'));
   const application = path.join(f.store.root, 'App');
   const helper = path.join(application, 'backend', 'update', 'AhkManager.UpdateHost.exe');
   await fs.mkdir(path.dirname(helper), { recursive: true });
-  await fs.writeFile(helper, 'immutable helper fixture');
+  const helperBytes = Buffer.from('immutable helper fixture');
+  await fs.writeFile(helper, helperBytes);
   const archivePath = path.join(store.root, 'installers', '1.6.0', 'archive.zip');
   const contents = Buffer.from('immutable archive fixture');
   await fs.mkdir(path.dirname(archivePath), { recursive: true });
@@ -60,6 +61,11 @@ test('the copied update host starts in its operation folder even when Manager is
       },
     }),
   );
+  return { store, application, helper, helperBytes, contents, archivePath };
+}
+
+test('the copied update host starts in its operation folder even when Manager is running from App', async (t) => {
+  const { store, application, contents, archivePath } = await portableFixture(t);
   const operationId = randomUUID();
   const directory = path.join(store.root, 'operations', operationId);
   let unref = 0;
@@ -124,6 +130,42 @@ test('the copied update host starts in its operation folder even when Manager is
   } finally {
     process.chdir(original);
   }
+});
+
+test('prepareUpdate dispatches nothing when a second helper read disagrees', async (t) => {
+  const { store, application, helper, helperBytes, contents, archivePath } =
+    await portableFixture(t);
+  const lstat = fs.lstat;
+  let helperInspections = 0;
+  t.mock.method(fs, 'lstat', async (...args: Parameters<typeof lstat>) => {
+    if (args[0] === helper && ++helperInspections === 2) {
+      await fs.writeFile(helper, Buffer.alloc(helperBytes.length, 0x41));
+      await fs.utimes(helper, 1_700_000_100, 1_700_000_100);
+    }
+    return lstat(...args);
+  });
+  const spawn = t.mock.method(childProcess, 'spawn', () =>
+    assert.fail('unverified helper must not start'),
+  );
+  await assert.rejects(
+    prepareUpdate(
+      store,
+      randomUUID(),
+      {
+        version: '1.6.0',
+        archivePath,
+        sha256: createHash('sha256').update(contents).digest('hex'),
+        bytes: contents.length,
+      },
+      application,
+      new Date().toISOString(),
+    ),
+    /changed during verification/,
+  );
+  assert.equal(helperInspections, 4);
+  assert.equal(spawn.mock.callCount(), 0);
+  await assert.rejects(fs.lstat(path.join(store.root, 'operations')), { code: 'ENOENT' });
+  await assert.rejects(fs.lstat(path.join(store.root, 'host')), { code: 'ENOENT' });
 });
 
 test('shutdown commit is published complete, binds the exact session and has a single final link', async (t) => {

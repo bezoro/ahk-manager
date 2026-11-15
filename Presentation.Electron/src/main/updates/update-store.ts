@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { constants, type BigIntStats, type Stats } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   type UpdateDeployment,
   packageFileName,
@@ -30,6 +31,36 @@ const version = validUpdateVersion;
 const digest = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
 const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+const maximumUpdateBytes = 1024 * 1024 * 1024;
+const verificationRetryDelayMs = 25;
+
+function requireRegular(stat: Stats | BigIntStats, maximum: number): void {
+  if (
+    !stat.isFile() ||
+    stat.isSymbolicLink() ||
+    (stat.nlink !== 1 && stat.nlink !== 1n) ||
+    stat.size < 1 ||
+    stat.size > maximum
+  )
+    throw new Error('The update file is invalid.');
+}
+
+const changed = () => new Error('The update file changed during verification.');
+
+function sameFile(first: BigIntStats, second: BigIntStats): boolean {
+  return (
+    first.dev === second.dev &&
+    first.ino === second.ino &&
+    first.birthtimeNs === second.birthtimeNs &&
+    first.size === second.size &&
+    first.nlink === second.nlink &&
+    first.mode === second.mode
+  );
+}
+
+function sameTimestamps(first: BigIntStats, second: BigIntStats): boolean {
+  return first.mtimeNs === second.mtimeNs && first.ctimeNs === second.ctimeNs;
+}
 
 /** Portable archives live outside App and Profile. The historic installers directory preserves existing histories. */
 export class UpdateStore {
@@ -60,34 +91,72 @@ export class UpdateStore {
         throw new Error('The update directory is invalid.');
     }
   }
-  async regular(file: string, maximum = 1024 * 1024 * 1024): Promise<import('node:fs').Stats> {
+  async regular(file: string, maximum = maximumUpdateBytes): Promise<Stats> {
     await this.safeDirectory(path.dirname(file));
     const stat = await fs.lstat(file);
-    if (
-      !stat.isFile() ||
-      stat.isSymbolicLink() ||
-      stat.nlink !== 1 ||
-      stat.size < 1 ||
-      stat.size > maximum
-    )
-      throw new Error('The update file is invalid.');
+    requireRegular(stat, maximum);
     return stat;
   }
-  async hash(file: string): Promise<string> {
-    const before = await this.regular(file);
-    const hash = createHash('sha256');
-    for await (const chunk of createReadStream(file)) hash.update(chunk);
-    const after = await this.regular(file);
-    if (
-      before.ino !== after.ino ||
-      before.dev !== after.dev ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    )
-      throw new Error('The update file changed during verification.');
-    return hash.digest('hex');
+
+  private async hashStamp(file: string): Promise<BigIntStats> {
+    await this.safeDirectory(path.dirname(file));
+    const stat = await fs.lstat(file, { bigint: true });
+    requireRegular(stat, maximumUpdateBytes);
+    return stat;
   }
+
+  private async readHash(
+    file: string,
+    expected?: BigIntStats,
+  ): Promise<{ stamp: BigIntStats; digest: string; stable: boolean }> {
+    const before = await this.hashStamp(file);
+    if (expected && !sameFile(expected, before)) throw changed();
+    const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const opened = await handle.stat({ bigint: true });
+      requireRegular(opened, maximumUpdateBytes);
+      if (!sameFile(before, opened)) throw changed();
+
+      const hash = createHash('sha256');
+      const size = Number(before.size);
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, size));
+      let position = 0;
+      while (position < size) {
+        const count = Math.min(buffer.length, size - position);
+        const { bytesRead } = await handle.read(buffer, 0, count, position);
+        if (bytesRead === 0) throw changed();
+        hash.update(buffer.subarray(0, bytesRead));
+        position += bytesRead;
+      }
+      if ((await handle.read(buffer, 0, 1, position)).bytesRead !== 0) throw changed();
+
+      const read = await handle.stat({ bigint: true });
+      const atPath = await this.hashStamp(file);
+      requireRegular(read, maximumUpdateBytes);
+      if (!sameFile(before, read) || !sameFile(before, atPath)) throw changed();
+      return {
+        stamp: before,
+        digest: hash.digest('hex'),
+        stable:
+          sameTimestamps(before, opened) &&
+          sameTimestamps(before, read) &&
+          sameTimestamps(before, atPath),
+      };
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async hash(file: string): Promise<string> {
+    const first = await this.readHash(file);
+    if (first.stable) return first.digest;
+    // Only a complete read with timestamp drift can reach the retry.
+    await delay(verificationRetryDelayMs);
+    const second = await this.readHash(file, first.stamp);
+    if (!second.stable || second.digest !== first.digest) throw changed();
+    return second.digest;
+  }
+
   async writeNew(file: string, value: string | Buffer): Promise<void> {
     await this.safeDirectory(path.dirname(file), true);
     await fs.writeFile(file, value, { flag: 'wx', mode: 0o600 });
