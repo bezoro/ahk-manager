@@ -1,3 +1,4 @@
+import { CommandRegistry } from '../command-registry.js';
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import type { AsyncLocalStorage } from 'node:async_hooks';
 import type {
@@ -47,6 +48,7 @@ export interface IpcTransport {
 }
 
 export interface IpcContext {
+  registry?: CommandRegistry;
   commandLog?: Pick<CommandLogBoundary, 'run'>;
   openLogs?(): Promise<void>;
   diagnosticReport?(mode: 'recent' | 'errors'): string;
@@ -82,24 +84,26 @@ export function registerHandlers(context: IpcContext): void {
     return context.commandLog ? context.commandLog.run('ui', 'connect', connect) : connect();
   });
   const none = shape({});
+  const registry = context.registry ?? new CommandRegistry();
 
   function bind<T = Record<string, never>>(
     name: string,
     validate: Validator,
     handler: (body: T) => unknown,
   ): void {
+    registry.define(name, validate, handler);
     ipcMain.handle(`manager:${name}`, async (event, envelope: unknown) => {
       const dispatch = async () => {
         const validated = guard.validate(event, envelope);
-        const body = requireValid<T>(validated.body, validate, `${name} request`);
+        const command = registry.prepare(name, validated.body);
         assertRequestAllowed(name, context.policy());
         const invoke = () =>
           context.documentScope.run(
             () => guard.current(validated.lease),
-            () => handler(body),
+            command,
           );
         const value = context.commandLog
-          ? await context.commandLog.run('ui', 'dispatch.' + name, invoke, commandDetails(body))
+          ? await context.commandLog.run('ui', 'dispatch.' + name, invoke, commandDetails(validated.body))
           : await invoke();
         if (!guard.current(validated.lease)) throw new Error(t.documentChanged);
         return value;
