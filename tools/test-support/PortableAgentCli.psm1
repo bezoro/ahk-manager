@@ -69,8 +69,8 @@ function Test-PortableAgentCli {
         $null = [Reflection.Assembly]::LoadFrom($testCore)
         $identity = [Bezoro.AhkManager.Core.Infrastructure.NativeProcessIdentity]::new($PID)
         try {
-            $stamp = $null
-            $access = $null
+            $stamp = [Bezoro.AhkManager.Core.Infrastructure.ProcessStamp]::new(0, 0, '', '', 0)
+            $access = [Bezoro.AhkManager.Core.Infrastructure.ProcessSecurity]::new($false, 0)
             if (-not $identity.TryRead([ref]$stamp) -or -not $identity.TryReadSecurity([ref]$access) -or -not $access.Elevated) {
                 throw 'The fixture could not inspect its own Windows token.'
             }
