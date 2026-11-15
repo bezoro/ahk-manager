@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <SelfContained>true</SelfContained>
+        <RuntimeFrameworkVersion>10.0.13</RuntimeFrameworkVersion>
+        <PublishSingleFile>true</PublishSingleFile>
+        <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+        <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+        <AssemblyName>ahk-manager</AssemblyName>
+        <RootNamespace>Bezoro.AhkManager.AgentCli</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+        <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../Core/AhkManager.Core.csproj" />
+    </ItemGroup>
+    <Target Name="GenerateAgentCatalog" BeforeTargets="CoreCompile">
+        <ReadLinesFromFile File="$(MSBuildProjectDirectory)/../Presentation.Electron/src/shared/agent-commands.json">
+            <Output TaskParameter="Lines" ItemName="_AgentCatalogJson" />
+        </ReadLinesFromFile>
+        <ItemGroup>
+            <_AgentCatalogSource Include="namespace Bezoro.AhkManager.AgentCli%3B" />
+            <_AgentCatalogSource Include="internal static class AgentCatalog { internal const string Json = &quot;&quot;&quot;&quot;&quot;&quot;" />
+            <_AgentCatalogSource Include="@(_AgentCatalogJson)" />
+            <_AgentCatalogSource Include="&quot;&quot;&quot;&quot;&quot;&quot;%3B }" />
+            <Compile Include="$(IntermediateOutputPath)AgentCatalog.g.cs" />
+        </ItemGroup>
+        <WriteLinesToFile
+            File="$(IntermediateOutputPath)AgentCatalog.g.cs"
+            Lines="@(_AgentCatalogSource)"
+            Overwrite="true"
+            WriteOnlyWhenDifferent="true"
+            Encoding="UTF-8"
+        />
+    </Target>
+</Project>

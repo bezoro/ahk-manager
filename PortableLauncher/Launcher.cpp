@@ -124,7 +124,8 @@ bool QuietStartup() {
     bool explicitRequest = false;
     for (int index = 1; index < count; ++index) {
         if (wcscmp(arguments[index], L"--login") == 0 ||
-            wcscmp(arguments[index], L"--background") == 0)
+            wcscmp(arguments[index], L"--background") == 0 ||
+            wcscmp(arguments[index], L"--agent-host") == 0)
             quiet = true;
         if (wcscmp(arguments[index], L"--foreground") == 0 ||
             wcscmp(arguments[index], L"--request-administrator") == 0)
