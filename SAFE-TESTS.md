@@ -24,6 +24,8 @@ These captures establish layout and control behavior with solid backgrounds. The
 
 ## Portable integration tests
 
+After verifying the release manifest and ZIP, Windows CI runs `tools/Test-PortableStartup.ps1` on its disposable GitHub-hosted runner with an existing administrative token. The test launches the ZIP through its root launcher with an empty, private portable profile and Windows login startup disabled. It checks the visible workspace, writable administrative backend, exact version and portable Data directory, and normal shutdown. Manager can create its standard Start Menu search shortcut pointing to the fixture on this runner. A smoke failure blocks the updater matrix and release, and CI still uploads the portable ZIP, smoke summary and available logs.
+
 `tools/Test-PortableUpdater.ps1` verifies the source identity and complete version of each package. The default migration starts with the pinned published v1.6.2 package. The custom data and foreign-root scenarios use a separately packaged older baseline from the candidate's reviewed source.
 
 The driver launches the real portable application and checks profile import, update and rollback with default and custom data directories. It verifies that application registration is unnecessary, a proven dedicated product root can become private beneath a permissive parent without changing the parent's permissions, and a root containing unrelated files is refused.

@@ -40,7 +40,10 @@ function Invoke-PortableEvaluation {
 }
 
 function Start-PortableSession {
-    param([string]$Root, [string]$EvidenceRoot, [switch]$ViaLauncher, [switch]$ExpectStartupRefusal, [ValidateRange(0, 65535)][int]$ProxyPort = 0)
+    param(
+        [string]$Root, [string]$EvidenceRoot, [switch]$ViaLauncher, [switch]$ExpectStartupRefusal,
+        [ValidateRange(0, 65535)][int]$ProxyPort = 0, [switch]$CaptureChromiumLog, [ref]$OwnedSession
+    )
     $application = Join-Path $Root 'App/Bezoro.AhkManager.exe'
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Start()
@@ -57,6 +60,10 @@ function Start-PortableSession {
     if ($ProxyPort) {
         $start.ArgumentList.Add("--proxy-server=http://127.0.0.1:$ProxyPort")
         $start.ArgumentList.Add('--disable-http2')
+    }
+    if ($CaptureChromiumLog) {
+        $start.ArgumentList.Add('--enable-logging=file')
+        $start.ArgumentList.Add('--log-file=' + (Join-Path $EvidenceRoot 'chromium-startup.log'))
     }
     $process = [Diagnostics.Process]::Start($start)
     if ($ViaLauncher) {
@@ -84,10 +91,11 @@ function Start-PortableSession {
     # Kernel process creation timestamps can precede precise UtcNow by a clock
     # tick. Identity still requires this retained PID, exact image and creation.
     $inCreationWindow = $created -ge $startedBefore.AddSeconds(-1) -and $created -le [DateTime]::UtcNow.AddSeconds(1)
+    $session = [pscustomobject]@{ Process = $process; Started = $created; Image = $application; Socket = $null; Sequence = 0; Capture = $null; Port = $port }
+    if ($OwnedSession -and $inCreationWindow -and $matches) { $OwnedSession.Value = $session }
     $identity = [ordered]@{ fixture = $true; pid = $process.Id; image = $application; launchRequestedAtUtc = $startedBefore.ToString('O'); processCreatedAtUtc = $created.ToString('O'); creationDeltaMilliseconds = ($created - $startedBefore).TotalMilliseconds; exactIdentityMatches = $matches; withinCreationWindow = $inCreationWindow; identityAttempts = $identityAttempts; kernelIdentity = [AhkManager.TestSupport.PortableUpdaterUi]::IdentityDetails($process) }
     [IO.File]::WriteAllText((Join-Path $EvidenceRoot 'session-identity.json'), ($identity | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     if (-not $inCreationWindow -or -not $matches) { throw 'The portable application session identity changed.' }
-    $session = [pscustomobject]@{ Process = $process; Started = $created; Image = $application; Socket = $null; Sequence = 0; Capture = $null; Port = $port }
     if (-not $ViaLauncher) { $session.Capture = [AhkManager.TestSupport.PortableUpdaterUi]::Capture($process, (Join-Path $EvidenceRoot 'manager.stdout.log'), (Join-Path $EvidenceRoot 'manager.stderr.log')) }
     if ($ExpectStartupRefusal) { return $session }
     $handler = [Net.Http.HttpClientHandler]::new()
