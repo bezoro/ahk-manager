@@ -323,6 +323,7 @@ jobs:
           ./tools/Build-PortablePackage.ps1 -ApplicationRoot "$env:CI_OUTPUT/application/win-unpacked" -LauncherPath "$env:CI_OUTPUT/portable-launcher/Bezoro.AhkManager.exe" -OutputRoot "$env:CI_OUTPUT/portable" -Version $env:AHK_RELEASE_VERSION -Commit $env:AHK_SOURCE_COMMIT
 
       - name: Prepare and verify the versioned portable release manifest
+        id: portable-verify
         if: ${{ !cancelled() && steps.portable-build.outcome == 'success' }}
         run: |
           $notes = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AHK_RELEASE_NOTES_BASE64))
@@ -332,6 +333,14 @@ jobs:
           ./tools/Publish-GitHubRelease.ps1 -PortableArchivePath $portable -PortableManifestPath $manifest -Repository $env:GITHUB_REPOSITORY -Commit $env:AHK_SOURCE_COMMIT -ValidateOnly
           ./tools/Test-PortablePackage.ps1 -ArchivePath $portable -ManifestPath $manifest -OutputRoot "$env:CI_OUTPUT/portable-evidence"
           Get-FileHash -LiteralPath $portable -Algorithm SHA256 | Format-List | Out-File "$env:CI_OUTPUT/portable/SHA256.txt"
+
+      - name: Open the verified portable ZIP through its root launcher
+        if: ${{ !cancelled() && steps.portable-verify.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          $portable = "$env:CI_OUTPUT/portable/AHK-Manager-$($env:AHK_RELEASE_VERSION)-Portable-x64.zip"
+          $manifest = "$env:CI_OUTPUT/portable/ahk-manager-portable-release.json"
+          ./tools/Test-PortableStartup.ps1 -ArchivePath $portable -ManifestPath $manifest -Version $env:AHK_RELEASE_VERSION -SourceCommit $env:AHK_SOURCE_COMMIT -OutputRoot "$env:CI_OUTPUT/portable-startup"
 
       - name: Build a separate coherent portable baseline for update and rollback
         id: portable-baseline
@@ -371,6 +380,9 @@ jobs:
             ${{ runner.temp }}/ahk-manager-ci/release-tooling-tests/*.json
             ${{ runner.temp }}/ahk-manager-ci/test-channel-tooling-tests/*.json
             ${{ runner.temp }}/ahk-manager-ci/portable-evidence/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-startup/*.json
+            ${{ runner.temp }}/ahk-manager-ci/portable-startup/*.log
+            ${{ runner.temp }}/ahk-manager-ci/portable-startup/Portable Manager/Data/Logs/commands-*.jsonl
             ${{ runner.temp }}/ahk-manager-ci/portable-launcher-tests/*.json
             ${{ runner.temp }}/ahk-manager-ci/portable-baseline/evidence/*.json
             ${{ runner.temp }}/ahk-manager-ci/portable-signing-fixture-tests/**/*.json
