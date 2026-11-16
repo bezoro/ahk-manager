@@ -632,3 +632,50 @@ test('a late data-restart preflight cannot shut down the backend after the resta
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(shutdowns, 0);
 });
+
+test('expired shutdown attempts cannot publish a late placement failure into recovered host state', async () => {
+  for (const expired of [false, true]) {
+    const events: string[] = [];
+    let failPlacement!: () => void;
+    let expire!: () => void;
+    let exited = false;
+    const saving = new Promise<void>((_resolve, reject) => {
+      failPlacement = () => reject(new Error('placement unavailable'));
+    });
+    const request = shutdownWithinDeadline(
+      {
+        drain: async () => {},
+        backendPresent: () => true,
+        backendExited: () => exited,
+        persistPlacement: () => saving,
+        reportPlacementFailure: () => {
+          events.push('placement-failed');
+        },
+        shutdownBackend: async () => {
+          events.push('shutdown');
+          exited = true;
+        },
+      },
+      1000,
+      {
+        schedule: (callback) => {
+          expire = callback;
+          return () => {};
+        },
+        cancelled: 'cancelled',
+        timedOut: 'timed out',
+        unconfirmed: 'unconfirmed',
+      },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (expired) {
+      expire();
+      await assert.rejects(request, /timed out/);
+    }
+    failPlacement();
+    if (!expired) await request;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, expired ? [] : ['placement-failed', 'shutdown']);
+    assert.equal(exited, !expired);
+  }
+});
