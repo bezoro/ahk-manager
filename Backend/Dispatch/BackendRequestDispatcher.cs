@@ -281,7 +281,9 @@ internal sealed class BackendRequestDispatcher(
             case "transferStartup":
                 var transfer = Read(payload, Protocol.Json.ConfirmPreviewPayload);
                 return Pack(
-                    startupTransfer.Commit(transfer.PreviewId, transfer.Confirmed),
+                    await startupTransfer
+                        .CommitAsync(transfer.PreviewId, transfer.Confirmed, ct)
+                        .ConfigureAwait(false),
                     Protocol.Json.OperationResult
                 );
             default:

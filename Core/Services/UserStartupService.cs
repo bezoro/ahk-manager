@@ -166,10 +166,11 @@ public sealed partial class UserStartupService(
         bool consent,
         bool elevated,
         string? reviewedTaskFingerprint,
-        CancellationToken ct
+        CancellationToken ct,
+        TransferTransaction? transfer = null
     ) =>
         Task.Run(
-            () =>
+            async () =>
             {
                 string? originalEntry = null;
                 StartupTaskRegistration? originalTask = null;
@@ -180,6 +181,11 @@ public sealed partial class UserStartupService(
                     ct.ThrowIfCancellationRequested();
                     originalEntry = adapter.ReadEntry();
                     originalTask = tasks?.ReadTask();
+                    if (
+                        transfer is not null
+                        && !TransferMatches(transfer.Review, originalEntry, originalTask, tasks)
+                    )
+                        return new OperationResult(Outcome.Failed, ReasonCode.StaleSelection);
                     // Continuation of explicit repair cannot adopt a new task or Run
                     // value, even if the replacement separately looks product-owned.
                     if (
@@ -197,7 +203,8 @@ public sealed partial class UserStartupService(
                         );
                     bool entryConflict =
                         originalEntry is not null
-                        && !OwnedEntry(originalEntry, originalTask, tasks);
+                        && !OwnedEntry(originalEntry, originalTask, tasks)
+                        && transfer is null;
                     if (
                         entryConflict
                         || originalTask is not null
@@ -230,6 +237,43 @@ public sealed partial class UserStartupService(
                         return new(Outcome.Confirmed);
                     if (enabled && !consent)
                         return new(Outcome.Failed, ReasonCode.StartupConsentRequired);
+
+                    if (transfer is not null)
+                    {
+                        var saved = await transfer
+                            .Backup(
+                                new StartupRepairBackup(
+                                    DateTimeOffset.UtcNow,
+                                    transfer.Review.UserSid,
+                                    transfer.Review.Entry,
+                                    Command,
+                                    originalTask?.Fingerprint ?? "",
+                                    enabled,
+                                    elevated,
+                                    TaskBackup(originalTask)
+                                ),
+                                ct
+                            )
+                            .ConfigureAwait(false);
+                        if (!saved.Succeeded)
+                            return saved;
+                        ct.ThrowIfCancellationRequested();
+                        var unavailable = await transfer.StateCurrent(ct).ConfigureAwait(false);
+                        if (unavailable != ReasonCode.None)
+                            return new(Outcome.Failed, unavailable);
+                        if (
+                            !TransferMatches(
+                                transfer.Review,
+                                adapter.ReadEntry(),
+                                tasks?.ReadTask(),
+                                tasks
+                            )
+                        )
+                            return new(Outcome.Failed, ReasonCode.StaleSelection);
+                        unavailable = await transfer.StateCurrent(ct).ConfigureAwait(false);
+                        if (unavailable != ReasonCode.None)
+                            return new(Outcome.Failed, unavailable);
+                    }
 
                     // Remove the previous mode before creating the replacement. TASK_CREATE
                     // and registry compare/exchange refuse a concurrently supplied entry.

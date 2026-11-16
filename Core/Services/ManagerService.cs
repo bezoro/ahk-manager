@@ -15,8 +15,9 @@ public sealed partial class ManagerService : IManagerService
     readonly IProcessManager processes;
     readonly UserStartupService startup;
     readonly HotkeyAnalyzer analyzer = new();
+    readonly Func<string, CancellationToken, Task<HotkeyAnalysis>>? analyzeScript;
     readonly ExternalEditorService editor = new();
-    readonly Dictionary<Guid, HotkeyAnalysis> analyses = [];
+    readonly Dictionary<Guid, (string Path, bool Exists, HotkeyAnalysis Analysis)> analyses = [];
     readonly Dictionary<Guid, (OperationPlan Plan, DateTimeOffset Time)> plans = [];
     readonly Dictionary<Guid, (RecyclePlan Plan, DateTimeOffset Time)> recyclePlans = [];
     SettingsDocument document = new();
@@ -79,6 +80,29 @@ public sealed partial class ManagerService : IManagerService
         activity = new(DataRoot);
         importer = new(DataRoot, owner, legacyAuthorityDirectory);
         processes.Invalidated += ProcessInvalidated;
+    }
+
+    // Domain tests can observe derived analysis without invoking Windows file APIs.
+    internal ManagerService(
+        string dataRoot,
+        IEffectOwner owner,
+        IProcessManager processes,
+        UserStartupService startup,
+        string? legacyAuthorityDirectory,
+        bool managerRequiresAdministrator,
+        Func<string, CancellationToken, Task<HotkeyAnalysis>> analyzeScript
+    )
+        : this(
+            dataRoot,
+            owner,
+            processes,
+            startup,
+            legacyAuthorityDirectory,
+            managerRequiresAdministrator
+        )
+    {
+        this.analyzeScript =
+            analyzeScript ?? throw new ArgumentNullException(nameof(analyzeScript));
     }
 
     async Task<T> Exclusive<T>(Func<Task<T>> action, CancellationToken ct)
@@ -199,7 +223,9 @@ public sealed partial class ManagerService : IManagerService
         {
             document = next;
             await Log(scriptId, null, result, CancellationToken.None).ConfigureAwait(false);
-            await Publish(true, CancellationToken.None).ConfigureAwait(false);
+            // Metadata intent does not change source contents. Publish still analyzes
+            // new identities, relinked paths and missing/restored files as needed.
+            await Publish(false, CancellationToken.None).ConfigureAwait(false);
         }
         return result;
     }

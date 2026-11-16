@@ -16,5 +16,19 @@ public sealed record StartupRepairBackup(
     string CurrentCommand,
     string TaskFingerprint,
     bool LaunchManagerAtLogin,
-    bool LaunchManagerAsAdministrator
+    bool LaunchManagerAsAdministrator,
+    StartupTaskBackup? PreviousTask = null
+);
+
+public sealed record StartupTaskBackup(
+    string Command,
+    string UserSid,
+    bool Enabled,
+    bool HighestPrivileges,
+    bool InteractiveToken,
+    bool UserLogonOnly,
+    string Source,
+    string Fingerprint,
+    string? NonstandardWorkingDirectory,
+    string ParseIssue
 );

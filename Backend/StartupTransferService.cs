@@ -11,7 +11,8 @@ internal sealed class StartupTransferService(
     string hostExecutable,
     Func<bool> effectsAllowed,
     Func<ManagerSnapshot> snapshot,
-    Func<string, bool>? oldProductProof = null
+    Func<string, bool>? oldProductProof = null,
+    Func<StartupTransferReview, CancellationToken, Task<OperationResult>>? apply = null
 )
 {
     sealed record Token(
@@ -19,6 +20,7 @@ internal sealed class StartupTransferService(
         long Revision,
         string OldHash,
         string NewHash,
+        StartupTransferReview Review,
         DateTimeOffset Time
     );
 
@@ -41,8 +43,27 @@ internal sealed class StartupTransferService(
                 reason = ReasonCode.EffectOwnerUnavailable;
             else if (!state.Settings.LaunchManagerAtLogin)
                 reason = ReasonCode.StartupInactive;
+            else if (apply is null || adapter is not IUserStartupTaskAdapter)
+                reason = ReasonCode.CapabilityUnverified;
             else if (old is not null)
             {
+                var tasks = (IUserStartupTaskAdapter)adapter;
+                string sid = tasks.UserSid;
+                var task = tasks.ReadTask();
+                if (
+                    task is not null
+                    && !UserStartupService.OwnsTask(task, newCommand, sid)
+                    && !UserStartupService.OwnsRelocatableTask(task, newCommand, sid)
+                )
+                    return new(
+                        id,
+                        null,
+                        hostExecutable,
+                        old,
+                        newCommand,
+                        false,
+                        ReasonCode.StartupEntryConflict
+                    );
                 string[] args = ScriptPaths.SplitCommand(old);
                 if (args.Length == 3 && args[1] == "--login" && args[2] == "--background")
                 {
@@ -73,6 +94,13 @@ internal sealed class StartupTransferService(
                                 state.Revision,
                                 Hash(executable),
                                 Hash(hostExecutable),
+                                new StartupTransferReview(
+                                    old,
+                                    task,
+                                    sid,
+                                    newCommand,
+                                    state.Revision
+                                ),
                                 DateTimeOffset.UtcNow
                             )
                         );
@@ -89,7 +117,11 @@ internal sealed class StartupTransferService(
         return new(id, executable, hostExecutable, old, newCommand, false, reason);
     }
 
-    public OperationResult Commit(Guid id, bool confirmed)
+    public async Task<OperationResult> CommitAsync(
+        Guid id,
+        bool confirmed,
+        CancellationToken ct = default
+    )
     {
         Prune();
         if (!tokens.Remove(id, out var token))
@@ -101,6 +133,8 @@ internal sealed class StartupTransferService(
         var state = snapshot();
         if (state.Revision != token.Revision || !state.Settings.LaunchManagerAtLogin)
             return new(Outcome.Failed, ReasonCode.StaleSelection);
+        if (apply is null)
+            return new(Outcome.Failed, ReasonCode.CapabilityUnverified);
         try
         {
             using var oldLease = new FileStream(
@@ -119,9 +153,7 @@ internal sealed class StartupTransferService(
                 return new(Outcome.Failed, ReasonCode.IdentityChanged);
             if (!effectsAllowed())
                 return new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable);
-            return adapter.CompareExchangeEntry(token.Preview.OldCommand, newCommand)
-                ? new(Outcome.Confirmed)
-                : new(Outcome.Failed, ReasonCode.StartupEntryConflict);
+            return await apply(token.Review, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (SafeJsonFiles.Known(ex))
         {

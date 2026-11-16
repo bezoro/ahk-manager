@@ -33,8 +33,11 @@ public sealed class OperationJournal(string path)
             using var json = JsonDocument.Parse(bytes);
             SafeJsonFiles.UniqueProperties(json.RootElement);
             if (
-                !json.RootElement.TryGetProperty("Schema", out var schema)
-                || schema.GetInt32() != 1
+                json.RootElement.ValueKind != JsonValueKind.Object
+                || !json.RootElement.TryGetProperty("Schema", out var schema)
+                || schema.ValueKind != JsonValueKind.Number
+                || !schema.TryGetInt32(out int version)
+                || version != 1
             )
                 throw new UnsupportedSchemaException();
             document =

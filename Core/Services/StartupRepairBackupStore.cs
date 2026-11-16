@@ -51,6 +51,24 @@ internal sealed class StartupRepairBackupStore(string profileDirectory)
                     "launchManagerAsAdministrator",
                     backup.LaunchManagerAsAdministrator
                 );
+                if (backup.PreviousTask is { } task)
+                {
+                    writer.WriteStartObject("previousTask");
+                    writer.WriteString("command", task.Command);
+                    writer.WriteString("userSid", task.UserSid);
+                    writer.WriteBoolean("enabled", task.Enabled);
+                    writer.WriteBoolean("highestPrivileges", task.HighestPrivileges);
+                    writer.WriteBoolean("interactiveToken", task.InteractiveToken);
+                    writer.WriteBoolean("userLogonOnly", task.UserLogonOnly);
+                    writer.WriteString("source", task.Source);
+                    writer.WriteString("fingerprint", task.Fingerprint);
+                    writer.WriteString(
+                        "nonstandardWorkingDirectory",
+                        task.NonstandardWorkingDirectory
+                    );
+                    writer.WriteString("parseIssue", task.ParseIssue);
+                    writer.WriteEndObject();
+                }
                 writer.WriteEndObject();
             }
             if (bytes.Length > MaximumBytes)

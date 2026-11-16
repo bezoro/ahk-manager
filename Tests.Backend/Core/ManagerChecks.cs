@@ -1596,7 +1596,10 @@ public static partial class CoreSuite
             );
             int startupWrites = locate.Startup.Writes;
             string replacement = Path.Combine(Path.GetDirectoryName(locate.Path)!, "renamed.ahk");
-            await File.WriteAllTextAsync(replacement, "F13::return");
+            await File.WriteAllTextAsync(
+                replacement,
+                "; @description Replacement header\nF14::return"
+            );
             File.Delete(locate.Path);
             await manager.RefreshAsync();
             Check(
@@ -1625,6 +1628,8 @@ public static partial class CoreSuite
                     && row.RunAtLogin == true
                     && row.RunAsAdministrator
                     && row.LaunchBlocked
+                    && row.HeaderDescription == "Replacement header"
+                    && row.Hotkeys.Any(h => h.Origin == HotkeyOrigin.Parsed && h.Chord == "F14")
                     && row.Hotkeys.Any(h =>
                         h.Origin == HotkeyOrigin.Manual && h.Chord == "Ctrl+F13"
                     ),
@@ -2074,11 +2079,9 @@ public static partial class CoreSuite
         public int Observations;
         public Action<int>? AfterObserve;
         public ObservedProcesses Current = new([], true, []);
-        public event EventHandler? Invalidated
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler? Invalidated;
+
+        public void Invalidate() => Invalidated?.Invoke(this, EventArgs.Empty);
 
         public bool Supports(ScriptOperation operation) => true;
 
