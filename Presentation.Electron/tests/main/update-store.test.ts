@@ -485,3 +485,16 @@ test('retired Setup protocol receipts are ignored without deleting their histori
   );
   assert.deepEqual(await fs.readFile(executable), bytes);
 });
+
+test('a cached archive with identical bytes must match the full verified release manifest', async (t) => {
+  const { store, source, body } = await fixture(t);
+  const entry = await cache(store, '1.2.4', source, sha(body), body.length);
+  const saved = await fs.readFile(
+    path.join(path.dirname(entry.archivePath), 'release.json'),
+    'utf8',
+  );
+  await store.verify(entry, saved);
+  const other = JSON.stringify({ ...JSON.parse(saved), notes: 'A different release manifest.' });
+  await assert.rejects(store.verify(entry, other), /does not match the checked release/);
+  await store.verify(entry);
+});

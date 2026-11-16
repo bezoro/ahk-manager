@@ -14,9 +14,21 @@ $manager = 'C:\Apps\AHK Manager Portable\App\backend\agent\ahk-manager.exe'
 
 `commands` returns the shared command catalog. Use `version` for the installed CLI version and `app.status` for the running host. The catalog, help, and CLI version work with Manager closed and from an ordinary shell.
 
-Live commands require an existing elevated administrator token in the same Windows user and session as Manager. An unattended process must already have that authority. A regular shell receives `ElevationRequired`. The CLI does not open a UAC prompt.
+Live commands require an elevated administrator token in the same Windows user and session as Manager. An unattended process must already have that authority. A regular shell receives `ElevationRequired` unless it requests Windows consent for the stable update command.
 
 `app.start` waits for the authenticated host and backend to become ready. If Manager is closed, it starts the root launcher without opening a window or running login startup. Other commands require a running host unless you explicitly pass `--start`. Use `app.show`, `app.hide`, and `app.preferences` for notification area actions. `app.quit` exits Manager while preserving independent scripts. `app.stopScriptsAndQuit` requests verified script shutdown before exit and may report partial success while Manager stays open.
+
+## Install the latest stable release
+
+With Manager running, invoke `updates.installLatest` from an elevated shell. From a regular shell, add `--elevate` and approve the Windows UAC prompt for the same account and session. Manager checks the official stable releases and uses its normal update and restart flow. You can leave Manager in the notification area.
+
+```powershell
+& $manager updates.installLatest --elevate
+```
+
+This command accepts only the optional `--elevate` flag. Windows controls how long its consent prompt stays open. After consent, the CLI waits up to 90 seconds for the elevated request to return.
+
+`NoNewerStable` confirms that a successful check found no newer stable release. `OperationAccepted` means Manager accepted the update and returns `result.operationId`. If the response is `Unknown`, keep that ID and inspect the operation before trying again. From an elevated shell, pass the ID as `{"operationId":"..."}` to `operations.get --json`. After Manager restarts, run `version` from a regular shell to verify the installed CLI version without another prompt.
 
 ## Input and output
 

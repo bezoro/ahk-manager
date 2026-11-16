@@ -336,6 +336,11 @@
     }
   },
   {
+    "name": "updates.installLatest",
+    "description": "Install the latest newer release from the official stable channel and restart Manager while scripts keep running",
+    "parameters": {}
+  },
+  {
     "name": "updates.cancelDownload",
     "description": "Cancel the active download",
     "parameters": {

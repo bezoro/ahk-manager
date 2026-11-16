@@ -11,6 +11,7 @@ import {
   versionAllowedInChannel,
 } from '../../shared/update-versions.js';
 import { compareVersions, type RemoteUpdateRelease } from './github-updates.js';
+import { requirePortablePackageProof } from './portable-package-proof.js';
 import type { CachedPackage } from './update-store.js';
 
 export interface UpdateStorePort {
@@ -18,7 +19,7 @@ export interface UpdateStorePort {
   readChannel(): Promise<UpdateChannel>;
   saveChannel(channel: UpdateChannel): Promise<void>;
   cached(): Promise<CachedPackage[]>;
-  verify(packageEntry: CachedPackage): Promise<void>;
+  verify(packageEntry: CachedPackage, expectedManifest?: string): Promise<void>;
   cache(version: string, source: string, sha256: string, bytes: number): Promise<CachedPackage>;
   discardPortableDownload(source: string): Promise<void>;
 }
@@ -27,6 +28,7 @@ export interface UpdateBoundary {
   preserveCurrent?(download: (release: RemoteUpdateRelease) => Promise<string>): Promise<void>;
   store: UpdateStorePort;
   releases(channel: UpdateChannel): Promise<RemoteUpdateRelease[]>;
+  stableReleases?(): Promise<RemoteUpdateRelease[]>;
   resolve?(id: string): Promise<RemoteUpdateRelease>;
   download(
     release: RemoteUpdateRelease,
@@ -39,6 +41,8 @@ export interface UpdateBoundary {
   changed(state: UpdateState): void;
   recovery?(): Promise<string | null>;
 }
+export type PinnedStableUpdate = Readonly<RemoteUpdateRelease & { manifestText: string }>;
+
 const downloadCanceled = new Error('The update download was canceled.');
 const active = (state: UpdateState): boolean =>
   ['checking', 'downloading', 'installing'].includes(state.phase);
@@ -54,6 +58,7 @@ export class UpdateService {
   private remote: RemoteUpdateRelease[] = [];
   private local: CachedPackage[] = [];
   private installing = false;
+  private checkingStable = false;
   private configuringChannel = false;
   private explicitTestOptIn = false;
   private transfer: { id: string; controller: AbortController } | null = null;
@@ -75,7 +80,7 @@ export class UpdateService {
     return structuredClone(this.state);
   }
   get busy(): boolean {
-    return this.installing || this.configuringChannel || active(this.state);
+    return this.installing || this.checkingStable || this.configuringChannel || active(this.state);
   }
   private publish(patch: Partial<UpdateState> = {}): UpdateState {
     this.state = { ...this.state, ...patch };
@@ -254,6 +259,51 @@ export class UpdateService {
     }
     return source;
   }
+  /** A fresh lookup is independent of the selected channel and cached history. */
+  async selectLatestStable(): Promise<PinnedStableUpdate | null> {
+    if (this.busy || !this.boundary.stableReleases)
+      throw new Error('The stable update check is unavailable.');
+    this.checkingStable = true;
+    try {
+      const release = (await this.boundary.stableReleases())
+        .filter(
+          (item) =>
+            /^github:[1-9][0-9]*$/.test(item.id) &&
+            versionAllowedInChannel(item.version, 'stable') &&
+            compareVersions(item.version, this.boundary.version) > 0,
+        )
+        .sort((first, second) => compareVersions(second.version, first.version))[0];
+      if (!release) return null;
+      const { manifestText } = release;
+      if (!manifestText || release.metadataOnly || release.deployment !== 'portable')
+        throw new Error('The latest stable release could not be verified.');
+      const proof = requirePortablePackageProof(manifestText, release);
+      if (proof.commit !== release.commit || proof.sha512 !== release.sha512)
+        throw new Error('The latest stable release metadata changed during verification.');
+      return Object.freeze({ ...release, manifestText });
+    } finally {
+      this.checkingStable = false;
+    }
+  }
+
+  async installPinnedStable(
+    release: PinnedStableUpdate,
+    operationId: string,
+  ): Promise<UpdateState> {
+    if (this.busy) return this.snapshot;
+    const choice: UpdateRelease = {
+      id: release.id,
+      version: release.version,
+      publishedAt: release.publishedAt,
+      notes: release.notes,
+      commit: release.commit,
+      installed: false,
+      canInstall: true,
+      cached: false,
+    };
+    return this.installRelease(choice, operationId, release);
+  }
+
   async install(id: string, operationId: string = randomUUID()): Promise<UpdateState> {
     if (this.busy) return this.snapshot;
     const choice = this.state.releases.find((item) => item.id === id && item.canInstall);
@@ -263,6 +313,16 @@ export class UpdateService {
         error: 'This version is no longer available in the history. Check for updates again.',
         downloadCancellation: null,
       });
+    return this.installRelease(choice, operationId);
+  }
+
+  private async installRelease(
+    choice: UpdateRelease,
+    operationId: string,
+    pinned?: PinnedStableUpdate,
+  ): Promise<UpdateState> {
+    const id = choice.id;
+    const expectedManifest = pinned?.manifestText;
     this.installing = true;
     try {
       if (!(await this.boundary.preflight(operationId, 'begin')))
@@ -283,7 +343,7 @@ export class UpdateService {
         this.local = await this.boundary.store.cached();
         this.publish({ progress: 50 });
       }
-      let remote = this.remote.find((item) => item.id === id);
+      let remote = pinned ?? this.remote.find((item) => item.id === id);
       let target = this.local.find(
         (item) =>
           item.version === choice.version &&
@@ -293,7 +353,7 @@ export class UpdateService {
       );
       if (target) {
         try {
-          await this.boundary.store.verify(target);
+          await this.boundary.store.verify(target, expectedManifest);
         } catch (error) {
           if (!remote) throw error;
           target = undefined;
@@ -326,7 +386,7 @@ export class UpdateService {
         );
         target = await this.boundary.store.cache(remote.version, file, remote.sha256, remote.bytes);
       }
-      await this.boundary.store.verify(target);
+      await this.boundary.store.verify(target, expectedManifest);
       this.local = await this.boundary.store.cached();
       if (!(await this.boundary.preflight(operationId, 'commit')))
         return this.publish({

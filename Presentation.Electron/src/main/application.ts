@@ -1,5 +1,5 @@
 import type { StopExitReceipt } from './controller/stop-exit.js';
-import type { UpdateRelease } from '../shared/updates.js';
+import type { UpdateRelease, UpdateState } from '../shared/updates.js';
 import { AgentReceipts } from './agent-receipts.js';
 import { AgentTransitionCoordinator } from './agent-transition-coordinator.js';
 import { AgentCommandError, AgentCommands, failed, ok, operationReply } from './agent-commands.js';
@@ -1367,7 +1367,9 @@ export function startManager(): void {
       },
     };
   }
-  function releaseKey(release: UpdateRelease): string {
+  function releaseKey(
+    release: Pick<UpdateRelease, 'id' | 'version' | 'commit' | 'publishedAt'>,
+  ): string {
     return JSON.stringify([release.id, release.version, release.commit, release.publishedAt]);
   }
   async function requestAgentUpdate(id: string): Promise<AgentReply> {
@@ -1383,12 +1385,42 @@ export function startManager(): void {
     );
     if (!sameRelease(choice)) return failed('ConfirmationChanged');
     const operationId = randomUUID();
+    return reserveAgentUpdate(operationId, choice.version, key, () =>
+      sameRelease(choice) ? updates!.install(id, operationId) : Promise.resolve(null),
+    );
+  }
+  async function requestAgentUpdateLatest(requestId: string): Promise<AgentReply> {
+    // The updater records operation IDs in canonical lower-case form.
+    if (requestId !== requestId.toLowerCase()) return failed('InvalidRequestId');
+    const service = updates;
+    if (!service || !hostReady() || service.busy || transitions.active)
+      return failed('OperationBlocked');
+    const scope = agentScope();
+    let release;
+    try {
+      release = await service.selectLatestStable();
+    } catch (error) {
+      return failed('UpdateCheckFailed', { detail: safeError(error) });
+    }
+    if (!scope?.alive()) return failed('CancelledBeforeDispatch');
+    if (!hostReady()) return failed('OperationBlocked');
+    if (!release) return { outcome: 'Confirmed', code: 'NoNewerStable', result: null };
+    return reserveAgentUpdate(requestId, release.version, releaseKey(release), () =>
+      service.installPinnedStable(release, requestId),
+    );
+  }
+  function reserveAgentUpdate(
+    operationId: string,
+    version: string,
+    key: string,
+    install: () => Promise<UpdateState | null>,
+  ): Promise<AgentReply> {
     return transitions.reserve(
       operationId,
-      { kind: 'Update', version: choice.version },
+      { kind: 'Update', version },
       async () => {
-        if (!sameRelease(choice)) return 'Failed';
-        const state = await updates!.install(id, operationId);
+        const state = await install();
+        if (!state) return 'Failed';
         if (quitting) return 'Dispatched';
         if (!backend?.ready) throw new Error(state.error ?? 'Update shutdown was unconfirmed.');
         if (state.downloadCancellation === 'canceled') return 'Cancelled';
@@ -1464,6 +1496,7 @@ export function startManager(): void {
         return failed('StartupHandoffRequired');
       },
       update: requestAgentUpdate,
+      updateLatest: requestAgentUpdateLatest,
       cancelUpdate: (id) =>
         updates?.cancelDownload(id) === 'accepted'
           ? { outcome: 'Accepted', code: 'CancellationAccepted', result: { id } }

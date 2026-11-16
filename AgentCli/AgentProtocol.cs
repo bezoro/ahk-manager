@@ -30,6 +30,8 @@ internal sealed record AgentHelp(string Usage, string Commands, string Version);
 
 internal sealed record AgentVersion(string ClientVersion);
 
+internal sealed record AgentOperationId(Guid OperationId);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(AgentRequest))]
 [JsonSerializable(typeof(AgentResponse))]
@@ -37,6 +39,7 @@ internal sealed record AgentVersion(string ClientVersion);
 [JsonSerializable(typeof(AgentCancellation))]
 [JsonSerializable(typeof(AgentHelp))]
 [JsonSerializable(typeof(AgentVersion))]
+[JsonSerializable(typeof(AgentOperationId))]
 internal partial class AgentJson : JsonSerializerContext { }
 
 internal static class AgentProtocol

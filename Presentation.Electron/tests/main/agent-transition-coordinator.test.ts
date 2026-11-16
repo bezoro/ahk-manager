@@ -13,7 +13,12 @@ function fixture() {
   const events: string[] = [];
   const settled: Array<{ receipt: AgentReceipt; outcome: string; detail?: string }> = [];
   const state = { ready: true, alive: true, current: true, uncertain: false, owner: {} };
-  const scope: AgentScope = { alive: () => state.alive, files: [], confirm: async () => true };
+  const scope: AgentScope = {
+    requestId: operationId,
+    alive: () => state.alive,
+    files: [],
+    confirm: async () => true,
+  };
   let dispatchedScope: AgentScope | undefined;
   const receipts: NonNullable<ReturnType<Host['receipts']>> = {
     begin: async (id, source, transition) => {
