@@ -419,6 +419,7 @@ export function startManager(): void {
   async function prepareStorage(): Promise<void> {
     try {
       const previous = deployment;
+      let dataMoveFailure: { error: unknown } | null = null;
       try {
         deployment = await withDataMoveLease(previous, (boundary) =>
           completePendingDataMove(previous, boundary),
@@ -428,6 +429,7 @@ export function startManager(): void {
         if (!(await canKeepCurrentData(fallback))) throw error;
         deployment = fallback;
         storageError = safeError(error);
+        dataMoveFailure = { error };
       }
       if (!samePath(previous.dataDirectory, deployment.dataDirectory)) {
         // Electron may have initialized Chromium while the asynchronous copy ran.
@@ -447,6 +449,7 @@ export function startManager(): void {
         throw new Error('The data location changed during startup. Open Manager again.');
       storageLease = await acquirePortableStorageLease(deployment, (error) => {
         // Losing namespace protection must stop writes and cannot authorize an update.
+        recordFailure('storageLease', error);
         controller?.setConnection('failed', safeError(error));
         quitting = true;
         app.exit(65);
@@ -459,6 +462,7 @@ export function startManager(): void {
       // Logging avoids migration destinations. A pending data move is completed above
       // before any log files are opened or written.
       commandLog = createCommandLog(deployment);
+      if (dataMoveFailure) recordFailure('storage:restart', dataMoveFailure.error);
       process.on('uncaughtExceptionMonitor', (error) => recordFailure('uncaughtException', error));
     } catch (error) {
       storageError = safeError(error);
