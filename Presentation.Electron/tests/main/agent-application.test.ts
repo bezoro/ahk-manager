@@ -7,8 +7,11 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
 import type { AgentReply, AgentRequest } from '../../src/main/agent-transport.js';
+import { createCommandLog } from '../../src/main/logging/create-command-log.js';
+import type { CommandLog, CommandLogSnapshot } from '../../src/main/logging/command-log.js';
 import { resolveDeployment } from '../../src/main/storage/deployment.js';
 import { prepareDataMove } from '../../src/main/storage/data-migration.js';
+import { NativeStorageLeaseError } from '../../src/main/storage/native-storage-lease.js';
 import { UpdateStore } from '../../src/main/updates/update-store.js';
 import { hostText as tText } from '../../src/shared/host-en-US.js';
 import { SHUTDOWN_DEADLINE_MS } from '../../src/main/lifecycle.js';
@@ -31,13 +34,19 @@ async function waitFor<T>(read: () => T | undefined | Promise<T | undefined>): P
 interface FixturePorts {
   savePlacement?(): Promise<void>;
   scheduleShutdown?(callback: () => void, milliseconds: number): () => void;
+  captureCommands?: boolean;
+  dataMoveFailure?: Error;
 }
 
 async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePorts = {}) {
   const staging = process.env.AHK_DIAGNOSTICS_TEST_ROOT;
   assert.ok(staging && path.isAbsolute(staging));
   const root = await fs.mkdtemp(path.join(staging, 'agent-application-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  let commandLog: CommandLog | null = null;
+  t.after(async () => {
+    commandLog?.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
   const executable = path.join(root, 'App', 'Bezoro.AhkManager.exe');
   const local = path.join(root, 'Local');
   await fs.mkdir(path.dirname(executable));
@@ -54,7 +63,15 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
   const layout = resolveDeployment(executable, local);
   await fs.mkdir(layout.profileDirectory, { recursive: true });
   await fs.mkdir(layout.updatesDirectory);
+  if (ports.dataMoveFailure) {
+    await fs.writeFile(path.join(layout.profileDirectory, 'settings.json'), '{"preserved":true}');
+    await prepareDataMove(layout, path.join(root, 'Moved'), async (directory) => {
+      await fs.mkdir(directory);
+    });
+  }
   const events: string[] = [];
+  const exitLogs: CommandLogSnapshot[] = [];
+  let storageFailure: ((error: Error) => void) | undefined;
   let menu: Array<{ label?: string; click?: () => void }> = [];
   let dispatch: ((request: AgentRequest, alive: () => boolean) => Promise<AgentReply>) | undefined;
   let state = runningSnapshot();
@@ -158,6 +175,7 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
       events.push('app.quit');
     },
     exit: (code: number) => {
+      if (commandLog) exitLogs.push(commandLog.snapshot('errors'));
       events.push('app.exit=' + code);
     },
     relaunch: () => {
@@ -228,12 +246,23 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
     },
     './desktop/portable-search-shortcut.js': { ensurePortableSearchShortcut: async () => {} },
     './storage/portable-storage-lease.js': {
-      acquirePortableStorageLease: async () => ({ close: async () => {} }),
+      acquirePortableStorageLease: async (_layout: unknown, onFailure: (error: Error) => void) => {
+        storageFailure = onFailure;
+        return { close: async () => {} };
+      },
     },
     './storage/data-move-lease.js': {
-      withDataMoveLease: async (_layout: unknown, work: () => Promise<unknown>) => work(),
+      withDataMoveLease: async (_layout: unknown, work: () => Promise<unknown>) => {
+        if (ports.dataMoveFailure) throw ports.dataMoveFailure;
+        return work();
+      },
     },
-    './logging/create-command-log.js': { createCommandLog: () => null },
+    './logging/create-command-log.js': {
+      createCommandLog: () => {
+        if (ports.captureCommands) commandLog = createCommandLog(layout);
+        return commandLog;
+      },
+    },
     './logging/startup-failure.js': {
       recordStartupFailure: ({ error }: { error: unknown }) => {
         events.push('startup.error.' + String(error));
@@ -350,7 +379,18 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
     return (status.result as { ready: boolean }).ready ? status : undefined;
   });
   if (!busyLogonMarker) assert.equal(events.includes('window.create'), false);
-  return { events, layout, request, menu: () => menu };
+  return {
+    events,
+    layout,
+    request,
+    exitLogs,
+    commandLog: () => commandLog,
+    loseStorage: (error: Error) => {
+      assert.ok(storageFailure, 'The portable storage lease must be admitted first.');
+      storageFailure(error);
+    },
+    menu: () => menu,
+  };
 }
 
 test('windowless tray stop and exit asks for real consent before stopping through the backend', async (t) => {
@@ -477,6 +517,82 @@ test(
     assert.equal((afterSave.result as { connection: string }).connection, 'failed');
   },
 );
+
+test('runtime storage lease loss retains finite diagnostic evidence before Manager exits', async (t) => {
+  const f = await fixture(t, false, { captureCommands: true });
+  const privateDetail = 'C:\\Private\\profile token=fixture-secret';
+  f.loseStorage(
+    new NativeStorageLeaseError(privateDetail, {
+      schemaVersion: 1,
+      phase: 'installation-paths',
+      code: 'redirected-path',
+    }),
+  );
+  assert.deepEqual(f.events.slice(-1), ['app.exit=65']);
+  assert.equal(f.exitLogs.length, 1);
+  const records = f.exitLogs[0]!.records.filter(
+    (record) => record.command === 'storageLease' && record.phase === 'error',
+  );
+  assert.equal(
+    records.length,
+    1,
+    'The evidence must already be written at the native exit boundary.',
+  );
+  assert.equal(records[0]!.source, 'lifecycle');
+  assert.equal(records[0]!.errorName, 'NativeStorageLeaseError');
+  assert.equal(records[0]!.helperPhase, 'installation-paths');
+  assert.equal(records[0]!.helperCode, 'redirected-path');
+  assert.equal(JSON.stringify(f.exitLogs).includes('fixture-secret'), false);
+  const log = f.commandLog();
+  assert.ok(log);
+  for (const file of await fs.readdir(log.directory))
+    assert.equal(
+      (await fs.readFile(path.join(log.directory, file), 'utf8')).includes('fixture-secret'),
+      false,
+    );
+  assert.equal(f.events.includes('script.stop'), false);
+  assert.equal(f.events.includes('backend.shutdown'), false);
+});
+
+test('a tolerated data move refusal retains finite evidence after the current profile logger opens', async (t) => {
+  const privateDetail = 'C:\\Private\\move token=fixture-secret';
+  const f = await fixture(t, false, {
+    captureCommands: true,
+    dataMoveFailure: new NativeStorageLeaseError(privateDetail, {
+      schemaVersion: 1,
+      phase: 'portable-data-initialization',
+      code: 'cloud-file-unavailable',
+    }),
+  });
+  const log = f.commandLog();
+  assert.ok(log);
+  const records = log
+    .snapshot('errors')
+    .records.filter((record) => record.command === 'storage:restart' && record.phase === 'error');
+  assert.equal(records.length, 1);
+  assert.equal(records[0]!.errorName, 'NativeStorageLeaseError');
+  assert.equal(records[0]!.helperPhase, 'portable-data-initialization');
+  assert.equal(records[0]!.helperCode, 'cloud-file-unavailable');
+  const files = log.exportFiles();
+  assert.deepEqual(files.issues, []);
+  assert.equal(JSON.stringify(files).includes('fixture-secret'), false);
+  for (const file of await fs.readdir(log.directory))
+    assert.equal(
+      (await fs.readFile(path.join(log.directory, file), 'utf8')).includes('fixture-secret'),
+      false,
+    );
+  assert.equal(f.events.includes('app.relaunch'), false);
+  assert.equal(f.events.includes('app.exit=65'), false);
+  assert.equal(
+    await fs.readFile(path.join(f.layout.profileDirectory, 'settings.json'), 'utf8'),
+    '{"preserved":true}',
+  );
+  const marker = JSON.parse(await fs.readFile(f.layout.configurationPath!, 'utf8')) as {
+    dataDirectory: string;
+  };
+  assert.equal(marker.dataDirectory, 'Data');
+  await assert.rejects(fs.stat(path.join(f.layout.portableRoot, 'Moved')), { code: 'ENOENT' });
+});
 
 test('registered portable logon recovers a busy configuration before any native bootstrap or instance lock', async (t) => {
   if (process.platform !== 'win32') return t.skip('Packaged Windows logon only');
