@@ -270,7 +270,7 @@ export class UpdateStore {
     }
     return result;
   }
-  async verify(entry: CachedPackage): Promise<void> {
+  async verify(entry: CachedPackage, expectedManifest?: string): Promise<void> {
     if (
       !version(entry.version) ||
       entry.archivePath !== path.join(this.root, 'installers', entry.version, packageFileName()) ||
@@ -283,9 +283,12 @@ export class UpdateStore {
         'The package integrity check failed. Check for updates to download another copy.',
       );
 
-    await this.portableProof(entry);
+    await this.portableProof(entry, expectedManifest);
   }
-  async portableProof(entry: CachedPackage): Promise<PortablePackageProof> {
+  async portableProof(
+    entry: CachedPackage,
+    expectedManifest?: string,
+  ): Promise<PortablePackageProof> {
     if (
       !version(entry.version) ||
       entry.archivePath !== path.join(this.root, 'installers', entry.version, 'archive.zip')
@@ -293,10 +296,10 @@ export class UpdateStore {
       throw new Error('The portable package is outside the version history.');
     const proof = path.join(path.dirname(entry.archivePath), portableManifestFile);
     await this.regular(proof, 65536);
-    return requirePortablePackageProof(
-      new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(proof)),
-      entry,
-    );
+    const manifest = new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(proof));
+    if (expectedManifest !== undefined && manifest !== expectedManifest)
+      throw new Error('The cached update metadata does not match the checked release.');
+    return requirePortablePackageProof(manifest, entry);
   }
   async discardPortableDownload(source: string): Promise<void> {
     try {

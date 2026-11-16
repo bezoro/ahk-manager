@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
@@ -13,6 +13,8 @@ import { resolveDeployment } from '../../src/main/storage/deployment.js';
 import { prepareDataMove } from '../../src/main/storage/data-migration.js';
 import { NativeStorageLeaseError } from '../../src/main/storage/native-storage-lease.js';
 import { UpdateStore } from '../../src/main/updates/update-store.js';
+import { UpdateService, type UpdateBoundary } from '../../src/main/updates/update-service.js';
+import type { RemoteUpdateRelease } from '../../src/main/updates/github-updates.js';
 import { hostText as tText } from '../../src/shared/host-en-US.js';
 import { SHUTDOWN_DEADLINE_MS } from '../../src/main/lifecycle.js';
 import { planId, runningSnapshot } from './fixtures.js';
@@ -36,6 +38,10 @@ interface FixturePorts {
   scheduleShutdown?(callback: () => void, milliseconds: number): () => void;
   captureCommands?: boolean;
   dataMoveFailure?: Error;
+  createUpdates?(
+    boundary: Pick<UpdateBoundary, 'preflight' | 'confirm' | 'changed'>,
+    store: UpdateStore,
+  ): Promise<UpdateService>;
 }
 
 async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePorts = {}) {
@@ -271,7 +277,14 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
       startupFailureDirectory: () => root,
     },
     './updates/application-updates.js': {
-      createApplicationUpdates: async () => ({ service: { busy: false, snapshot: {} }, store }),
+      createApplicationUpdates: async (
+        boundary: Pick<UpdateBoundary, 'preflight' | 'confirm' | 'changed'>,
+      ) => ({
+        service: ports.createUpdates
+          ? await ports.createUpdates(boundary, store)
+          : { busy: false, snapshot: {} },
+        store,
+      }),
     },
   };
   const esbuild = requireFixture('esbuild') as typeof import('esbuild');
@@ -368,8 +381,8 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
       return open(...args);
     });
   }
-  const request = (command: string, args: Record<string, unknown> = {}) =>
-    dispatch!({ protocol: 1, requestId: randomUUID(), command, arguments: args }, () => true);
+  const request = (command: string, args: Record<string, unknown> = {}, requestId = randomUUID()) =>
+    dispatch!({ protocol: 1, requestId, command, arguments: args }, () => true);
   (requireFixture(bundle) as typeof import('../../src/main/application.js')).startManager();
   await waitFor(async () => {
     if (events.some((event) => event.startsWith('startup.error.')))
@@ -605,4 +618,118 @@ test('registered portable logon recovers a busy configuration before any native 
     'instance.lock',
   ]);
   assert.equal(f.events.filter((event) => event === 'storage.initialize').length, 1);
+});
+
+test('installLatest returns a durable receipt with the wire ID and dispatches the pinned update once', async (t) => {
+  const bytes = Buffer.from('Inert update archive for a local fixture.');
+  const item: RemoteUpdateRelease = {
+    id: 'github:42',
+    version: '1.2.2',
+    publishedAt: '2026-11-09T00:00:00Z',
+    notes: 'Fixture stable release',
+    commit: 'a'.repeat(40),
+    assetId: 43,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    sha512: createHash('sha512').update(bytes).digest('base64'),
+    bytes: bytes.length,
+    archiveName: 'AHK-Manager-1.2.2-Portable-x64.zip',
+    deployment: 'portable',
+  };
+  item.manifestText = JSON.stringify({
+    schemaVersion: 1,
+    updateProtocol: 2,
+    version: item.version,
+    commit: item.commit,
+    publishedAt: item.publishedAt,
+    notes: item.notes,
+    archive: {
+      name: item.archiveName,
+      bytes: item.bytes,
+      sha256: item.sha256,
+      sha512: item.sha512,
+    },
+  });
+  let lookups = 0;
+  let failLookup = false;
+  let latest: RemoteUpdateRelease[] = [];
+  const downloads: Array<string> = [];
+  const applies: Array<{ id: string; version: string }> = [];
+  let service: UpdateService | undefined;
+  const f = await fixture(t, false, {
+    createUpdates: async (boundary, store) => {
+      await store.saveChannel('test');
+      service = new UpdateService({
+        ...boundary,
+        version: '1.2.1',
+        store,
+        releases: async () => [],
+        stableReleases: async () => {
+          lookups++;
+          if (failLookup) throw new Error('fixture stable check failure');
+          return latest;
+        },
+        download: async (release) => {
+          assert.equal(release.manifestText, item.manifestText);
+          downloads.push(release.id);
+          const target = path.join(store.root, 'downloads');
+          await store.safeDirectory(target, true);
+          const directory = await fs.mkdtemp(path.join(target, 'portable-'));
+          const archive = path.join(directory, 'archive.zip');
+          await fs.writeFile(archive, bytes);
+          await fs.writeFile(path.join(directory, 'release.json'), release.manifestText!);
+          return archive;
+        },
+        apply: async (id, target) => {
+          applies.push({ id, version: target.version });
+        },
+      });
+      await service.initialize();
+      return service;
+    },
+  });
+  assert.equal(
+    (await f.request('updates.installLatest', { version: '1.2.2' })).code,
+    'InvalidArguments',
+  );
+  assert.equal(
+    (await f.request('commands.preview', { command: 'updates.installLatest', arguments: {} })).code,
+    'UnknownCommand',
+  );
+  assert.equal(lookups, 0);
+  assert.deepEqual(await f.request('updates.installLatest'), {
+    outcome: 'Confirmed',
+    code: 'NoNewerStable',
+    result: null,
+  });
+  failLookup = true;
+  assert.equal((await f.request('updates.installLatest')).code, 'UpdateCheckFailed');
+  failLookup = false;
+  latest = [item];
+  const operationId = randomUUID();
+  const reply = await f.request('updates.installLatest', {}, operationId);
+  assert.equal(reply.outcome, 'Accepted', JSON.stringify(reply));
+  assert.equal(reply.code, 'OperationAccepted');
+  assert.deepEqual(reply.result, {
+    schemaVersion: 1,
+    operationId,
+    generation: (reply.result as { generation: string }).generation,
+    kind: 'Update',
+    version: item.version,
+  });
+  assert.equal((await f.request('operations.get', { operationId })).code, 'OperationInProgress');
+  assert.equal(
+    (await f.request('updates.installLatest', {}, operationId)).code,
+    'OperationBlocked',
+  );
+  assert.deepEqual(downloads, []);
+  assert.deepEqual(applies, []);
+  assert.ok(reply.afterReply);
+  await reply.afterReply(true);
+  await reply.afterReply(true);
+  assert.deepEqual(downloads, [item.id]);
+  assert.deepEqual(applies, [{ id: operationId, version: item.version }]);
+  assert.equal(lookups, 3);
+  assert.equal(service?.snapshot.channel, 'test');
+  assert.equal(f.events.includes('script.stop'), false);
+  assert.equal(f.events.includes('window.create'), false);
 });

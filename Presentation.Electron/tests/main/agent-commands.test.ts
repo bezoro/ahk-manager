@@ -99,6 +99,7 @@ test('a command review seals exact process identity without replacing the render
     continuation: async () => null,
     resumeStartup: async () => failed('OperationNotFound'),
     update: async () => ok(),
+    updateLatest: async () => ok(),
     cancelUpdate: () => ok(),
     prepareStorage: async () => null,
     restartStorage: async () => ok(),

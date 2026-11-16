@@ -64,6 +64,7 @@ interface Confirmation {
 }
 
 export interface AgentScope {
+  requestId: string;
   alive(): boolean;
   files: string[];
   confirm(title: string, detail: string, target?: unknown): Promise<boolean>;
@@ -84,6 +85,7 @@ export interface AgentCommandsBoundary {
   continuation(): Promise<unknown>;
   resumeStartup(operationId: string): Promise<AgentReply>;
   update(id: string): Promise<AgentReply>;
+  updateLatest(requestId: string): Promise<AgentReply>;
   cancelUpdate(id: string): AgentReply;
   prepareStorage(directory?: string): Promise<unknown>;
   restartStorage(): Promise<AgentReply>;
@@ -403,6 +405,9 @@ export class AgentCommands {
       },
     );
     review('updates.install', externalId, 'installUpdate', ({ id }) => host.update(String(id)));
+    define('updates.installLatest', none, 'installUpdate', () =>
+      host.updateLatest(this.scope.getStore()!.requestId),
+    );
     define<{ id: string }>(
       'updates.cancelDownload',
       shape({ id: guid }),
@@ -485,6 +490,7 @@ export class AgentCommands {
     }
     const live = () => alive() && this.backendGeneration === generation;
     const scope: AgentScope = {
+      requestId: request.requestId,
       alive: live,
       files: [],
       async confirm(title, detail, target) {

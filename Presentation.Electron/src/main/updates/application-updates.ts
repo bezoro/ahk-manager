@@ -81,6 +81,7 @@ export async function createApplicationUpdates(
     store,
     preserveCurrent,
     releases: (channel) => client.releases(channel),
+    stableReleases: () => new GitHubUpdateClient(fetcher, deployment).releases('stable'),
     resolve: (id) => client.resolve(id),
     download,
     recovery: () => updateRecoveryStatus(store),

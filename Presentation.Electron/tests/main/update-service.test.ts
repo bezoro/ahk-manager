@@ -54,6 +54,7 @@ const metadata = (version = '1.2.0'): RemoteUpdateRelease => ({
 class Store implements UpdateStorePort {
   items: CachedPackage[] = [];
   corrupt = new Set<string>();
+  verifiedManifests: Array<string | undefined> = [];
   cachedSources: string[] = [];
   discarded: string[] = [];
   channel: UpdateChannel = 'stable';
@@ -77,7 +78,8 @@ class Store implements UpdateStorePort {
   async cached(): Promise<CachedPackage[]> {
     return structuredClone(this.items);
   }
-  async verify(value: CachedPackage): Promise<void> {
+  async verify(value: CachedPackage, expectedManifest?: string): Promise<void> {
+    this.verifiedManifests.push(expectedManifest);
     if (this.corrupt.has(value.version)) throw new Error('Fixture cache integrity failure.');
   }
   async discardPortableDownload(source: string): Promise<void> {
@@ -1092,4 +1094,85 @@ test('retired credential cleanup cannot block public initialization or update ch
   assert.equal(checked.error, null);
   assert.equal(checked.availableVersion, '1.2.10');
   assert.deepEqual(f.queriedChannels, ['stable']);
+});
+
+function stableRelease(version: string, id: string): RemoteUpdateRelease {
+  const item = { ...release(version, id), deployment: 'portable' as const };
+  return {
+    ...item,
+    manifestText: JSON.stringify({
+      schemaVersion: 1,
+      updateProtocol: 2,
+      version,
+      commit: item.commit,
+      publishedAt: item.publishedAt,
+      notes: item.notes,
+      archive: {
+        name: item.archiveName,
+        bytes: item.bytes,
+        sha256: item.sha256,
+        sha512: item.sha512,
+      },
+    }),
+  };
+}
+
+test('latest stable pins the verified official release independently of Test and cached history', async () => {
+  const f = fixture();
+  const stable = stableRelease('1.2.11', 'github:311');
+  const officialManifest = stable.manifestText;
+  f.store.channel = 'test';
+  f.store.items.push(cached('1.2.99'));
+  f.hooks.releases = async () => [release('1.3.0-test.18.1.2', 'github:351')];
+  f.boundary.stableReleases = async () => [
+    stableRelease('1.2.50', 'local:1.2.50'),
+    stableRelease('1.2.16-test.2.1.2', 'github:250'),
+    stableRelease('1.2.10', 'github:310'),
+    stable,
+  ];
+  await f.service.initialize();
+  await f.service.check();
+  const previous = f.service.snapshot;
+  const selected = await f.service.selectLatestStable();
+  assert.ok(selected);
+  assert.equal(selected.version, '1.2.11');
+  assert.deepEqual(f.service.snapshot, previous);
+  stable.sha256 = '0'.repeat(64);
+  stable.manifestText = 'different proof';
+  const operationId = 'b41c7689-583f-448f-8020-4da7d022a00e';
+  await f.service.installPinnedStable(selected, operationId);
+  assert.deepEqual(f.queriedChannels, ['test']);
+  assert.deepEqual(f.store.savedChannels, []);
+  assert.deepEqual(f.preflights, [
+    { operationId, phase: 'begin' },
+    { operationId, phase: 'commit' },
+  ]);
+  assert.equal(f.downloaded.length, 1);
+  assert.equal(f.downloaded[0]!.manifestText, officialManifest);
+  assert.equal(f.applied[0]!.target.sha256, hash);
+  assert.equal(f.applied[0]!.target.version, '1.2.11');
+  assert.deepEqual(f.confirmed, ['github:311']);
+  assert.deepEqual(f.store.verifiedManifests, [officialManifest]);
+  assert.deepEqual(f.resolved, []);
+});
+
+test('an unavailable or inconsistent official stable check is not a no-update result', async () => {
+  const f = fixture();
+  f.store.items.push(cached('9.9.9'));
+  f.boundary.stableReleases = async () => [stableRelease('1.2.1', 'github:101')];
+  assert.equal(await f.service.selectLatestStable(), null);
+  f.boundary.stableReleases = async () => {
+    throw new Error('fixture fetch failed');
+  };
+  await assert.rejects(f.service.selectLatestStable(), /fixture fetch failed/);
+  f.boundary.stableReleases = async () => [
+    { ...stableRelease('1.2.12', 'github:122'), commit: 'c'.repeat(40) },
+  ];
+  await assert.rejects(f.service.selectLatestStable(), /metadata changed/);
+  f.boundary.stableReleases = async () =>
+    [metadata('1.2.12')].map((item) => ({ ...item, id: 'github:122' }));
+  await assert.rejects(f.service.selectLatestStable(), /could not be verified/);
+  assert.deepEqual(f.confirmed, []);
+  assert.deepEqual(f.applied, []);
+  assert.equal(f.service.busy, false);
 });

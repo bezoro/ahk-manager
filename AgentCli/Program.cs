@@ -8,7 +8,8 @@ namespace Bezoro.AhkManager.AgentCli;
 
 internal static class Program
 {
-    static readonly string Usage = "ahk-manager <command> [--json OBJECT | --stdin] [--start]";
+    static readonly string Usage =
+        "ahk-manager <command> [--json OBJECT | --stdin] [--start]\nahk-manager updates.installLatest [--elevate]";
 
     static async Task<int> Main(string[] args)
     {
@@ -19,6 +20,7 @@ internal static class Program
             stopping.Cancel();
         };
         bool privateMode = args is ["--server"];
+        bool updateChild = args.Length > 0 && args[0] == StableUpdateHandoff.ChildAction;
         bool authenticatedServer = false;
         Guid requestId = Guid.NewGuid();
         string? executable = Environment.ProcessPath;
@@ -44,6 +46,8 @@ internal static class Program
                 ).Run(layout, self, stopping.Token);
                 return 0;
             }
+            if (updateChild)
+                return await RunElevatedUpdate(args, version, stopping.Token);
             if (args.Length == 0 || args is ["help"] or ["--help"] or ["-h"])
                 return Write(
                     Offline(
@@ -83,7 +87,13 @@ internal static class Program
                     )
                 );
             }
-            var options = await Parse(args, stopping.Token);
+            var stable = StableUpdateHandoff.Invocation(args);
+            if (stable == StableUpdateInvocation.Invalid)
+                throw new AgentFailure("InvalidInput");
+            var options =
+                stable == StableUpdateInvocation.Other
+                    ? await Parse(args, stopping.Token)
+                    : (Arguments: AgentProtocol.Empty, Start: false);
             var request = new AgentRequest(
                 AgentProtocol.Version,
                 requestId,
@@ -98,13 +108,51 @@ internal static class Program
                 throw new AgentFailure("InvalidInput");
             using var local = new AgentPeer(Environment.ProcessId);
             if (!local.Administrator)
+            {
+                if (
+                    stable == StableUpdateInvocation.RequestConsent
+                    && local.Security is { Elevated: false, IntegrityRid: >= 0x2000 and < 0x3000 }
+                )
+                {
+                    var layout = AgentLayout.FromExecutable(local.Stamp.Executable);
+                    Environment.CurrentDirectory = layout.Root;
+                    return Write(
+                        await StableUpdateLauncher.RequestConsent(
+                            layout,
+                            local,
+                            new StableUpdateIdentity(
+                                requestId,
+                                local.Stamp.Sid,
+                                local.Stamp.Session
+                            ),
+                            version,
+                            stopping.Token
+                        )
+                    );
+                }
                 throw new AgentFailure("ElevationRequired");
-            return Write(
-                await new AgentClient(
-                    AgentLayout.FromExecutable(local.Stamp.Executable),
-                    local
-                ).Invoke(request, payload, options.Start, stopping.Token)
+            }
+            var activeLayout = AgentLayout.FromExecutable(local.Stamp.Executable);
+            if (stable != StableUpdateInvocation.Other)
+                Environment.CurrentDirectory = activeLayout.Root;
+            var response = await new AgentClient(activeLayout, local).Invoke(
+                request,
+                payload,
+                options.Start,
+                stopping.Token
             );
+            if (
+                stable != StableUpdateInvocation.Other
+                && response.Outcome is "Confirmed" or "Accepted"
+                && StableUpdateHandoff.ChildExit(requestId, response)
+                    == StableUpdateHandoff.ChildUnknown
+            )
+                response = StableUpdateHandoff.FromExit(
+                    requestId,
+                    version,
+                    StableUpdateHandoff.ChildUnknown
+                );
+            return Write(response);
         }
         catch (Exception ex) when (AgentFailure.Expected(ex))
         {
@@ -116,6 +164,17 @@ internal static class Program
                 UnauthorizedAccessException or ManagementException => "PeerUnverified",
                 _ => "InvalidInstallation",
             };
+            if (updateChild)
+                return
+                    code
+                        is "PeerUnverified"
+                            or "ElevationRequired"
+                            or "HostUnavailable"
+                            or "HostBusy"
+                            or "InvalidInstallation"
+                            or "CancelledBeforeDispatch"
+                    ? StableUpdateHandoff.ChildRefused
+                    : StableUpdateHandoff.ChildUnknown;
             if (privateMode)
             {
                 if (authenticatedServer)
@@ -128,6 +187,14 @@ internal static class Program
             string outcome = code is "ReplyUnconfirmed" or "StartupUnconfirmed"
                 ? "Unknown"
                 : "Failed";
+            if (outcome == "Unknown" && args[0] == StableUpdateHandoff.Command)
+                return Write(
+                    StableUpdateHandoff.FromExit(
+                        requestId,
+                        version,
+                        StableUpdateHandoff.ChildUnknown
+                    )
+                );
             return Write(
                 new AgentResponse(
                     AgentProtocol.Version,
@@ -140,6 +207,39 @@ internal static class Program
                 )
             );
         }
+    }
+
+    static async Task<int> RunElevatedUpdate(string[] args, string version, CancellationToken ct)
+    {
+        if (StableUpdateHandoff.ParseChild(args) is not { } intent)
+            return StableUpdateHandoff.ChildRefused;
+        using var local = new AgentPeer(Environment.ProcessId);
+        if (
+            !StableUpdateHandoff.MatchesAccount(
+                intent,
+                local.Stamp.Sid,
+                local.Stamp.Session,
+                local.Administrator
+            )
+        )
+            return StableUpdateHandoff.ChildRefused;
+        var layout = AgentLayout.FromExecutable(local.Stamp.Executable);
+        Environment.CurrentDirectory = layout.Root;
+        // Verify again in the elevated process, before contact with the host.
+        using (new StableUpdateLaunchLease(layout, local.Stamp.Executable, version)) { }
+        var request = new AgentRequest(
+            AgentProtocol.Version,
+            intent.OperationId,
+            StableUpdateHandoff.Command,
+            AgentProtocol.Empty
+        );
+        var response = await new AgentClient(layout, local).Invoke(
+            request,
+            JsonSerializer.SerializeToUtf8Bytes(request, AgentJson.Default.AgentRequest),
+            false,
+            ct
+        );
+        return StableUpdateHandoff.ChildExit(intent.OperationId, response);
     }
 
     static AgentResponse Offline(Guid requestId, string version, JsonElement result) =>
@@ -160,8 +260,11 @@ internal static class Program
         code switch
         {
             "InvalidInput" or "UnknownCommand" or "InvalidArguments" => 2,
-            "ElevationRequired" or "PeerUnverified" or "AccessDenied" or "PrivateParentRequired" =>
-                3,
+            "ElevationRequired"
+            or "PeerUnverified"
+            or "AccessDenied"
+            or "PrivateParentRequired"
+            or "ElevationHandoffRefused" => 3,
             "HostUnavailable" or "HostBusy" or "InvalidInstallation" => 4,
             _ => outcome switch
             {
