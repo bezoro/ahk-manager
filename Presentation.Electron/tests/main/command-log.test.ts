@@ -890,3 +890,69 @@ test('complete export enforces a total read budget and lists every excluded file
   assert.equal(exported.issues.filter((issue) => issue.reason === 'read-budget').length, 2);
   assert.equal(log.status().available, true);
 });
+
+test('agent reply envelopes retain their outcome and finite command identity in copied and complete logs', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  const agentRequestId = randomUUID();
+  const privatePayload = 'github_pat_private-agent-payload-C:\\Users\\Private';
+  for (const outcome of ['Failed', 'Partial', 'Unknown'] as const) {
+    const reply = {
+      outcome,
+      code: 'BackendUnavailable',
+      result: { outcome: 'Confirmed', code: 'None', detail: privatePayload },
+    };
+    assert.equal(
+      await log.run('agent', 'agent:app.retryBackend', () => reply, { agentRequestId }),
+      reply,
+    );
+  }
+  const errors = log.snapshot('errors').records;
+  assert.equal(errors.length, 6);
+  assert.deepEqual(
+    errors.filter((record) => record.phase === 'completed').map((record) => record.result),
+    ['failed', 'partial', 'unknown'],
+  );
+  assert.ok(errors.every((record) => record.command === 'agent:app.retryBackend'));
+  assert.ok(errors.every((record) => record.source === 'agent'));
+  assert.ok(errors.every((record) => record.agentRequestId === agentRequestId));
+  assert.ok(
+    errors
+      .filter((record) => record.phase === 'completed')
+      .every((record) => record.code === 'BackendUnavailable'),
+  );
+  assert.doesNotMatch(JSON.stringify(errors), /private-agent-payload|Private|detail/);
+  const exported = log.exportFiles();
+  assert.deepEqual(exported.issues, []);
+  const copied = exported.files.flatMap((file) =>
+    file.contents
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)),
+  );
+  assert.equal(
+    copied.filter((record) => record.phase === 'completed' && record.result === 'failed').length,
+    1,
+  );
+  assert.doesNotMatch(JSON.stringify(copied), /private-agent-payload|Private|detail/);
+});
+
+test('unrecognized agent command names and result codes cannot enter shared diagnostic evidence', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  const secret = 'github_pat_forged_agent_command';
+  await log.run(
+    'agent',
+    'agent:' + secret,
+    () => ({ outcome: 'Failed', code: secret, result: { message: secret } }),
+    { agentRequestId: secret },
+  );
+  const copied = log.snapshot('errors').records;
+  assert.equal(copied.length, 2);
+  assert.ok(copied.every((record) => record.command === 'unknown'));
+  assert.ok(copied.every((record) => record.agentRequestId === undefined));
+  assert.doesNotMatch(JSON.stringify(records(directory)), /forged_agent_command/);
+  assert.doesNotMatch(JSON.stringify(log.exportFiles()), /forged_agent_command/);
+});

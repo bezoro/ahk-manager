@@ -31,7 +31,7 @@ internal static partial class SelfTests
             "1.2.1",
             Deployment: "portable"
         );
-        CheckAdmissionDiagnostics(Check);
+        CheckAdmissionDiagnostics(Check, Path.Combine(root, "update-refusal-contract.json"));
         CheckPortableAdministratorAccess(Check);
         CheckPortableInitializationDiagnostics(Check);
         CheckApplyDiagnostics(Check);

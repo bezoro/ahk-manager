@@ -163,3 +163,24 @@ test('reports enforce the UTF-8 clipboard limit without cutting a JSON record', 
   for (const line of lines) assert.doesNotThrow(() => JSON.parse(line));
   assert.equal(JSON.parse(lines.at(-1)!).requestId, '199');
 });
+
+test('copy error summary includes a failed agent reply even when its result is a ready status object', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-copy-agent-errors-'));
+  const log = new CommandLog(directory);
+  t.after(() => {
+    log.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await log.run('agent', 'agent:app.retryBackend', () => ({
+    outcome: 'Failed',
+    code: 'BackendUnavailable',
+    result: { connection: 'ready', detail: 'private-agent-diagnostic-payload' },
+  }));
+  const report = createDiagnosticReport(context(), log, 'errors');
+  assert.match(report, /"command":"agent:app.retryBackend"/);
+  assert.match(report, /"source":"agent"/);
+  assert.match(report, /"result":"failed"/);
+  assert.match(report, /"code":"BackendUnavailable"/);
+  assert.match(report, /Included records: 2\./);
+  assert.doesNotMatch(report, /private-agent-diagnostic-payload/);
+});

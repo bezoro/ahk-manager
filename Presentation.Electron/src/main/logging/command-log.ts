@@ -1,4 +1,13 @@
 import fs from 'node:fs';
+import {
+  sources,
+  protocolCodes,
+  agentCodes,
+  states,
+  errorNames,
+  systemCodes,
+  knownCommand,
+} from './command-log-policy.js';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
@@ -22,79 +31,8 @@ export type {
 
 const applicationId = 'Bezoro.AhkManager.Electron';
 const filePattern = /^commands-(\d{8}T\d{9}Z)-([0-9a-f-]{36})-(\d{6})\.jsonl$/;
-const sources = new Set(['ui', 'backend', 'tray', 'lifecycle', 'updates', 'storage']);
-const protocolCodes = new Set([
-  'Ok',
-  'InvalidFrame',
-  'InvalidRequest',
-  'NotAuthenticated',
-  'ParentMismatch',
-  'UnknownAction',
-  'QueueFull',
-  'IdConflict',
-  'RequestExpired',
-  'FrameTooLarge',
-  'ShuttingDown',
-  'InternalFailure',
-]);
-const states = new Set([
-  'idle',
-  'checking',
-  'downloading',
-  'installing',
-  'error',
-  'PendingApproval',
-  'Ready',
-  'CommitPending',
-  'CommitAcked',
-  'Cancelled',
-  'Denied',
-  'Failed',
-  'Expired',
-  'Completed',
-  'Unknown',
-]);
-const errorNames = new Set([
-  'Error',
-  'TypeError',
-  'RangeError',
-  'SyntaxError',
-  'ReferenceError',
-  'URIError',
-  'EvalError',
-  'AggregateError',
-  'AbortError',
-  'UnknownAfterDispatchError',
-  'BackendProtocolError',
-]);
-const systemCodes = new Set([
-  'EACCES',
-  'EPERM',
-  'ENOENT',
-  'EEXIST',
-  'ENOSPC',
-  'EDQUOT',
-  'EIO',
-  'EBUSY',
-  'EMFILE',
-  'ENFILE',
-  'ENOTDIR',
-  'EISDIR',
-  'ELOOP',
-  'EROFS',
-  'EINVAL',
-  'ETIMEDOUT',
-  'ECONNRESET',
-  'ECONNREFUSED',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-  'EPIPE',
-  'ERR_ABORTED',
-  'ERR_INVALID_ARG_TYPE',
-  'ERR_INVALID_ARG_VALUE',
-]);
-
-export type CommandSource = 'ui' | 'backend' | 'tray' | 'lifecycle' | 'updates' | 'storage';
+export type CommandSource =
+  'ui' | 'backend' | 'tray' | 'lifecycle' | 'updates' | 'storage' | 'agent';
 export interface CommandDetails {
   operation?: string;
   scriptId?: string;
@@ -107,6 +45,7 @@ export interface CommandDetails {
   startInTray?: boolean;
   attempt?: number;
   retrying?: boolean;
+  agentRequestId?: string;
 }
 export interface CommandLogStatus {
   available: boolean;
@@ -150,7 +89,7 @@ const regular = (value: Stamp): boolean =>
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const code = (value: unknown): value is string =>
-  typeof value === 'string' && (reason(value) || protocolCodes.has(value));
+  typeof value === 'string' && (reason(value) || protocolCodes.has(value) || agentCodes.has(value));
 const commandName = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9:._-]{0,63}$/.test(value);
 const publicVersion = (value: unknown): value is string =>
@@ -167,6 +106,7 @@ const boundedLimit = (
 
 function detailsOf(details: CommandDetails | undefined): Fields {
   const result: Fields = {};
+  if (guid(details?.agentRequestId)) result.agentRequestId = details.agentRequestId;
   if (operation(details?.operation)) result.operation = details!.operation!;
   if (guid(details?.scriptId)) result.scriptId = details!.scriptId!;
   if (publicVersion(details?.version)) result.version = details.version;
@@ -230,7 +170,14 @@ function resultOf(value: unknown): Fields {
   if (Array.isArray(value))
     return { result: 'completed', itemCount: Math.min(value.length, 100000) };
   if (!object(value)) return { result: 'completed' };
-  const target = object(value.result) ? value.result : object(value.plan) ? value.plan : value;
+  // A transport envelope owns its outcome; nested result data cannot override it.
+  const target = outcome(value.outcome)
+    ? value
+    : object(value.result)
+      ? value.result
+      : object(value.plan)
+        ? value.plan
+        : value;
   const result: Fields = { result: 'completed' };
   if (outcome(target.outcome)) {
     result.outcome = target.outcome as string;
@@ -360,7 +307,8 @@ export class CommandLog implements CommandLogBoundary {
     this.safely(() => {
       fields = {
         source: sources.has(source) ? source : 'lifecycle',
-        command: commandName(command) ? command : 'unknown',
+        command:
+          source === 'agent' ? knownCommand(command) : commandName(command) ? command : 'unknown',
         ...detailsOf(details),
       };
       this.write({ kind: 'command', ...fields, requestId, parentRequestId, phase: 'started' });
@@ -525,6 +473,7 @@ export class CommandLog implements CommandLogBoundary {
         'errorName',
         'errorCode',
         'backendRequestId',
+        'agentRequestId',
       ]);
       for (const line of lines) {
         const record = JSON.parse(line) as Record<string, unknown>;

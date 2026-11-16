@@ -24,6 +24,7 @@ const phases = new Set([
   'package',
   'fallback-package',
   'parent-identity',
+  'installed-image',
   'cancellation',
   'readiness',
   'apply',

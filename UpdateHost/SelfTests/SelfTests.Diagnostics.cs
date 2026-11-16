@@ -8,13 +8,16 @@ namespace Bezoro.AhkManager.UpdateHost;
 
 internal static partial class SelfTests
 {
-    static void CheckAdmissionDiagnostics(Action<bool, string> check)
+    static void CheckAdmissionDiagnostics(Action<bool, string> check, string? contractPath = null)
     {
         const string sensitive =
             "private fixture path C:\\Users\\fixture\\profile\nforged diagnostic";
         (Exception Exception, string Code)[] cases =
         [
             (new OperationCanceledException(sensitive), "cancelled"),
+            (new PortableAdministratorRequiredException(), "administrator-required"),
+            (new Win32Exception(32, sensitive), "sharing-violation"),
+            (new Win32Exception(33, sensitive), "lock-violation"),
             (new InvalidDataException(sensitive), "invalid-data"),
             (new UnauthorizedAccessException(sensitive), "access-denied"),
             (new FileNotFoundException(sensitive, sensitive), "file-not-found"),
@@ -36,12 +39,14 @@ internal static partial class SelfTests
                 "cloud-file-unavailable"
             ),
         ];
+        var contract = new List<string>();
         foreach (UpdatePhase phase in Enum.GetValues<UpdatePhase>())
         {
             bool valid = true;
             foreach (var item in cases)
             {
                 string line = AdmissionDiagnostics.Encode(phase, item.Exception);
+                contract.Add(line);
                 using var document = JsonDocument.Parse(line[AdmissionDiagnostics.Prefix.Length..]);
                 var root = document.RootElement;
                 valid &=
@@ -71,6 +76,16 @@ internal static partial class SelfTests
                         );
             }
             check(valid, "bounded path-free refusal diagnostics cover " + phase);
+        }
+        if (contractPath is not null)
+        {
+            using var file = new FileStream(contractPath, FileMode.CreateNew, FileAccess.Write);
+            using var writer = new Utf8JsonWriter(file);
+            writer.WriteStartArray();
+            foreach (string line in contract)
+                writer.WriteStringValue(line);
+            writer.WriteEndArray();
+            writer.Flush();
         }
         foreach (
             var item in new (Exception Failure, string Code)[]
