@@ -26,6 +26,7 @@ declare global {
       ): Promise<void>;
       resolveResponse(method: string, response: { value?: unknown; error?: string }): Promise<void>;
       resetResponses(): Promise<void>;
+      endScenario(): Promise<void>;
       openPreferences(): Promise<void>;
       pressEnter(): Promise<void>;
       setState(state: HostState): Promise<void>;
@@ -199,6 +200,52 @@ const startupRepairStorage = {
   error: null,
 };
 
+async function resetFailedScenario(host: HostState): Promise<void> {
+  await window.fixtureHarness.endScenario();
+  await tick();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const modal = document.querySelector('[role="dialog"]');
+    if (!modal) break;
+    const close = [...modal.querySelectorAll<HTMLButtonElement>('button')].find(
+      (control) =>
+        control.textContent?.trim() === text.cancel || control.textContent?.trim() === text.close,
+    );
+    assert(close && !close.disabled, 'Failed scenario left a dialog that cannot be closed');
+    close.click();
+    await tick();
+  }
+  assert(!document.querySelector('[role="dialog"]'), 'Failed scenario retained a modal dialog');
+  await window.fixtureHarness.setState(host);
+  await window.fixtureHarness.setUpdates(updateFixture());
+  await window.fixtureHarness.setTheme(light);
+  await tick();
+  button(text.scripts).click();
+  await tick();
+  const search = document.querySelector<HTMLInputElement>('input[aria-label="Search scripts"]');
+  if (search) edit(search, '');
+  for (const [label, value] of [
+    [text.status, 'All'],
+    [text.sort, 'Name'],
+  ] as const) {
+    const select = document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);
+    if (select) {
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+  await tick();
+  for (const row of host.snapshot?.scripts ?? []) {
+    selectScript(row.id);
+    await tick();
+    const discard = document.querySelector<HTMLButtonElement>(
+      '.inspector .form-actions button:last-child',
+    );
+    if (discard && !discard.disabled) discard.click();
+    await tick();
+  }
+  await window.fixtureHarness.clearCalls();
+}
+
 export async function runScenarios(): Promise<AssertionRecord[]> {
   const results: AssertionRecord[] = [];
   async function check(name: string, action: () => Promise<void>): Promise<void> {
@@ -207,6 +254,13 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       results.push({ name, passed: true });
     } catch (error) {
       results.push({ name, passed: false, detail: String(error) });
+      try {
+        await resetFailedScenario(host);
+      } catch (cleanup) {
+        throw new Error(
+          `Scenario ${name} failed: ${String(error)}; cleanup failed: ${String(cleanup)}`,
+        );
+      }
     }
   }
   const previousDialog = document.querySelector('[role="dialog"]');
@@ -3722,38 +3776,50 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
     updates = updateFixture();
   const outstanding = new Set<string>();
   async function check(name: string, test: () => Promise<void>): Promise<void> {
+    let failed = false;
     try {
       await test();
       results.push({ name, passed: true });
     } catch (error) {
+      failed = true;
       results.push({ name, passed: false, detail: String(error) });
+      try {
+        await resetFailedScenario(host);
+      } catch (cleanup) {
+        throw new Error(
+          `Scenario ${name} failed: ${String(error)}; cleanup failed: ${String(cleanup)}`,
+        );
+      }
     } finally {
-      for (const method of outstanding) {
-        try {
-          await window.fixtureHarness.resolveResponse(method, { value: updates });
-        } catch {
-          /* A completed fake request needs no release. */
+      if (!failed) {
+        for (const method of outstanding) {
+          try {
+            await window.fixtureHarness.resolveResponse(method, { value: updates });
+          } catch {
+            /* A completed fake request needs no release. */
+          }
+        }
+        outstanding.clear();
+        await tick();
+        await window.fixtureHarness.resetResponses();
+        const modal = document.querySelector('[role="dialog"]');
+        if (modal) button(text.cancel, modal).click();
+        await window.fixtureHarness.setState(host);
+        await window.fixtureHarness.setUpdates(updates);
+        await tick();
+        button(text.scripts).click();
+        await tick();
+        for (const row of host.snapshot!.scripts) {
+          selectScript(row.id);
+          await tick();
+          const discard = document.querySelector<HTMLButtonElement>(
+            '.inspector .form-actions button:last-child',
+          );
+          if (discard && !discard.disabled) discard.click();
+          await tick();
         }
       }
       outstanding.clear();
-      await tick();
-      await window.fixtureHarness.resetResponses();
-      const modal = document.querySelector('[role="dialog"]');
-      if (modal) button(text.cancel, modal).click();
-      await window.fixtureHarness.setState(host);
-      await window.fixtureHarness.setUpdates(updates);
-      await tick();
-      button(text.scripts).click();
-      await tick();
-      for (const row of host.snapshot!.scripts) {
-        selectScript(row.id);
-        await tick();
-        const discard = document.querySelector<HTMLButtonElement>(
-          '.inspector .form-actions button:last-child',
-        );
-        if (discard && !discard.disabled) discard.click();
-        await tick();
-      }
     }
   }
   await check(

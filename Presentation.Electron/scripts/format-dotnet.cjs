@@ -1,11 +1,12 @@
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { dotnetProjects } = require('./lib/dotnet-projects.cjs');
 
 const repositoryRoot = path.resolve(__dirname, '../..');
 const checking = process.argv.includes('--check');
 const requested = process.argv.slice(2).filter((argument) => argument !== '--check');
-const defaultProjects = ['Core', 'Backend', 'Tests.Backend', 'UpdateHost'];
-const projects = new Set([...defaultProjects, 'AgentCli', 'Tests.AgentCli']);
+const defaultProjects = dotnetProjects.map((project) => project.directory);
+const projects = new Set(defaultProjects);
 
 if (requested.some((project) => !projects.has(project))) {
   throw new Error(`Use --check and optional project names: ${[...projects].join(', ')}.`);

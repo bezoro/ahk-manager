@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Button, Input } from '@fluentui/react-components';
 import type { StorageState } from '../../shared/storage.js';
+import { text } from '../resources/en-US.js';
 
 export interface PreferencesDataLocationProps {
   state: StorageState;
@@ -34,55 +35,45 @@ export function PreferencesDataLocation({
     try {
       await action();
     } catch (failure) {
-      setError(
-        failure instanceof Error ? failure.message : 'The data location could not be changed.',
-      );
+      setError(failure instanceof Error ? failure.message : text.dataLocationChangeFailed);
     } finally {
       setWorking(false);
     }
   }
   return (
     <section className="preference-section" aria-labelledby="settings-data-location-title">
-      <h3 id="settings-data-location-title">Data location</h3>
+      <h3 id="settings-data-location-title">{text.dataLocation}</h3>
       <div className="picker-row">
-        <Input aria-label="Current data folder" value={state.currentDataDirectory} readOnly />
+        <Input aria-label={text.currentDataFolder} value={state.currentDataDirectory} readOnly />
         <Button disabled={disabled} onClick={() => void run(onOpen)}>
-          Open folder
+          {text.openFolder}
         </Button>
       </div>
-      <p className="muted">Your settings, activity and downloaded versions are saved here.</p>
-      {state.mode === 'portable' ? (
-        <>
-          <div className="button-row">
-            <Button disabled={disabled || !state.canChange} onClick={() => void run(onChoose)}>
-              Change location…
-            </Button>
-            <Button
-              appearance="subtle"
-              disabled={disabled || !state.canChange || usingDefault}
-              onClick={() => void run(onUseDefault)}
-            >
-              Use default
-            </Button>
-          </div>
-          <p className="muted">
-            The default is the Data folder beside the portable launcher. Choose an empty folder to
-            transfer your data. Manager will restart; running scripts will keep running. The
-            previous folder is kept as a backup.
-          </p>
-        </>
-      ) : (
-        <p className="muted">The portable edition lets you choose a different data folder.</p>
-      )}
+      <p className="muted">{text.dataLocationSavedHint}</p>
+      <div className="button-row">
+        <Button disabled={disabled || !state.canChange} onClick={() => void run(onChoose)}>
+          {text.changeDataLocation}
+        </Button>
+        <Button
+          appearance="subtle"
+          disabled={disabled || !state.canChange || usingDefault}
+          onClick={() => void run(onUseDefault)}
+        >
+          {text.useDefaultDataLocation}
+        </Button>
+      </div>
+      <p className="muted">{text.dataLocationHint}</p>
       {state.pendingDataDirectory && (
         <div role="status">
-          <p>Prepared data location: {state.pendingDataDirectory}</p>
+          <p>
+            {text.preparedDataLocation} {state.pendingDataDirectory}
+          </p>
           <div className="button-row">
             <Button appearance="primary" disabled={disabled} onClick={() => void run(onRestart)}>
-              Restart Manager
+              {text.restartManager}
             </Button>
             <Button disabled={disabled} onClick={() => void run(onCancelMove)}>
-              Cancel move
+              {text.cancelDataMove}
             </Button>
           </div>
         </div>

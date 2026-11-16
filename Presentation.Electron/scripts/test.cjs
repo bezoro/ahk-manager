@@ -2,21 +2,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const esbuild = require('esbuild');
-const output = process.argv[process.argv.indexOf('--out') + 1];
-if (!process.argv.includes('--out') || !path.isAbsolute(output) || fs.existsSync(output))
-  throw new Error('Supply a fresh absolute --out test staging directory');
+const { testInputs, discoverTests } = require('./lib/test-inputs.cjs');
+const { output, namePattern } = testInputs(process.argv.slice(2));
 fs.mkdirSync(output, { recursive: true });
 const diagnosticsRoot = path.join(output, 'diagnostics-fixtures');
 fs.mkdirSync(diagnosticsRoot);
-const entries = ['main', 'renderer'].flatMap((scope) => {
-  const folder = path.join('tests', scope);
-  return fs.existsSync(folder)
-    ? fs
-        .readdirSync(folder)
-        .filter((file) => file.endsWith('.test.ts') || file.endsWith('.test.tsx'))
-        .map((file) => path.join(folder, file))
-    : [];
-});
+const entries = discoverTests('tests');
 if (!entries.length) throw new Error('No test entries');
 (async () => {
   await esbuild.build({
@@ -33,7 +24,8 @@ if (!entries.length) throw new Error('No test entries');
   const tests = entries.map((file) =>
     path.join(output, path.relative('tests', file).replace(/\.tsx?$/, '.js')),
   );
-  const result = spawnSync(process.execPath, ['--test', ...tests], {
+  const filter = namePattern === undefined ? [] : ['--test-name-pattern', namePattern];
+  const result = spawnSync(process.execPath, ['--test', ...filter, ...tests], {
     stdio: 'inherit',
     shell: false,
     env: { ...process.env, AHK_DIAGNOSTICS_TEST_ROOT: diagnosticsRoot },

@@ -15,19 +15,20 @@ flowchart LR
 
 ## Projects and dependencies
 
-| Path                                                | Responsibility                                                                |
-| --------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `Presentation.Electron/src/renderer`                | Fluent UI pages, selection and editing drafts                                 |
-| `Presentation.Electron/src/preload`                 | Specific `window.ahkManager` methods exposed through `contextBridge`          |
-| `Presentation.Electron/src/shared`                  | Contracts, runtime validators and shared text                                 |
-| `Presentation.Electron/src/main`                    | Desktop composition, tray, dialogs, backend, storage and updates              |
-| `Backend/`                                          | Authenticated host session, bounded commands and startup/profile coordination |
-| `Core/`                                             | Models, persistence, AHK parsing, process observation and operation rules     |
-| `PortableLauncher/`                                 | Native root entry point and execution-level manifest                          |
-| `UpdateHost/`                                       | Offline portable package validation, application, rollback and recovery       |
-| `Tests.Backend/` and `Presentation.Electron/tests/` | Isolated domain, transport and presentation checks                            |
+| Path                                                                   | Responsibility                                                                |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `Presentation.Electron/src/renderer`                                   | Fluent UI pages, selection and editing drafts                                 |
+| `Presentation.Electron/src/preload`                                    | Specific `window.ahkManager` methods exposed through `contextBridge`          |
+| `Presentation.Electron/src/shared`                                     | Contracts, runtime validators and shared text                                 |
+| `Presentation.Electron/src/main`                                       | Desktop composition, tray, dialogs, backend, storage and updates              |
+| `Backend/`                                                             | Authenticated host session, bounded commands and startup/profile coordination |
+| `Core/`                                                                | Models, persistence, AHK parsing, process observation and operation rules     |
+| `PortableLauncher/`                                                    | Native root entry point and execution-level manifest                          |
+| `AgentCli/`                                                            | Self-contained authenticated Windows command-line transport                   |
+| `UpdateHost/`                                                          | Offline portable package validation, application, rollback and recovery       |
+| `Tests.Backend/`, `Tests.AgentCli/` and `Presentation.Electron/tests/` | Isolated domain, transport and presentation checks                            |
 
-`Bezoro.AhkManager.sln` contains Core, Backend, UpdateHost and Tests.Backend. Active .NET projects target `net10.0-windows`; published executables are self-contained for `win-x64`. Core has no presentation dependency. UpdateHost source-links only the BCL-only `Core/Infrastructure/WindowsStoragePath.cs` policy, keeping its executable independent of Core assemblies.
+`Bezoro.AhkManager.sln` contains Core, Backend, UpdateHost, AgentCli, Tests.Backend and Tests.AgentCli. Active .NET projects target `net10.0-windows`; published executables are self-contained for `win-x64`. Core has no presentation dependency. `Presentation.Electron/scripts/lib/dotnet-projects.cjs` declares the active projects, allowed project references and exact generated/source-linked inputs for both architecture and formatting checks. UpdateHost source-links only the BCL-only `Core/Infrastructure/WindowsStoragePath.cs` policy, keeping its executable independent of Core assemblies.
 
 Electron `main/desktop/` owns Windows integration, `main/ipc/` authenticates renderer requests, `main/storage/` resolves portable data and coordinates moves, and `main/updates/` owns release discovery through update handoff. `application.ts` composes those services. The renderer has no filesystem, process or Node access.
 
@@ -42,6 +43,8 @@ Electron `main/desktop/` owns Windows integration, `main/ipc/` authenticates ren
 Start and restart require a verified interpreter and script. Stop requests normal exit and observes completion. Uncertain effects remain pending, retain their evidence and are never replayed automatically.
 
 `ManagerService` partial files share one lock and owner. Catalog, settings, files, operations, observation, recovery, startup and continuation code remain separate without creating independent authorities. C# wire types belong in `Backend/Protocol.cs` and its JSON context; domain documents belong in `Core/Models` and `ManagerJson`.
+
+Derived script analysis is display state. Metadata and settings changes reuse it; load, explicit refresh, restore and observed file changes reanalyze scripts. Start and restart retain independent fresh file and process verification and never treat cached display analysis as execution authority.
 
 ## Windows startup and elevation
 

@@ -52,6 +52,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Update host publish failed: $LASTEXITCODE" }
     & (Join-Path $stageRoot 'backend/update/AhkManager.UpdateHost.exe') --self-test --root (Join-Path $stageRoot 'update-host-tests')
     if ($LASTEXITCODE -ne 0) { throw "Update host checks failed: $LASTEXITCODE" }
+    & node.exe --experimental-strip-types 'scripts/verify-update-host-diagnostics.cjs' --input (Join-Path $stageRoot 'update-host-tests/update-refusal-contract.json')
+    if ($LASTEXITCODE -ne 0) { throw 'Native update refusal contract verification failed.' }
     & dotnet.exe restore (Join-Path $repoRoot 'AgentCli/ahk-manager.csproj') --locked-mode --packages $PackagesPath --configfile (Join-Path $repoRoot 'NuGet.Config') -r win-x64
     if ($LASTEXITCODE -ne 0) { throw "Agent CLI restore failed: $LASTEXITCODE" }
     & dotnet.exe publish (Join-Path $repoRoot 'AgentCli/ahk-manager.csproj') -c Release -r win-x64 --self-contained true --no-restore '-p:DebugType=None' '-p:DebugSymbols=false' "-p:Version=$ReleaseVersion" "-p:SourceRevisionId=$SourceCommit" -o (Join-Path $stageRoot 'backend/agent') --nologo

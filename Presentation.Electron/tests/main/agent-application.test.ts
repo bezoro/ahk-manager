@@ -7,10 +7,14 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
 import type { AgentReply, AgentRequest } from '../../src/main/agent-transport.js';
+import { createCommandLog } from '../../src/main/logging/create-command-log.js';
+import type { CommandLog, CommandLogSnapshot } from '../../src/main/logging/command-log.js';
 import { resolveDeployment } from '../../src/main/storage/deployment.js';
 import { prepareDataMove } from '../../src/main/storage/data-migration.js';
+import { NativeStorageLeaseError } from '../../src/main/storage/native-storage-lease.js';
 import { UpdateStore } from '../../src/main/updates/update-store.js';
 import { hostText as tText } from '../../src/shared/host-en-US.js';
+import { SHUTDOWN_DEADLINE_MS } from '../../src/main/lifecycle.js';
 import { planId, runningSnapshot } from './fixtures.js';
 
 const requireFixture = createRequire(path.join(process.cwd(), 'package.json'));
@@ -27,11 +31,22 @@ async function waitFor<T>(read: () => T | undefined | Promise<T | undefined>): P
   throw new Error('The fixture did not reach the expected state.');
 }
 
-async function fixture(t: TestContext, busyLogonMarker = false) {
+interface FixturePorts {
+  savePlacement?(): Promise<void>;
+  scheduleShutdown?(callback: () => void, milliseconds: number): () => void;
+  captureCommands?: boolean;
+  dataMoveFailure?: Error;
+}
+
+async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePorts = {}) {
   const staging = process.env.AHK_DIAGNOSTICS_TEST_ROOT;
   assert.ok(staging && path.isAbsolute(staging));
   const root = await fs.mkdtemp(path.join(staging, 'agent-application-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  let commandLog: CommandLog | null = null;
+  t.after(async () => {
+    commandLog?.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
   const executable = path.join(root, 'App', 'Bezoro.AhkManager.exe');
   const local = path.join(root, 'Local');
   await fs.mkdir(path.dirname(executable));
@@ -48,7 +63,15 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
   const layout = resolveDeployment(executable, local);
   await fs.mkdir(layout.profileDirectory, { recursive: true });
   await fs.mkdir(layout.updatesDirectory);
+  if (ports.dataMoveFailure) {
+    await fs.writeFile(path.join(layout.profileDirectory, 'settings.json'), '{"preserved":true}');
+    await prepareDataMove(layout, path.join(root, 'Moved'), async (directory) => {
+      await fs.mkdir(directory);
+    });
+  }
   const events: string[] = [];
+  const exitLogs: CommandLogSnapshot[] = [];
+  let storageFailure: ((error: Error) => void) | undefined;
   let menu: Array<{ label?: string; click?: () => void }> = [];
   let dispatch: ((request: AgentRequest, alive: () => boolean) => Promise<AgentReply>) | undefined;
   let state = runningSnapshot();
@@ -67,6 +90,7 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
     }
     async request(action: string, data: { selection?: unknown; confirmed?: boolean }) {
       if (action === 'refresh' || action === 'load') return structuredClone(state);
+      if (action === 'saveSettings') await ports.savePlacement?.();
       if (action === 'prepare') {
         const script = state.scripts[0]!;
         return {
@@ -151,6 +175,7 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
       events.push('app.quit');
     },
     exit: (code: number) => {
+      if (commandLog) exitLogs.push(commandLog.snapshot('errors'));
       events.push('app.exit=' + code);
     },
     relaunch: () => {
@@ -159,6 +184,7 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
   });
   const store = new UpdateStore(layout.updatesDirectory);
   const mocks = {
+    fixturePorts: ports,
     electron: {
       app,
       Tray,
@@ -220,12 +246,23 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
     },
     './desktop/portable-search-shortcut.js': { ensurePortableSearchShortcut: async () => {} },
     './storage/portable-storage-lease.js': {
-      acquirePortableStorageLease: async () => ({ close: async () => {} }),
+      acquirePortableStorageLease: async (_layout: unknown, onFailure: (error: Error) => void) => {
+        storageFailure = onFailure;
+        return { close: async () => {} };
+      },
     },
     './storage/data-move-lease.js': {
-      withDataMoveLease: async (_layout: unknown, work: () => Promise<unknown>) => work(),
+      withDataMoveLease: async (_layout: unknown, work: () => Promise<unknown>) => {
+        if (ports.dataMoveFailure) throw ports.dataMoveFailure;
+        return work();
+      },
     },
-    './logging/create-command-log.js': { createCommandLog: () => null },
+    './logging/create-command-log.js': {
+      createCommandLog: () => {
+        if (ports.captureCommands) commandLog = createCommandLog(layout);
+        return commandLog;
+      },
+    },
     './logging/startup-failure.js': {
       recordStartupFailure: ({ error }: { error: unknown }) => {
         events.push('startup.error.' + String(error));
@@ -249,6 +286,37 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
       {
         name: 'headless-test-ports',
         setup(build) {
+          // Inject only the shutdown operation's timer, retaining the real lifecycle
+          // implementation and all unrelated startup, polling and receipt timers.
+          if (ports.scheduleShutdown) {
+            build.onResolve({ filter: /^\.\/lifecycle\.js$/ }, (args) =>
+              args.importer === path.resolve('src/main/application.ts')
+                ? { path: path.resolve('src/main/lifecycle.ts'), namespace: 'shutdown-clock' }
+                : undefined,
+            );
+            build.onLoad({ filter: /.*/, namespace: 'shutdown-clock' }, ({ path: source }) => ({
+              contents: `
+                export * from ${JSON.stringify(source)};
+                import { shutdownWithinDeadline as actual } from ${JSON.stringify(source)};
+                export function shutdownWithinDeadline(boundary, milliseconds, options) {
+                  const ports = globalThis[Symbol.for(${JSON.stringify(Symbol.keyFor(bridge))})].fixturePorts;
+                  return actual(boundary, milliseconds, { ...options, schedule: ports.scheduleShutdown });
+                }
+              `,
+              resolveDir: path.dirname(source),
+            }));
+          }
+          // Only the host composition sees Windows in this isolated fixture.
+          // Filesystem adapters keep the real OS semantics for temporary paths;
+          // the shipped source and its Windows-only admission guard are unchanged.
+          build.onLoad({ filter: /[/\\]application\.ts$/ }, async (args) => {
+            if (args.path !== path.resolve('src/main/application.ts')) return;
+            const compiled = await esbuild.transform(await fs.readFile(args.path, 'utf8'), {
+              loader: 'ts',
+              define: { 'process.platform': '"win32"' },
+            });
+            return { contents: compiled.code, loader: 'js', resolveDir: path.dirname(args.path) };
+          });
           build.onResolve({ filter: /.*/ }, (args) =>
             (args.path === 'electron' || path.basename(args.importer) === 'application.ts') &&
             Object.hasOwn(mocks, args.path)
@@ -311,7 +379,18 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
     return (status.result as { ready: boolean }).ready ? status : undefined;
   });
   if (!busyLogonMarker) assert.equal(events.includes('window.create'), false);
-  return { events, layout, request, menu: () => menu };
+  return {
+    events,
+    layout,
+    request,
+    exitLogs,
+    commandLog: () => commandLog,
+    loseStorage: (error: Error) => {
+      assert.ok(storageFailure, 'The portable storage lease must be admitted first.');
+      storageFailure(error);
+    },
+    menu: () => menu,
+  };
 }
 
 test('windowless tray stop and exit asks for real consent before stopping through the backend', async (t) => {
@@ -337,7 +416,7 @@ test('a cancelled restart receipt remains readable during a fresh explicit retry
       command: 'storage.restart',
       arguments: {},
     });
-    assert.equal(review.outcome, 'Confirmed');
+    assert.equal(review.outcome, 'Confirmed', JSON.stringify(review));
     const token = (review.result as { confirmationToken: string }).confirmationToken;
     const result = await f.request('storage.restart', { confirmationToken: token });
     assert.equal(result.outcome, 'Accepted', JSON.stringify(result.result));
@@ -362,6 +441,157 @@ test('a cancelled restart receipt remains readable during a fresh explicit retry
   );
   await second.afterReply!(true);
   assert.ok(f.events.includes('app.relaunch'), f.events.join(', '));
+});
+
+test(
+  'an actual Manager quit cannot shut down the backend after its placement save misses the deadline',
+  { timeout: dispatchTimeout * 10 },
+  async (t) => {
+    let saving = false;
+    let saved = false;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let expire: () => void = () => {
+      throw new Error('No shutdown deadline was scheduled.');
+    };
+    let scheduledMilliseconds: number | undefined;
+    let timerCancelled = false;
+    t.after(() => release());
+    const f = await fixture(t, false, {
+      savePlacement: async () => {
+        saving = true;
+        await blocked;
+        saved = true;
+      },
+      scheduleShutdown: (callback, milliseconds) => {
+        assert.equal(
+          scheduledMilliseconds,
+          undefined,
+          'Only one shutdown deadline should be scheduled.',
+        );
+        expire = callback;
+        scheduledMilliseconds = milliseconds;
+        return () => {
+          timerCancelled = true;
+        };
+      },
+    });
+    const shown = await f.request('app.show');
+    assert.equal(shown.outcome, 'Confirmed', JSON.stringify(shown));
+    assert.equal(
+      scheduledMilliseconds,
+      undefined,
+      'Opening the Manager must not use the shutdown clock.',
+    );
+    const reply = await f.request('app.quit');
+    assert.equal(reply.outcome, 'Accepted', JSON.stringify(reply));
+    assert.equal(reply.code, 'ShutdownAccepted');
+    assert.ok(reply.afterReply);
+    const quitting = reply.afterReply(true);
+    await waitFor(() => (saving ? true : undefined));
+    assert.equal(scheduledMilliseconds, SHUTDOWN_DEADLINE_MS);
+    assert.equal(f.events.includes('backend.shutdown'), false);
+    expire();
+    await quitting;
+    assert.equal(timerCancelled, true);
+    const timedOut = await f.request('app.status');
+    assert.deepEqual(
+      {
+        ready: (timedOut.result as { ready: boolean }).ready,
+        connection: (timedOut.result as { connection: string }).connection,
+      },
+      { ready: false, connection: 'failed' },
+    );
+    release();
+    await waitFor(() => (saved ? true : undefined));
+    // Let the original, now-expired save continuation reach the shutdown boundary.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(f.events.includes('backend.shutdown'), false, f.events.join(', '));
+    assert.equal(f.events.includes('agent.close'), false, f.events.join(', '));
+    assert.equal(f.events.includes('app.quit'), false, f.events.join(', '));
+    assert.equal(f.events.includes('script.stop'), false, 'Independent scripts must keep running.');
+    const afterSave = await f.request('app.status');
+    assert.equal((afterSave.result as { ready: boolean }).ready, false);
+    assert.equal((afterSave.result as { connection: string }).connection, 'failed');
+  },
+);
+
+test('runtime storage lease loss retains finite diagnostic evidence before Manager exits', async (t) => {
+  const f = await fixture(t, false, { captureCommands: true });
+  const privateDetail = 'C:\\Private\\profile token=fixture-secret';
+  f.loseStorage(
+    new NativeStorageLeaseError(privateDetail, {
+      schemaVersion: 1,
+      phase: 'installation-paths',
+      code: 'redirected-path',
+    }),
+  );
+  assert.deepEqual(f.events.slice(-1), ['app.exit=65']);
+  assert.equal(f.exitLogs.length, 1);
+  const records = f.exitLogs[0]!.records.filter(
+    (record) => record.command === 'storageLease' && record.phase === 'error',
+  );
+  assert.equal(
+    records.length,
+    1,
+    'The evidence must already be written at the native exit boundary.',
+  );
+  assert.equal(records[0]!.source, 'lifecycle');
+  assert.equal(records[0]!.errorName, 'NativeStorageLeaseError');
+  assert.equal(records[0]!.helperPhase, 'installation-paths');
+  assert.equal(records[0]!.helperCode, 'redirected-path');
+  assert.equal(JSON.stringify(f.exitLogs).includes('fixture-secret'), false);
+  const log = f.commandLog();
+  assert.ok(log);
+  for (const file of await fs.readdir(log.directory))
+    assert.equal(
+      (await fs.readFile(path.join(log.directory, file), 'utf8')).includes('fixture-secret'),
+      false,
+    );
+  assert.equal(f.events.includes('script.stop'), false);
+  assert.equal(f.events.includes('backend.shutdown'), false);
+});
+
+test('a tolerated data move refusal retains finite evidence after the current profile logger opens', async (t) => {
+  const privateDetail = 'C:\\Private\\move token=fixture-secret';
+  const f = await fixture(t, false, {
+    captureCommands: true,
+    dataMoveFailure: new NativeStorageLeaseError(privateDetail, {
+      schemaVersion: 1,
+      phase: 'portable-data-initialization',
+      code: 'cloud-file-unavailable',
+    }),
+  });
+  const log = f.commandLog();
+  assert.ok(log);
+  const records = log
+    .snapshot('errors')
+    .records.filter((record) => record.command === 'storage:restart' && record.phase === 'error');
+  assert.equal(records.length, 1);
+  assert.equal(records[0]!.errorName, 'NativeStorageLeaseError');
+  assert.equal(records[0]!.helperPhase, 'portable-data-initialization');
+  assert.equal(records[0]!.helperCode, 'cloud-file-unavailable');
+  const files = log.exportFiles();
+  assert.deepEqual(files.issues, []);
+  assert.equal(JSON.stringify(files).includes('fixture-secret'), false);
+  for (const file of await fs.readdir(log.directory))
+    assert.equal(
+      (await fs.readFile(path.join(log.directory, file), 'utf8')).includes('fixture-secret'),
+      false,
+    );
+  assert.equal(f.events.includes('app.relaunch'), false);
+  assert.equal(f.events.includes('app.exit=65'), false);
+  assert.equal(
+    await fs.readFile(path.join(f.layout.profileDirectory, 'settings.json'), 'utf8'),
+    '{"preserved":true}',
+  );
+  const marker = JSON.parse(await fs.readFile(f.layout.configurationPath!, 'utf8')) as {
+    dataDirectory: string;
+  };
+  assert.equal(marker.dataDirectory, 'Data');
+  await assert.rejects(fs.stat(path.join(f.layout.portableRoot, 'Moved')), { code: 'ENOENT' });
 });
 
 test('registered portable logon recovers a busy configuration before any native bootstrap or instance lock', async (t) => {

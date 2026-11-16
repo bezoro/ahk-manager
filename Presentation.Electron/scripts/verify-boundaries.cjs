@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parsers } = require('prettier/plugins/typescript');
+const { dotnetProjects } = require('./lib/dotnet-projects.cjs');
 
 const rendererPackages = new Set([
   'react',
@@ -258,16 +259,8 @@ function verifyCore(repositoryRoot, errors) {
 }
 
 function verifyActiveProjectInputs(repositoryRoot, errors) {
-  const projects = new Map([
-    ['Core/AhkManager.Core.csproj', []],
-    ['Backend/AhkManager.Backend.csproj', ['Core/AhkManager.Core.csproj']],
-    [
-      'Tests.Backend/Tests.Backend.csproj',
-      ['Core/AhkManager.Core.csproj', 'Backend/AhkManager.Backend.csproj'],
-    ],
-    ['UpdateHost/AhkManager.UpdateHost.csproj', []],
-  ]);
-  for (const [name, dependencies] of projects) {
+  for (const definition of dotnetProjects) {
+    const { project: name, dependencies, linkedSources = [], propertySources = [] } = definition;
     const file = path.join(repositoryRoot, name);
     if (!fs.existsSync(file)) {
       errors.push(`Missing active project: ${name}`);
@@ -279,20 +272,13 @@ function verifyActiveProjectInputs(repositoryRoot, errors) {
       /<(Compile|ProjectReference)\b[^>]*\bInclude\s*=\s*["']([^"']+)["']/gi,
     )) {
       const [, kind, value] = include;
-      // This existing test-only property injects a baseline caption proof fixture in isolated CI.
-      if (
-        name === 'Tests.Backend/Tests.Backend.csproj' &&
-        kind === 'Compile' &&
-        value === '$(BaselineCaptionProofSource)'
-      )
-        continue;
+      // Only these exact generated/test inputs may use MSBuild properties.
+      if (kind === 'Compile' && propertySources.includes(value)) continue;
       const target = path.resolve(directory, value.replaceAll('\\', path.sep));
       const allowed =
         kind === 'Compile'
           ? isWithin(directory, target) ||
-            (name === 'UpdateHost/AhkManager.UpdateHost.csproj' &&
-              value === '../Core/Infrastructure/WindowsStoragePath.cs' &&
-              target === path.join(repositoryRoot, 'Core/Infrastructure/WindowsStoragePath.cs'))
+            linkedSources.some((source) => target === path.join(repositoryRoot, source))
           : dependencies.some((dependency) => target === path.join(repositoryRoot, dependency));
       if (!allowed || value.includes('$('))
         errors.push(`${name}: ${kind} crosses the active project boundary: ${value}`);
