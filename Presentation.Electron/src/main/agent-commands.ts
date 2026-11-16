@@ -25,6 +25,7 @@ import {
   shape,
   text,
   nullable,
+  type Schema,
   type Validator,
 } from '../shared/validation.js';
 import type { AgentReply, AgentRequest } from './agent-transport.js';
@@ -113,12 +114,12 @@ export function operationReply(value: OperationResult, result: unknown = value):
   return { outcome, code: value.code, result };
 }
 
-const absolute: Validator = (value) =>
+const absolute: Schema<string> = (value): value is string =>
   typeof value === 'string' &&
   text()(value) &&
   (/^[a-z]:[\\/]/i.test(value) || /^\\\\[^.?\\/][^\\/]*[\\/][^\\/]+/.test(value));
-const nonEmptyPaths: Validator = (value) =>
-  array(absolute, 2000)(value) && (value as unknown[]).length > 0;
+const nonEmptyPaths: Schema<string[]> = (value): value is string[] =>
+  array(absolute, 2000)(value) && value.length > 0;
 const none = shape({});
 const onePath = shape({ path: absolute });
 const row = { scriptId: guid, revision: decimal };
@@ -166,7 +167,7 @@ export class AgentCommands {
     const wire = (name: string) => 'agent:' + name;
     const define = <T = Args>(
       name: string,
-      validate: Validator,
+      validate: Schema<T>,
       policy: string,
       handler: (args: T) => unknown,
       review = false,
@@ -180,7 +181,7 @@ export class AgentCommands {
       define(name, none, internal, async () => ok(await app(internal)));
     const review = (
       name: string,
-      validate: Validator,
+      validate: Schema<Args>,
       policy: string,
       handler: (args: Args) => unknown,
     ) => define(name, validate, policy, handler, true);

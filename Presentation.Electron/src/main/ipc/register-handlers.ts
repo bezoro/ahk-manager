@@ -25,8 +25,9 @@ import {
   requireValid,
   selection,
   shape,
+  unknownValue,
   text,
-  type Validator,
+  type Schema,
 } from '../../shared/validation.js';
 import { hostText as t } from '../../shared/host-en-US.js';
 import { startupRepairFingerprint } from '../../shared/startup-repair-validation.js';
@@ -88,7 +89,7 @@ export function registerHandlers(context: IpcContext): void {
 
   function bind<T = Record<string, never>>(
     name: string,
-    validate: Validator,
+    validate: Schema<T>,
     handler: (body: T) => unknown,
   ): void {
     registry.define(name, validate, handler);
@@ -195,10 +196,8 @@ export function registerHandlers(context: IpcContext): void {
     (value) =>
       controller.operate(assertOperation(value.operation), assertSelection(value.selection)),
   );
-  bind<unknown>(
-    'saveSettings',
-    () => true,
-    (value) => controller.saveSettings(assertSettings(value)),
+  bind<unknown>('saveSettings', unknownValue, (value) =>
+    controller.saveSettings(assertSettings(value)),
   );
   bind('previewStartupRepair', none, () => controller.previewStartupRepair());
   bind<{ fingerprint: string }>(

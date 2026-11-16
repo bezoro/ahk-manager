@@ -35,7 +35,7 @@ import {
   shape,
   snapshot,
   text,
-  type Validator,
+  type Schema,
 } from '../shared/validation.js';
 
 import { startupRepairPreview } from '../shared/startup-repair-validation.js';
@@ -75,7 +75,7 @@ const migration = shape({
   canMigrate: bool,
   issues: array(issue),
 });
-const results: Record<string, Validator> = {
+const results: Record<string, Schema<unknown>> = {
   relink: operationResult,
   prepareRecycle: recyclePlan,
   authorizeRecycle: recycleAuthorization,

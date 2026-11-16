@@ -1,47 +1,96 @@
 import type {
   ActivityQuery,
+  ActivitySnapshot,
+  CatalogResult,
+  CollectionSnapshot,
+  ElevationStatus,
+  HotkeySnapshot,
+  ImportPreview,
+  Issue,
   ManagerSettings,
+  ManagerSnapshot,
+  OperationPlan,
+  OperationResult,
+  ProcessIdentity,
+  ProcessSnapshot,
+  RecycleAuthorization,
+  RecyclePlan,
+  ScriptFileIdentity,
   ScriptMetadata,
   ScriptOperation,
+  ScriptQuery,
+  ScriptSnapshot,
   SelectionContext,
+  StartupContinuationOffer,
+  WindowPlacement,
 } from './contracts.js';
 
+/** Untyped checks remain useful for transport envelopes and custom predicates. */
 export type Validator = (value: unknown) => boolean;
+export type Schema<T> = (value: unknown) => value is T;
+export type Validated<T> = T extends Schema<infer Value> ? Value : unknown;
+type Rules = Record<string, Validator>;
+type RequiredValue<T extends Rules> = { -readonly [Key in keyof T]: Validated<T[Key]> };
+type OptionalValue<T extends Rules> = { -readonly [Key in keyof T]?: Validated<T[Key]> };
+type RequiredKeys<T> = { [Key in keyof T]-?: {} extends Pick<T, Key> ? never : Key }[keyof T];
+type OptionalKeys<T> = Exclude<keyof T, RequiredKeys<T>>;
+type RequiredRules<T> = { [Key in RequiredKeys<T>]: Schema<T[Key]> };
+type OptionalRules<T> = { [Key in OptionalKeys<T>]-?: Schema<Exclude<T[Key], undefined>> };
+
+/** Pass-through boundaries keep the payload unknown until a later validator runs. */
+export const unknownValue: Schema<unknown> = (_value): _value is unknown => true;
 export const object = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v);
 export const text =
-  (max = 32768): Validator =>
-  (v) =>
+  (max = 32768): Schema<string> =>
+  (v): v is string =>
     typeof v === 'string' && v.length <= max && !v.includes('\0');
-export const bool: Validator = (v) => typeof v === 'boolean';
-export const integer: Validator = (v) => typeof v === 'number' && Number.isSafeInteger(v);
-export const finite: Validator = (v) => typeof v === 'number' && Number.isFinite(v);
-export const decimal: Validator = (v) =>
+export const bool: Schema<boolean> = (v): v is boolean => typeof v === 'boolean';
+export const integer: Schema<number> = (v): v is number =>
+  typeof v === 'number' && Number.isSafeInteger(v);
+export const finite: Schema<number> = (v): v is number =>
+  typeof v === 'number' && Number.isFinite(v);
+export const decimal: Schema<string> = (v): v is string =>
   typeof v === 'string' && /^(0|[1-9][0-9]{0,18})$/.test(v) && BigInt(v) <= 9223372036854775807n;
-export const guid: Validator = (v) =>
+export const guid: Schema<string> = (v): v is string =>
   typeof v === 'string' &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 export const oneOf =
-  (...values: string[]): Validator =>
-  (v) =>
+  <const Values extends string[]>(...values: Values): Schema<Values[number]> =>
+  (v): v is Values[number] =>
     typeof v === 'string' && values.includes(v);
 export const nullable =
-  (check: Validator): Validator =>
-  (v) =>
+  <Check extends Validator>(check: Check): Schema<Validated<Check> | null> =>
+  (v): v is Validated<Check> | null =>
     v === null || check(v);
 export const array =
-  (check: Validator, max = 20000): Validator =>
-  (v) =>
+  <Check extends Validator>(check: Check, max = 20000): Schema<Validated<Check>[]> =>
+  (v): v is Validated<Check>[] =>
     Array.isArray(v) && v.length <= max && v.every(check);
-export function shape(
-  required: Record<string, Validator>,
-  optional: Record<string, Validator> = {},
-): Validator {
-  return (v) =>
+
+export function shape<Required extends Rules, Optional extends Rules = {}>(
+  required: Required,
+  optional?: Optional,
+): Schema<RequiredValue<Required> & OptionalValue<Optional>> {
+  const optionalRules: Rules = optional ?? {};
+  return (v): v is RequiredValue<Required> & OptionalValue<Optional> =>
     object(v) &&
-    Object.keys(v).every((k) => Object.hasOwn(required, k) || Object.hasOwn(optional, k)) &&
+    Object.keys(v).every((k) => Object.hasOwn(required, k) || Object.hasOwn(optionalRules, k)) &&
     Object.entries(required).every(([k, validate]) => Object.hasOwn(v, k) && validate(v[k])) &&
-    Object.entries(optional).every(([k, validate]) => !Object.hasOwn(v, k) || validate(v[k]));
+    Object.entries(optionalRules).every(([k, validate]) => !Object.hasOwn(v, k) || validate(v[k]));
+}
+
+/** Every DTO field must have a compatible rule, including all optional fields. */
+export function shapeFor<T extends object>() {
+  return <Required extends RequiredRules<T>, Optional extends OptionalRules<T>>(
+    required: Required & Record<Exclude<keyof Required, RequiredKeys<T>>, never>,
+    ...optional: [OptionalKeys<T>] extends [never]
+      ? []
+      : [optional: Optional & Record<Exclude<keyof Optional, OptionalKeys<T>>, never>]
+  ): Schema<T> => {
+    const check = shape(required, optional[0]);
+    return (value): value is T => check(value);
+  };
 }
 export const operation = oneOf(
   'Start',
@@ -111,7 +160,7 @@ export const reason = oneOf(
   'ExternalStartupConflict',
 );
 export const authorityMode = oneOf('Normal', 'Administrator');
-export const elevationStatus = shape({
+export const elevationStatus = shapeFor<ElevationStatus>()({
   operationId: guid,
   revision: decimal,
   state: oneOf(
@@ -131,10 +180,19 @@ export const elevationStatus = shape({
   canResumeNormal: bool,
 });
 export const startupContinuationOffer = nullable(
-  shape({ operationId: guid, scriptNames: array(text(4096), 2000), canResume: bool, reason }),
+  shapeFor<StartupContinuationOffer>()({
+    operationId: guid,
+    scriptNames: array(text(4096), 2000),
+    canResume: bool,
+    reason,
+  }),
 );
-export const issue = shape({ code: reason, detail: nullable(text()), scriptId: nullable(guid) });
-export const identity = shape({
+export const issue = shapeFor<Issue>()({
+  code: reason,
+  detail: nullable(text()),
+  scriptId: nullable(guid),
+});
+export const identity = shapeFor<ProcessIdentity>()({
   pid: integer,
   creationFileTime: decimal,
   executablePath: text(),
@@ -144,7 +202,7 @@ export const identity = shape({
   scriptHash: text(128),
   interpreterHash: text(128),
 });
-export const processSnapshot = shape(
+export const processSnapshot = shapeFor<ProcessSnapshot>()(
   {
     identity,
     origin: oneOf('None', 'Manager', 'External', 'Recovered'),
@@ -156,7 +214,7 @@ export const processSnapshot = shape(
   },
   { controlUnavailableReason: nullable(oneOf('AccessDenied', 'ManualElevationRequired')) },
 );
-export const hotkey = shape(
+export const hotkey = shapeFor<HotkeySnapshot>()(
   {
     chord: text(2048),
     normalizedChord: text(2048),
@@ -169,7 +227,7 @@ export const hotkey = shape(
   },
   { declaredGesture: nullable(oneOf('DoubleClick')) },
 );
-export const script = shape(
+export const script = shapeFor<ScriptSnapshot>()(
   {
     id: guid,
     path: text(),
@@ -187,7 +245,7 @@ export const script = shape(
   },
   { headerDescription: nullable(text(4000)) },
 );
-export const placement = shape({
+export const placement = shapeFor<WindowPlacement>()({
   x: integer,
   y: integer,
   width: integer,
@@ -195,7 +253,7 @@ export const placement = shape({
   maximized: bool,
   dpi: finite,
 });
-export const settings = shape({
+export const settings = shapeFor<ManagerSettings>()({
   interpreterPath: nullable(text()),
   editorPath: nullable(text()),
   editorArguments: array(text(4096), 128),
@@ -207,7 +265,7 @@ export const settings = shape({
   closeBehavior: oneOf('HideToTray', 'Exit'),
   window: placement,
 });
-export const activity = shape({
+export const activity = shapeFor<ActivitySnapshot>()({
   id: guid,
   timestamp: text(128),
   scriptId: nullable(guid),
@@ -216,11 +274,11 @@ export const activity = shape({
   code: reason,
   detail: nullable(text()),
 });
-export const snapshot = shape(
+export const snapshot = shapeFor<ManagerSnapshot>()(
   {
     revision: decimal,
     scripts: array(script),
-    collections: array(shape({ id: guid, name: text(4096) })),
+    collections: array(shapeFor<CollectionSnapshot>()({ id: guid, name: text(4096) })),
     settings,
     activity: array(activity),
     issues: array(issue),
@@ -234,15 +292,19 @@ export const snapshot = shape(
     normalLaunchUnavailableReason: nullable(oneOf('AccessDenied', 'CapabilityUnverified')),
   },
 );
-export const query = shape({
+export const query = shapeFor<ScriptQuery>()({
   search: text(4096),
   status: oneOf('All', 'Running', 'Stopped', 'Problems'),
   sort: oneOf('Name', 'Status', 'Collection'),
   collectionId: nullable(guid),
   version: decimal,
 });
-export const selection = shape({ scriptId: guid, query, stateRevision: decimal });
-export const operationPlan = shape({
+export const selection = shapeFor<SelectionContext>()({
+  scriptId: guid,
+  query,
+  stateRevision: decimal,
+});
+export const operationPlan = shapeFor<OperationPlan>()({
   correlationId: guid,
   scriptId: guid,
   operation,
@@ -254,12 +316,16 @@ export const operationPlan = shape({
   reason,
   selection,
 });
-export const operationResult = shape(
+export const operationResult = shapeFor<OperationResult>()(
   { outcome, code: reason, detail: nullable(text()), correlationId: nullable(guid) },
   { succeeded: bool },
 );
-export const scriptFileIdentity = shape({ path: text(), fileId: text(512), hash: text(128) });
-export const recyclePlan = shape({
+export const scriptFileIdentity = shapeFor<ScriptFileIdentity>()({
+  path: text(),
+  fileId: text(512),
+  hash: text(128),
+});
+export const recyclePlan = shapeFor<RecyclePlan>()({
   operationId: guid,
   scriptId: guid,
   path: text(),
@@ -269,18 +335,18 @@ export const recyclePlan = shape({
   allowed: bool,
   reason,
 });
-export const recycleAuthorization = shape({
+export const recycleAuthorization = shapeFor<RecycleAuthorization>()({
   result: operationResult,
   file: nullable(scriptFileIdentity),
   stopped: bool,
 });
-export const catalogResult = shape({
+export const catalogResult = shapeFor<CatalogResult>()({
   result: operationResult,
   added: array(guid),
   duplicateCount: integer,
   issues: array(issue),
 });
-export const metadata = shape({
+export const metadata = shapeFor<ScriptMetadata>()({
   friendlyName: text(4096),
   description: text(),
   collectionId: nullable(guid),
@@ -289,20 +355,20 @@ export const metadata = shape({
   launchBlocked: bool,
   manualHotkeys: array(text(2048), 512),
 });
-export const activityQuery = shape(
+export const activityQuery = shapeFor<ActivityQuery>()(
   {},
   { scriptId: nullable(guid), outcome: nullable(outcome), search: text(4096) },
 );
-export const importPreview = shape({
+export const importPreview = shapeFor<ImportPreview>()({
   sourcePath: text(),
   sourceHash: text(128),
   scriptCount: integer,
   issues: array(issue),
   canImport: bool,
 });
-export function requireValid<T>(value: unknown, validator: Validator, label: string): T {
+export function requireValid<T>(value: unknown, validator: Schema<T>, label: string): T {
   if (!validator(value)) throw new Error(`Invalid ${label}`);
-  return value as T;
+  return value;
 }
 export const assertSettings = (v: unknown): ManagerSettings =>
   requireValid(v, settings, 'settings');

@@ -19,16 +19,17 @@ import {
   oneOf,
   operationResult,
   shape,
+  shapeFor,
   snapshot,
   text,
   requireValid,
-  type Validator,
+  type Schema,
 } from '../shared/validation.js';
 import { cancelUpdateDownloadResult, updateState } from '../shared/update-validation.js';
 import { storageChangeResult, storageState } from '../shared/storage-validation.js';
 import { startupRepairPreview } from '../shared/startup-repair-validation.js';
 
-const hostState = shape({
+const hostState = shapeFor<HostState>()({
   snapshot: nullable(snapshot),
   connection: oneOf('starting', 'ready', 'failed', 'closing'),
   error: nullable(text()),
@@ -36,7 +37,11 @@ const hostState = shape({
   authorityMode: nullable(authorityMode),
   administrationPending: bool,
 });
-const uiGuard = shape({ dirtyDrafts: bool, dialogOpen: bool, pendingWork: bool });
+const uiGuard = shapeFor<AdministrationUiGuard>()({
+  dirtyDrafts: bool,
+  dialogOpen: bool,
+  pendingWork: bool,
+});
 const preflightRequest = shape({ operationId: guid, phase: oneOf('begin', 'commit'), nonce: guid });
 let preflightProvider: (() => AdministrationUiGuard) | null = null;
 ipcRenderer.on('manager:administrationPreflight', (_event, envelope: unknown) => {
@@ -62,7 +67,7 @@ ipcRenderer.on('manager:administrationPreflight', (_event, envelope: unknown) =>
     body: { request: envelope.body, value },
   });
 });
-const themeState = shape({
+const themeState = shapeFor<ThemeState>()({
   dark: bool,
   highContrast: bool,
   reducedMotion: bool,
@@ -81,19 +86,19 @@ function connect(): Promise<string> {
   });
   return tokenPromise;
 }
-const invoke = async <T>(name: string, body: unknown = {}): Promise<T> =>
-  ipcRenderer.invoke(`manager:${name}`, { token: await connect(), body }) as Promise<T>;
-const checked = async <T>(name: string, body: unknown, validate: Validator): Promise<T> =>
+const invoke = async (name: string, body: unknown = {}): Promise<unknown> =>
+  ipcRenderer.invoke(`manager:${name}`, { token: await connect(), body });
+const checked = async <T>(name: string, body: unknown, validate: Schema<T>): Promise<T> =>
   requireValid<T>(await invoke(name, body), validate, `${name} response`);
-const empty: Validator = (v) => v === undefined;
+const empty: Schema<undefined> = (v): v is undefined => v === undefined;
 function subscribe<T>(
   channel: string,
   listener: (value: T) => void,
-  validate: (value: unknown) => boolean,
+  validate: Schema<T>,
 ): () => void {
   const handler = (_event: Electron.IpcRendererEvent, envelope: unknown) => {
     if (!object(envelope) || envelope.token !== token || !validate(envelope.body)) return;
-    listener(envelope.body as T);
+    listener(envelope.body);
   };
   ipcRenderer.on(channel, handler);
   void connect();
@@ -107,7 +112,10 @@ const api: AhkManagerApi = {
       'exportDiagnostics',
       {},
       nullable(
-        shape({ complete: bool, issueCount: (value) => integer(value) && (value as number) >= 0 }),
+        shape({
+          complete: bool,
+          issueCount: (value): value is number => integer(value) && value >= 0,
+        }),
       ),
     ),
   getStorageState: () => checked('storage:get', {}, storageState),

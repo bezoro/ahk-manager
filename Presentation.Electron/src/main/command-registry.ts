@@ -1,9 +1,9 @@
-import { requireValid, type Validator } from '../shared/validation.js';
+import { requireValid, type Schema } from '../shared/validation.js';
 
 export class CommandRegistry {
   private readonly commands = new Map<string, (body: unknown) => () => unknown>();
 
-  define<T>(name: string, validate: Validator, handler: (body: T) => unknown): void {
+  define<T>(name: string, validate: Schema<T>, handler: (body: T) => unknown): void {
     if (this.commands.has(name)) throw new Error('Command already registered: ' + name);
     this.commands.set(name, (body) => {
       const value = requireValid<T>(body, validate, name + ' request');
