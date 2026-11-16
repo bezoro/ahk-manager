@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { AgentReceipts } from '../../src/main/agent-receipts.js';
+import { UpdateStore } from '../../src/main/updates/update-store.js';
 import { CommandLog, commandDetails } from '../../src/main/logging/command-log.js';
 
 function fixture(t: TestContext) {
@@ -955,4 +957,61 @@ test('unrecognized agent command names and result codes cannot enter shared diag
   assert.ok(copied.every((record) => record.agentRequestId === undefined));
   assert.doesNotMatch(JSON.stringify(records(directory)), /forged_agent_command/);
   assert.doesNotMatch(JSON.stringify(log.exportFiles()), /forged_agent_command/);
+});
+
+test('reconciled update receipt failures retain their exact native code in copied and exported operations.get logs', async (t) => {
+  const directory = fixture(t);
+  const log = new CommandLog(directory);
+  t.after(() => log.close());
+  const store = new UpdateStore(path.join(directory, 'Updates'));
+  const receipts = new AgentReceipts(store);
+  const current = {
+    generation: 'reopened-fixture',
+    version: '2.0.1',
+    directory,
+    ready: true,
+    active: false,
+  };
+  for (const outcome of ['RolledBack', 'Failed'] as const) {
+    const operationId = randomUUID();
+    await receipts.begin(operationId, 'previous-fixture', { kind: 'Update', version: '2.0.2' });
+    await store.writeNew(
+      path.join(store.root, 'operations', operationId, 'outcome.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        operationId,
+        version: '2.0.2',
+        outcome,
+        installerExitCode: 1,
+        detail: 'private-path-and-native-error',
+      }),
+    );
+    const reply = await log.run('agent', 'agent:operations.get', () =>
+      receipts.reconcile(operationId, current),
+    );
+    assert.equal(reply.outcome, 'Failed');
+    assert.equal(reply.code, outcome);
+  }
+  const copied = log.snapshot('errors').records.filter((record) => record.phase === 'completed');
+  assert.deepEqual(
+    copied.map((record) => record.code),
+    ['RolledBack', 'Failed'],
+  );
+  assert.ok(copied.every((record) => record.command === 'agent:operations.get'));
+  assert.ok(copied.every((record) => record.result === 'failed'));
+  const exported = log.exportFiles();
+  assert.deepEqual(exported.issues, []);
+  const completed = exported.files
+    .flatMap((file) =>
+      file.contents
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line)),
+    )
+    .filter((record) => record.phase === 'completed');
+  assert.deepEqual(
+    completed.map((record) => record.code),
+    ['RolledBack', 'Failed'],
+  );
+  assert.doesNotMatch(JSON.stringify({ copied, exported }), /private-path-and-native-error/);
 });

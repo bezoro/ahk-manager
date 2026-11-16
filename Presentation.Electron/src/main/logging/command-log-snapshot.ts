@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { validAgentHelperDiagnostic } from '../agent-helper-diagnostics.js';
+import { validUpdateHostRefusal } from '../updates/update-host-diagnostics.js';
 import {
   sources,
   protocolCodes,
@@ -138,6 +140,11 @@ function sanitize(value: unknown, sessionId: string): Fields | null {
     result.code = value.code as string;
   if (finiteString(value.state, states)) result.state = value.state;
   if (finiteString(value.errorName, errorNames)) result.errorName = value.errorName;
+  const helper = { schemaVersion: 1, phase: value.helperPhase, code: value.helperCode };
+  if (validUpdateHostRefusal(helper) || validAgentHelperDiagnostic(helper)) {
+    result.helperPhase = value.helperPhase as string;
+    result.helperCode = value.helperCode as string;
+  }
   if (
     reason(value.errorCode) ||
     finiteString(value.errorCode, protocolCodes) ||

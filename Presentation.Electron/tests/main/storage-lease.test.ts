@@ -255,3 +255,50 @@ test('an initial runtime admission refusal rejects startup without an after-admi
   assert.deepEqual(failures, []);
   assert.equal(native.events.at(-1), 'exit:0');
 });
+
+test('native lease refusals preserve finite context through copied logs without changing data', async (t) => {
+  const { CommandLog } = await import('../../src/main/logging/command-log.js');
+  for (const moving of [false, true]) {
+    const f = await fixture(t);
+    if (moving) await f.prepare();
+    const log = new CommandLog(f.layout.dataDirectory);
+    t.after(() => log.close());
+    const child = new EventEmitter() as ChildProcess;
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    Object.assign(child, { stdin, stdout, stderr, exitCode: null, signalCode: null });
+    const wire =
+      'AHK_UPDATE_REFUSAL:{"schemaVersion":1,"phase":"portable-data-initialization","code":"access-denied"}\n';
+    const start = () => {
+      queueMicrotask(() => {
+        stderr.write(wire.slice(0, 36));
+        Object.assign(child, { exitCode: 65 });
+        child.emit('exit', 65, null);
+        setImmediate(() => {
+          stderr.end(wire.slice(36));
+          child.emit('close', 65, null);
+        });
+      });
+      return child;
+    };
+    await assert.rejects(
+      log.run('storage', moving ? 'storage:restart' : 'storage:get', async () => {
+        if (moving)
+          await withDataMoveLease(
+            f.layout,
+            async () => assert.fail('Refused data must not be copied'),
+            start,
+          );
+        else await acquirePortableStorageLease(f.layout, undefined, start);
+      }),
+      /lease ended unexpectedly/,
+    );
+    const record = log.snapshot('errors').records.at(-1)!;
+    assert.equal(record.errorName, 'NativeStorageLeaseError');
+    assert.equal(record.helperPhase, 'portable-data-initialization');
+    assert.equal(record.helperCode, 'access-denied');
+    assert.deepEqual(log.exportFiles().issues, []);
+    assert.equal(await fs.readFile(f.marker, 'utf8'), f.initial);
+  }
+});

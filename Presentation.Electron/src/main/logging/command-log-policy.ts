@@ -1,4 +1,5 @@
 import metadata from '../../shared/agent-commands.json';
+import { agentHelperCodes } from '../agent-helper-diagnostics.js';
 
 // Exported evidence accepts only product-owned command and result vocabularies.
 const agentCommandNames = new Set(metadata.map((entry) => entry.name));
@@ -55,6 +56,8 @@ export const errorNames = new Set([
   'AbortError',
   'UnknownAfterDispatchError',
   'BackendProtocolError',
+  'NativeStorageLeaseError',
+  'AgentTransportError',
 ]);
 export const systemCodes = new Set([
   'EACCES',
@@ -84,6 +87,7 @@ export const systemCodes = new Set([
 ]);
 
 export const agentCodes = new Set([
+  ...agentHelperCodes,
   'AlreadyAdministrator',
   'BackendUnavailable',
   'CancellationAccepted',
@@ -95,6 +99,7 @@ export const agentCodes = new Set([
   'DiagnosticArchiveIncomplete',
   'ElevationRequired',
   'ExportUnavailable',
+  'Failed',
   'HostBusy',
   'HostUnavailable',
   'InvalidArguments',
@@ -111,6 +116,7 @@ export const agentCodes = new Set([
   'PrivateParentRequired',
   'ReplyUnavailable',
   'ReplyUnconfirmed',
+  'RolledBack',
   'ShutdownAccepted',
   'ShutdownBlocked',
   'StartupFailed',

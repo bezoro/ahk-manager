@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { validAgentHelperDiagnostic } from '../agent-helper-diagnostics.js';
+import { validUpdateHostRefusal } from '../updates/update-host-diagnostics.js';
 import {
   sources,
   protocolCodes,
@@ -213,6 +215,13 @@ function resultOf(value: unknown): Fields {
 function errorOf(value: unknown): Fields {
   const result: Fields = { result: 'threw', errorName: 'Error' };
   if (!object(value)) return result;
+  if (validUpdateHostRefusal(value.refusal)) {
+    result.helperPhase = value.refusal.phase;
+    result.helperCode = value.refusal.code;
+  } else if (validAgentHelperDiagnostic(value.diagnostic)) {
+    result.helperPhase = value.diagnostic.phase;
+    result.helperCode = value.diagnostic.code;
+  }
   if (typeof value.name === 'string' && errorNames.has(value.name)) result.errorName = value.name;
   if (typeof value.code === 'string' && (systemCodes.has(value.code) || code(value.code)))
     result.errorCode = value.code;
@@ -474,6 +483,8 @@ export class CommandLog implements CommandLogBoundary {
         'errorCode',
         'backendRequestId',
         'agentRequestId',
+        'helperPhase',
+        'helperCode',
       ]);
       for (const line of lines) {
         const record = JSON.parse(line) as Record<string, unknown>;

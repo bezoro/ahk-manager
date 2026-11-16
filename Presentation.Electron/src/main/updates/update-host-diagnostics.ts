@@ -63,6 +63,20 @@ export interface UpdateHostRefusal {
   code: string;
 }
 
+/** Validate only finite diagnostic fields, including when reading editable local logs. */
+export function validUpdateHostRefusal(value: unknown): value is UpdateHostRefusal {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return (
+    Object.keys(item).length === 3 &&
+    item.schemaVersion === 1 &&
+    typeof item.phase === 'string' &&
+    phases.has(item.phase) &&
+    typeof item.code === 'string' &&
+    codes.has(item.code)
+  );
+}
+
 /** Accept only the native host's finite diagnostic vocabulary, never arbitrary stderr. */
 export function readUpdateHostRefusal(bytes: Buffer): UpdateHostRefusal | null {
   if (bytes.length > maximumBytes) return null;
