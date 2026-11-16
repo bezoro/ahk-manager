@@ -42,6 +42,8 @@ internal static class PortableStorageLease
         }
         catch (Exception error) when (UpdateProtocol.Known(error))
         {
+            // Paths are not yet trusted; emit only the finite, path-free reason.
+            AdmissionDiagnostics.Write(UpdatePhase.PortableDataInitialization, error);
             return 65;
         }
     }

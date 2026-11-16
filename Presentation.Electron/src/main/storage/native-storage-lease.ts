@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import { observeUpdateHost, type UpdateHostRefusal } from '../updates/update-host-diagnostics.js';
 import type { DeploymentLayout } from './deployment.js';
 
 type LeaseCommand = '--lease-portable-data-move' | '--lease-portable-storage';
@@ -8,8 +9,18 @@ const startLease: StartStorageLease = (helper, command) =>
   spawn(helper, [command], {
     shell: false,
     windowsHide: true,
-    stdio: ['pipe', 'pipe', 'ignore'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
+
+export class NativeStorageLeaseError extends Error {
+  constructor(
+    message: string,
+    readonly refusal: UpdateHostRefusal | null,
+  ) {
+    super(message);
+    this.name = 'NativeStorageLeaseError';
+  }
+}
 
 export interface NativeStorageLease {
   check(): void;
@@ -31,6 +42,7 @@ export async function openNativeStorageLease(
     path.join(layout.applicationDirectory, 'backend', 'update', 'AhkManager.UpdateHost.exe'),
     command,
   );
+  const diagnostics = child.stderr ? observeUpdateHost(child) : null;
   if (!child.stdin || !child.stdout) throw new Error(`The ${label} could not be opened.`);
   let failure: Error | null = null;
   let closed = false;
@@ -73,10 +85,13 @@ export async function openNativeStorageLease(
       closed = true;
       reject(error);
     });
-    child.once('exit', (code) => {
+    child.once('exit', async (code) => {
       closed = true;
       if (!finishing || code !== 0) {
-        const error = new Error(`The ${label} ended unexpectedly.${preserved}`);
+        const error = new NativeStorageLeaseError(
+          `The ${label} ended unexpectedly.${preserved}`,
+          diagnostics ? await diagnostics.refusal() : null,
+        );
         fail(error);
         reject(error);
       } else resolve();

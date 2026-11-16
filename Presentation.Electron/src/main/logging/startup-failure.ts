@@ -8,6 +8,8 @@ import {
   validLogonDeploymentDiagnostic,
 } from '../desktop/logon-deployment.js';
 import { parseStorageJson } from '../storage/json.js';
+import { NativeStorageLeaseError } from '../storage/native-storage-lease.js';
+import { validUpdateHostRefusal } from '../updates/update-host-diagnostics.js';
 
 const applicationId = 'Bezoro.AhkManager.Electron';
 const namePattern = /^startup-(\d{8}T\d{9}Z)-([0-9a-f-]{36})\.json$/;
@@ -108,6 +110,16 @@ function inspect(file: string): fs.BigIntStats | null {
         !validLogonDeploymentDiagnostic(problem.diagnostic)
       )
         return null;
+    } else if (
+      exact(problem, ['name', 'message', 'code', 'diagnostic']) &&
+      problem.name === 'NativeStorageLeaseError'
+    ) {
+      if (
+        typeof problem.message !== 'string' ||
+        problem.code !== 'NativeStorageLeaseFailed' ||
+        (problem.diagnostic !== null && !validUpdateHostRefusal(problem.diagnostic))
+      )
+        return null;
     } else if (exact(problem, ['name', 'message', 'code', 'diagnostic'])) {
       if (
         problem.name !== 'PortableInitializationError' ||
@@ -159,6 +171,8 @@ export function recordStartupFailure(context: StartupFailureContext): StartupFai
   const initialization =
     context.error instanceof PortableInitializationError ? context.error : null;
   const logon = context.error instanceof LogonDeploymentError ? context.error : null;
+  const lease = context.error instanceof NativeStorageLeaseError ? context.error : null;
+  const refusal = lease && validUpdateHostRefusal(lease.refusal) ? lease.refusal : null;
   const report = {
     schemaVersion: 1,
     applicationId,
@@ -190,19 +204,26 @@ export function recordStartupFailure(context: StartupFailureContext): StartupFai
             code: 'PortableDeploymentFailed',
             diagnostic: logon.diagnostic,
           }
-        : {
-            name: 'StartupFailure',
-            message: 'Manager could not complete startup.',
-            code:
-              context.error &&
-              typeof context.error === 'object' &&
-              'code' in context.error &&
-              ['ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS'].includes(
-                String(context.error.code),
-              )
-                ? String(context.error.code)
-                : null,
-          },
+        : lease
+          ? {
+              name: 'NativeStorageLeaseError',
+              message: 'Manager could not retain protected access to portable storage.',
+              code: 'NativeStorageLeaseFailed',
+              diagnostic: refusal,
+            }
+          : {
+              name: 'StartupFailure',
+              message: 'Manager could not complete startup.',
+              code:
+                context.error &&
+                typeof context.error === 'object' &&
+                'code' in context.error &&
+                ['ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS'].includes(
+                  String(context.error.code),
+                )
+                  ? String(context.error.code)
+                  : null,
+            },
   };
   const text = JSON.stringify(report, null, 2) + '\n';
   const diagnostic = initialization?.diagnostic;
@@ -232,7 +253,15 @@ export function recordStartupFailure(context: StartupFailureContext): StartupFai
           `Elapsed: ${logon.diagnostic.durationMs} ms`,
           `Retry budget exhausted: ${logon.diagnostic.exhausted ? 'yes' : 'no'}`,
         ].join('\n')
-      : 'Manager startup did not complete.';
+      : lease
+        ? [
+            'Manager could not retain protected access to portable storage.',
+            refusal ? `Phase: ${refusal.phase}` : '',
+            refusal ? `Failure code: ${refusal.code}` : 'The native failure reason is unavailable.',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : 'Manager startup did not complete.';
   let descriptor: number | null = null;
   try {
     if (

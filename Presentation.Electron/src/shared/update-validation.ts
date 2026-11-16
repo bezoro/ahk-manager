@@ -1,8 +1,9 @@
-import { array, bool, guid, nullable, oneOf, shape, text } from './validation.js';
+import type { UpdateRelease, UpdateState } from './updates.js';
+import { array, bool, guid, nullable, oneOf, shapeFor, text } from './validation.js';
 
-const finiteProgress = (value: unknown): boolean =>
+const finiteProgress = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
-export const updateState = shape({
+export const updateState = shapeFor<UpdateState>()({
   currentVersion: text(64),
   channel: oneOf('stable', 'test'),
   phase: oneOf('idle', 'checking', 'downloading', 'installing', 'error'),
@@ -13,7 +14,7 @@ export const updateState = shape({
   downloadId: nullable(guid),
   downloadCancellation: nullable(oneOf('canceling', 'canceled')),
   releases: array(
-    shape({
+    shapeFor<UpdateRelease>()({
       id: text(100),
       version: text(64),
       publishedAt: nullable(text(64)),

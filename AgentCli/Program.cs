@@ -19,6 +19,7 @@ internal static class Program
             stopping.Cancel();
         };
         bool privateMode = args is ["--server"];
+        bool authenticatedServer = false;
         Guid requestId = Guid.NewGuid();
         string? executable = Environment.ProcessPath;
         string version = executable is null
@@ -35,6 +36,7 @@ internal static class Program
                 var layout = AgentLayout.FromExecutable(self.Stamp.Executable);
                 using var parent = AgentPeer.AuthenticateParent(self, self, layout.Host);
                 AgentPipe.RequirePrivateStdio(parent.Pid);
+                authenticatedServer = true;
                 await new AgentServer(
                     Console.OpenStandardInput(),
                     Console.OpenStandardOutput(),
@@ -116,7 +118,11 @@ internal static class Program
             };
             if (privateMode)
             {
-                Console.Error.WriteLine(code);
+                if (authenticatedServer)
+                    AgentDiagnostics.Write(
+                        "server",
+                        ex is AgentFailure ? code : AgentDiagnostics.Classify(ex)
+                    );
                 return Exit("Failed", code);
             }
             string outcome = code is "ReplyUnconfirmed" or "StartupUnconfirmed"

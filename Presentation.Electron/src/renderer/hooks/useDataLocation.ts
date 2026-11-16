@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { StorageState } from '../../shared/storage.js';
+import { text } from '../resources/en-US.js';
 
 /** Keeps storage actions separate from the editable application preferences. */
 export function useDataLocation(closePreferences: () => void) {
@@ -17,9 +18,7 @@ export function useDataLocation(closePreferences: () => void) {
       },
       (failure: unknown) => {
         if (mounted.current)
-          setError(
-            failure instanceof Error ? failure.message : 'The data location could not be loaded.',
-          );
+          setError(failure instanceof Error ? failure.message : text.dataLocationLoadFailed);
       },
     );
     return () => {

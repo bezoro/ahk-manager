@@ -2,7 +2,7 @@
 
 Use English for code, comments, application text, documentation, commit messages, issues, and pull requests. Preserve user-authored script contents, names, paths, historical records, and compatibility identifiers in their original form.
 
-Start with [ARCHITECTURE.md](ARCHITECTURE.md). The portable product lives in `Core/`, `Backend/`, `UpdateHost/`, `PortableLauncher/`, and `Presentation.Electron/`. Keep one runtime and one portable release family.
+Start with [ARCHITECTURE.md](ARCHITECTURE.md). The portable product lives in `Core/`, `Backend/`, `UpdateHost/`, `PortableLauncher/`, `AgentCli/`, and `Presentation.Electron/`. Keep one runtime and one portable release family.
 
 ## Environment
 
@@ -44,6 +44,14 @@ Pop-Location
 ```
 
 `npm.cmd run format` applies Prettier according to `.prettierrc.json` and `.prettierignore`. `.editorconfig` covers other source files. `architecture:check` validates layer dependencies and the limited standalone storage-policy source link.
+
+The Node runner discovers `.test.ts` and `.test.tsx` files recursively inside `tests/main` and `tests/renderer`, in deterministic order. Run a focused case without changing the full CI suite:
+
+```powershell
+npm.cmd test -- --out "$work/focused-tests" --test-name-pattern "startup|agent"
+```
+
+Release and packaging tooling checks under `tests/tooling` are separate from that runner; `npm.cmd run test:release` and `node.exe --test tests/tooling/*.test.cjs` exercise them.
 
 Node checks use adapters and temporary profiles. The Windows file-identity check is explicitly skipped on other operating systems. Three integration checks require snapshots from the .NET backend suite; CI supplies these inputs:
 
@@ -93,7 +101,7 @@ dotnet publish Tests.Backend/Tests.Backend.csproj -c Release -r win-x64 --self-c
 
 These selectors use temporary profiles and effect adapters. Startup inspection reads Windows WMI without changing registration. Core and correction checks also require a discoverable AutoHotkey v2 installation. Shared test adapters belong in `Tests.Backend/Fixtures`; Core cases belong in `Tests.Backend/Core`.
 
-In `Presentation.Electron`, `npm.cmd run format:dotnet:check -- Core Backend Tests.Backend` checks CSharpier formatting; `format:dotnet` applies it. With no project list, both commands include UpdateHost. Formatting does not require project restore.
+In `Presentation.Electron`, `npm.cmd run format:dotnet:check -- Core Backend Tests.Backend` checks CSharpier formatting; `format:dotnet` applies it. With no project list, both commands include all six active .NET projects: Core, Backend, Tests.Backend, UpdateHost, AgentCli and Tests.AgentCli. The shared project definitions in `scripts/lib/dotnet-projects.cjs` also enforce reference and source-link boundaries; update that list when adding a project. Formatting does not require project restore.
 
 The separate `--ahk-owned` suite executes temporary scripts and requires additional setup. It is outside ordinary CI; read [SAFE-TESTS.md](SAFE-TESTS.md) before using it. Do not use a personal profile as a test root.
 
@@ -103,7 +111,17 @@ For update-host changes:
 dotnet restore UpdateHost/AhkManager.UpdateHost.csproj --locked-mode --configfile NuGet.Config -r win-x64
 dotnet publish UpdateHost/AhkManager.UpdateHost.csproj -c Release -r win-x64 --self-contained true --no-restore -o "$work/update-host"
 & "$work/update-host/AhkManager.UpdateHost.exe" --self-test --root "$work/update-host-tests"
+node.exe --experimental-strip-types Presentation.Electron/scripts/verify-update-host-diagnostics.cjs --input "$work/update-host-tests/update-refusal-contract.json"
 ```
+
+For the authenticated Agent CLI frame/exchange checks:
+
+```powershell
+dotnet restore Tests.AgentCli/Tests.AgentCli.csproj --locked-mode --configfile NuGet.Config
+dotnet run --project Tests.AgentCli/Tests.AgentCli.csproj -c Release --no-restore
+```
+
+These tests use in-memory streams and temporary endpoints. Packaged CLI and graphical startup are checked together by Windows CI. See [CLI.md](CLI.md) for the command catalog and authority requirements.
 
 ## Windows interface and package
 
@@ -146,6 +164,8 @@ Use a disposable Windows environment without an existing Manager or personal pro
 Keep process/persistence rules in Core, protocol validation in Backend, native integration in Electron main, and presentation in the renderer. Preload methods must remain specific; do not expose arbitrary commands, module paths, or Node access.
 
 When contracts change, review `Core/Models`, `Backend/Protocol.cs`, `Presentation.Electron/src/shared`, JSON contexts, and runtime validators together. Preserve existing profile, registry, and mutex identifiers. Format changes need prior-profile and invalid-data coverage.
+
+Use `shapeFor<DTO>()` for an existing transport DTO so its required and optional validator fields are checked against that type. Use `shape` when the envelope type should be inferred, and keep custom `Schema<T>` validators as explicit type predicates. Compile-only negative checks in `Presentation.Electron/tests/types/validation-conformance.ts` run through `typecheck`; they are intentionally not Node test entry points.
 
 Describe the reproduction, resulting behavior, and relevant validation in the PR. Inspect harness screenshots for visual changes. CI preserves logs and artifacts on failure. [VALIDATION.md](VALIDATION.md) describes the evidence required to support a result and its limits.
 

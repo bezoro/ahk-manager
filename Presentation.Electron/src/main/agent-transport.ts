@@ -1,4 +1,5 @@
 import type { Readable, Writable } from 'node:stream';
+import { AgentTransportError, observeAgentHelperDiagnostics } from './agent-helper-diagnostics.js';
 import { parseStorageJson } from './storage/json.js';
 
 import { spawn } from 'node:child_process';
@@ -211,26 +212,44 @@ export function startAgentTransport(
   failure: Failure,
 ): () => Promise<void> {
   const child = spawn(executable, ['--server'], { stdio: 'pipe', windowsHide: true });
-  // The private protocol uses only stdout. Drain the independent diagnostic stream.
-  child.stderr.resume();
+  // Diagnostics never share the private command protocol or expose raw stderr.
+  let closing = false;
+  let disconnecting = false;
+  let terminalFailure = false;
+  const report = (error: unknown) => {
+    if (disconnecting) terminalFailure = true;
+    failure(error);
+  };
+  observeAgentHelperDiagnostics(child.stderr, (error) => {
+    if (closing) return;
+    if (error instanceof AgentTransportError && error.diagnostic.phase === 'server')
+      terminalFailure = true;
+    report(error);
+  });
   const disconnect = serveAgentTransport(
     child.stdout,
     child.stdin,
     host,
     dispatch,
     () => {
+      disconnecting = true;
       if (child.exitCode === null) child.kill();
     },
-    failure,
+    report,
   );
   const exited = new Promise<void>((resolve) =>
     child.once('close', () => {
+      if (!closing && !terminalFailure)
+        report(
+          new AgentTransportError({ schemaVersion: 1, phase: 'server', code: 'TransportFailure' }),
+        );
       disconnect();
       resolve();
     }),
   );
   child.on('error', disconnect);
   return async () => {
+    closing = true;
     disconnect();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {

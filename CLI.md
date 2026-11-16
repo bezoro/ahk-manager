@@ -42,3 +42,16 @@ Each invocation writes one JSON response with the protocol, request ID, version,
 |    8 | Unknown                                         |
 
 A confirmed quit means the exact authenticated Manager process exited with code zero. For accepted updates, rollback, restart, or relocation, use the receipt and the command catalog’s read-only status and recovery commands to check the result. A timeout, disconnect, or lost reply can leave a result unknown. Inspect the current state before issuing another mutation.
+
+## Developing the CLI
+
+The native catalog is generated from `Presentation.Electron/src/shared/agent-commands.json`; it is shared with the application rather than maintained as a second command list. Keep request/receipt validation and the parent/peer ownership proofs independent.
+
+From the repository root, run the focused transport tests before changing the CLI:
+
+```powershell
+dotnet restore Tests.AgentCli/Tests.AgentCli.csproj --locked-mode --configfile NuGet.Config
+dotnet run --project Tests.AgentCli/Tests.AgentCli.csproj -c Release --no-restore
+```
+
+Run the Node command-dispatch tests from `Presentation.Electron` with `npm.cmd test -- --out <fresh-absolute-directory> --test-name-pattern "agent|command"`. The architecture and default .NET formatting checks include both CLI projects. The packaged Windows startup fixture verifies the published executable, authenticated pipe and headless lifecycle separately.

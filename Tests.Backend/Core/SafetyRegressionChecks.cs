@@ -20,6 +20,8 @@ public static partial class CoreSuite
         }
         var root = Path.Combine(FixtureRoot, "safety-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        await RunDocumentPolicyChecksAsync(Path.Combine(root, "document-validation"), Regression);
+        await RunDerivedAnalysisChecksAsync(Path.Combine(root, "derived-analysis"), Regression);
         var owner = new FakeOwner(root);
         string script = Path.Combine(root, "regression.ahk");
         await File.WriteAllTextAsync(script, "#Requires AutoHotkey v2.0\n^a::return\n");

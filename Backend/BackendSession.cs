@@ -87,7 +87,8 @@ internal sealed class BackendSession : IBackendSession
             startup,
             hostExecutable,
             effectsAllowed,
-            () => manager.Snapshot
+            () => manager.Snapshot,
+            apply: manager is ManagerService concrete ? concrete.TransferStartupAsync : null
         );
         dispatcher = new(manager, startupTransfer, authority.AdoptionConfigured);
     }

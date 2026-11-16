@@ -56,7 +56,7 @@ internal static class BackendChecks
         await QueueAndDeadlines();
         await Tokens(root);
         await Migration(root);
-        Startup(root);
+        await StartupTransferChecks.RunAsync(root, Check);
         StartupCommandChecks.Run(root, Check);
         await HeaderSnapshotAsync(root);
         var failures = new List<Exception>();
@@ -1260,102 +1260,6 @@ internal static class BackendChecks
                 ).PreviewAsync(source, CancellationToken.None)
             ).CanMigrate,
             "corrupt source journal refuses migration rather than dropping pending authority"
-        );
-    }
-
-    static void Startup(string root)
-    {
-        string old = Path.Combine(root, "old WinUI.exe"),
-            host = Path.Combine(root, "Bezoro.AhkManager.exe");
-        File.WriteAllText(old, "old");
-        File.WriteAllText(host, "new");
-        var adapter = new FakeStartup
-        {
-            Entry = new UserStartupService(new FakeStartup(), old).Command,
-        };
-        var state = ManagerSnapshot.Empty with
-        {
-            Revision = 7,
-            Settings = new() { LaunchManagerAtLogin = true },
-        };
-        bool owner = true;
-        var transfer = new StartupTransferService(
-            adapter,
-            host,
-            () => owner,
-            () => state,
-            _ => true
-        );
-        var preview = transfer.Preview();
-        Check(
-            preview.CanTransfer,
-            "startup transfer derives exact old registration and trusted new host"
-        );
-        Check(
-            transfer.Commit(preview.PreviewId, false).Outcome == Outcome.CancelledBeforeDispatch
-                && adapter.Writes == 0,
-            "native cancel transfers nothing"
-        );
-        preview = transfer.Preview();
-        owner = false;
-        Check(
-            transfer.Commit(preview.PreviewId, true).Code == ReasonCode.EffectOwnerUnavailable
-                && adapter.Writes == 0,
-            "lost owner blocks fake startup write"
-        );
-        owner = true;
-        preview = transfer.Preview();
-        adapter.Entry += " --foreign";
-        Check(
-            transfer.Commit(preview.PreviewId, true).Code == ReasonCode.StartupEntryConflict
-                && adapter.Writes == 0,
-            "fresh exact compare-exchange preserves changed registration"
-        );
-        adapter.Entry = new UserStartupService(adapter, old).Command;
-        preview = transfer.Preview();
-        File.AppendAllText(old, "changed");
-        Check(
-            transfer.Commit(preview.PreviewId, true).Code == ReasonCode.IdentityChanged
-                && adapter.Writes == 0,
-            "changed old executable cannot transfer startup"
-        );
-        preview = transfer.Preview();
-        Check(
-            transfer.Commit(preview.PreviewId, true).Succeeded
-                && adapter.Entry == new UserStartupService(adapter, host).Command
-                && adapter.Writes == 1,
-            "explicit transfer changes one owned value to final host only"
-        );
-        state = state with { Settings = new() { LaunchManagerAtLogin = false } };
-        Check(
-            !transfer.Preview().CanTransfer && adapter.Writes == 1,
-            "startup off never implicitly registers"
-        );
-        state = state with { Settings = new() { LaunchManagerAtLogin = true } };
-        adapter.Entry = new UserStartupService(adapter, old).Command;
-        preview = transfer.Preview();
-        state = state with { Revision = 8 };
-        Check(
-            transfer.Commit(preview.PreviewId, true).Code == ReasonCode.StaleSelection
-                && adapter.Writes == 1,
-            "startup transfer preview binds profile revision"
-        );
-        adapter.Entry += " --extra";
-        Check(
-            !transfer.Preview().CanTransfer,
-            "unexpected startup arguments are never treated as owned registration"
-        );
-        adapter.Entry = new UserStartupService(adapter, old).Command;
-        var foreign = new StartupTransferService(
-            adapter,
-            host,
-            () => true,
-            () => state,
-            _ => false
-        );
-        Check(
-            !foreign.Preview().CanTransfer && adapter.Writes == 1,
-            "unverified foreign executable cannot transfer owned startup entry"
         );
     }
 }
