@@ -50,16 +50,23 @@ internal sealed class AgentServer(Stream input, Stream output, AgentPeer parent)
         while (!stopping.IsCancellationRequested)
         {
             await pipe.WaitForConnectionAsync(stopping.Token);
+            bool verifiedPeer = false;
             try
             {
                 using var peer = new AgentPeer(AgentPipe.ClientPid(pipe.SafePipeHandle));
                 peer.RequirePeer(self, layout.Cli);
+                verifiedPeer = true;
                 await Exchange(pipe, peer);
             }
             catch (Exception ex) when (AgentFailure.Expected(ex))
             {
-                // Refuse the connection without giving an unverified peer any
-                // protocol data. The other listening instances stay available.
+                // Unverified peers receive no data and produce no diagnostics.
+                // A verified peer's relay failure may inform the trusted parent.
+                if (verifiedPeer)
+                    AgentDiagnostics.Write(
+                        "relay",
+                        ex is AgentFailure failure ? failure.Code : AgentDiagnostics.Classify(ex)
+                    );
             }
             finally
             {

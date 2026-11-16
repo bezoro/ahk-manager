@@ -91,6 +91,7 @@ Check(
     "an unknown outcome survives transport"
 );
 await AgentExchangeChecks.Run();
+AgentDiagnosticsChecks.Run();
 Console.WriteLine("Agent CLI frames, limits, cancellation, typed receipts and strict JSON passed.");
 
 static byte[] Prefix(int length)

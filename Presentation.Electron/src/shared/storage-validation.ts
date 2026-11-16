@@ -1,6 +1,7 @@
-import { bool, nullable, oneOf, shape, text } from './validation.js';
+import type { StorageChangeResult, StorageState } from './storage.js';
+import { bool, nullable, oneOf, shapeFor, text } from './validation.js';
 
-export const storageState = shape({
+export const storageState = shapeFor<StorageState>()({
   mode: oneOf('portable'),
   currentDataDirectory: text(32760),
   defaultDataDirectory: text(32760),
@@ -9,7 +10,7 @@ export const storageState = shape({
   error: nullable(text(4096)),
 });
 
-export const storageChangeResult = shape({
+export const storageChangeResult = shapeFor<StorageChangeResult>()({
   state: storageState,
   restartRequired: bool,
 });

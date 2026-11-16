@@ -1,4 +1,15 @@
 import fs from 'node:fs';
+import { validAgentHelperDiagnostic } from '../agent-helper-diagnostics.js';
+import { validUpdateHostRefusal } from '../updates/update-host-diagnostics.js';
+import {
+  sources,
+  protocolCodes,
+  agentCodes,
+  states,
+  errorNames,
+  systemCodes,
+  knownCommand,
+} from './command-log-policy.js';
 import path from 'node:path';
 import { guid, operation, outcome, parseStrictJson, reason } from '../../shared/validation.js';
 import { parseUpdateVersion } from '../../shared/update-versions.js';
@@ -50,195 +61,6 @@ const timestamp = (value: unknown): value is string => {
 
 // Log files are editable local evidence. A grammar alone would also accept secrets as command names.
 // Unknown future command names retain their result and correlation IDs under a fixed label.
-const commandNames = new Set([
-  'unknown',
-  'connect',
-  'getState',
-  'getTheme',
-  'getUpdateState',
-  'openLogs',
-  'copyDiagnostics',
-  'exportDiagnostics',
-  'storage:get',
-  'storage:choose',
-  'storage:open',
-  'storage:restore-default',
-  'storage:restart',
-  'storage:cancel',
-  'checkUpdates',
-  'installUpdate',
-  'cancelUpdateDownload',
-  'setUpdateChannel',
-  'requestAdministration',
-  'refresh',
-  'addFiles',
-  'addFolder',
-  'removeScript',
-  'locateScript',
-  'deleteScriptFile',
-  'saveMetadata',
-  'saveCollection',
-  'removeCollection',
-  'operate',
-  'saveSettings',
-  'previewStartupRepair',
-  'repairStartup',
-  'pickInterpreter',
-  'pickEditor',
-  'getActivity',
-  'previewImport',
-  'commitImport',
-  'migrateProfile',
-  'transferStartup',
-  'restoreBackup',
-  'recoverPending',
-  'retryBackend',
-  'copyText',
-  'updateSelection',
-  'documentReady',
-  'administrationProvider',
-  'administrationPreflightReply',
-  'hello',
-  'initializeProfile',
-  'preparePortableDataDirectory',
-  'load',
-  'snapshot',
-  'remove',
-  'relink',
-  'prepareRecycle',
-  'authorizeRecycle',
-  'completeRecycle',
-  'beginAdministration',
-  'administrationStatus',
-  'commitAdministration',
-  'cancelAdministration',
-  'beginStartupContinuation',
-  'startupContinuation',
-  'adoptStartupContinuation',
-  'startupAdoptionStatus',
-  'initializeStartup',
-  'prepare',
-  'perform',
-  'runLogin',
-  'activity',
-  'import',
-  'previewMigration',
-  'migrate',
-  'shutdown',
-  'previewStartupTransfer',
-  'initialize',
-  'check',
-  'start',
-  'startBackend',
-  'activate',
-  'secondInstance',
-  'closeWindow',
-  'uncaughtException',
-  'repairSearchShortcut',
-  'confirm',
-  'checkAdoption',
-  'continueStartup',
-  'toggleWindow',
-  'preferences',
-  'quit',
-  'stopScriptsAndQuit',
-  'cancelStopExit',
-]);
-const shortcutPhases = new Set([
-  'validation',
-  'launcher',
-  'directory',
-  'existing',
-  'stage-create',
-  'native-write',
-  'stage-verify',
-  'rename',
-  'backup-verify',
-  'publish',
-  'cleanup',
-  'restore',
-]);
-const knownCommand = (value: unknown): string => {
-  if (typeof value !== 'string') return 'unknown';
-  if (commandNames.has(value)) return value;
-  if (value.startsWith('dispatch.') && commandNames.has(value.slice(9))) return value;
-  if (value.startsWith('repairSearchShortcut.') && shortcutPhases.has(value.slice(21)))
-    return value;
-  if (/^pick\.(scripts|locate|folder|interpreter|editor|import|backup|migration)$/.test(value))
-    return value;
-  return 'unknown';
-};
-const sources = new Set(['ui', 'backend', 'tray', 'lifecycle', 'updates', 'storage']);
-const protocolCodes = new Set([
-  'Ok',
-  'InvalidFrame',
-  'InvalidRequest',
-  'NotAuthenticated',
-  'ParentMismatch',
-  'UnknownAction',
-  'QueueFull',
-  'IdConflict',
-  'RequestExpired',
-  'FrameTooLarge',
-  'ShuttingDown',
-  'InternalFailure',
-]);
-const systemCodes = new Set([
-  'EACCES',
-  'EPERM',
-  'ENOENT',
-  'EEXIST',
-  'ENOSPC',
-  'EDQUOT',
-  'EIO',
-  'EBUSY',
-  'EMFILE',
-  'ENFILE',
-  'ENOTDIR',
-  'EISDIR',
-  'ELOOP',
-  'EROFS',
-  'EINVAL',
-  'ETIMEDOUT',
-  'ECONNRESET',
-  'ECONNREFUSED',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-  'EPIPE',
-  'ERR_ABORTED',
-  'ERR_INVALID_ARG_TYPE',
-  'ERR_INVALID_ARG_VALUE',
-]);
-const errorNames = new Set([
-  'Error',
-  'TypeError',
-  'RangeError',
-  'SyntaxError',
-  'ReferenceError',
-  'URIError',
-  'EvalError',
-  'AggregateError',
-  'AbortError',
-  'UnknownAfterDispatchError',
-  'BackendProtocolError',
-]);
-const states = new Set([
-  'idle',
-  'checking',
-  'downloading',
-  'installing',
-  'error',
-  'PendingApproval',
-  'Ready',
-  'CommitPending',
-  'CommitAcked',
-  'Cancelled',
-  'Denied',
-  'Failed',
-  'Expired',
-  'Completed',
-  'Unknown',
-]);
 const results = new Set([
   'completed',
   'cancelled',
@@ -289,7 +111,7 @@ function sanitize(value: unknown, sessionId: string): Fields | null {
     parentRequestId: value.parentRequestId as string | null,
     phase: value.phase as string,
   };
-  for (const key of ['scriptId', 'correlationId'] as const)
+  for (const key of ['scriptId', 'correlationId', 'agentRequestId'] as const)
     if (guid(value[key])) result[key] = value[key] as string;
   if (operation(value.operation)) result.operation = value.operation as string;
   if (parseUpdateVersion(value.version)) result.version = value.version as string;
@@ -310,13 +132,23 @@ function sanitize(value: unknown, sessionId: string): Fields | null {
     if (nonnegative(value[key], 100000)) result[key] = value[key];
   if (finiteString(value.result, results)) result.result = value.result;
   if (outcome(value.outcome)) result.outcome = value.outcome as string;
-  if (reason(value.code) || finiteString(value.code, protocolCodes))
+  if (
+    reason(value.code) ||
+    finiteString(value.code, protocolCodes) ||
+    finiteString(value.code, agentCodes)
+  )
     result.code = value.code as string;
   if (finiteString(value.state, states)) result.state = value.state;
   if (finiteString(value.errorName, errorNames)) result.errorName = value.errorName;
+  const helper = { schemaVersion: 1, phase: value.helperPhase, code: value.helperCode };
+  if (validUpdateHostRefusal(helper) || validAgentHelperDiagnostic(helper)) {
+    result.helperPhase = value.helperPhase as string;
+    result.helperCode = value.helperCode as string;
+  }
   if (
     reason(value.errorCode) ||
     finiteString(value.errorCode, protocolCodes) ||
+    finiteString(value.errorCode, agentCodes) ||
     finiteString(value.errorCode, systemCodes)
   )
     result.errorCode = value.errorCode as string;

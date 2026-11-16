@@ -244,6 +244,9 @@ export async function shutdownWithinDeadline(
       () =>
         orderlyShutdown({
           ...boundary,
+          reportPlacementFailure: (error) => {
+            if (active) boundary.reportPlacementFailure(error);
+          },
           drain: async () => {
             await boundary.drain();
             check();

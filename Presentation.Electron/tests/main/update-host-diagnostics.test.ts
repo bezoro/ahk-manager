@@ -161,3 +161,53 @@ test('storage refusal codes explain NTFS and cloud availability before generic o
     );
   }
 });
+
+test('installed-image refusals preserve the native phase and safe reason before readiness', () => {
+  const native =
+    'AHK_UPDATE_REFUSAL:{"schemaVersion":1,"phase":"installed-image","code":"invalid-data"}\n';
+  assert.deepEqual(readUpdateHostRefusal(Buffer.from(native)), {
+    schemaVersion: 1,
+    phase: 'installed-image',
+    code: 'invalid-data',
+  });
+});
+
+test('the native contract verifier runs the production parser and refuses unknown or malformed native records', async (t) => {
+  const { default: fs } = await import('node:fs');
+  const { default: os } = await import('node:os');
+  const { default: path } = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-native-contract-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'native.json');
+  const run = () =>
+    spawnSync(
+      process.execPath,
+      [
+        '--experimental-strip-types',
+        path.resolve('scripts/verify-update-host-diagnostics.cjs'),
+        '--input',
+        file,
+      ],
+      { encoding: 'utf8', shell: false },
+    );
+  const line =
+    'AHK_UPDATE_REFUSAL:{"schemaVersion":1,"phase":"installed-image","code":"invalid-data"}';
+  fs.writeFileSync(file, JSON.stringify([line, line.replace('installed-image', 'readiness')]));
+  const valid = run();
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.match(valid.stdout, /2 phases, 1 codes, 2 emitted records/);
+  for (const fixture of [
+    [line.replace('installed-image', 'future-unreviewed-phase')],
+    [line.replace('invalid-data', 'private-unreviewed-code')],
+    [line.replace('"phase":', '"schemaVersion":1,"phase":')],
+    [],
+    ['x'.repeat(513)],
+    { records: [line] },
+  ]) {
+    fs.writeFileSync(file, JSON.stringify(fixture));
+    assert.notEqual(run().status, 0);
+  }
+  fs.writeFileSync(file, 'x'.repeat(256 * 1024 + 1));
+  assert.notEqual(run().status, 0);
+});

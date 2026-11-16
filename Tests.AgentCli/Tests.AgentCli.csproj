@@ -11,5 +11,6 @@
     <ItemGroup>
         <Compile Include="../AgentCli/AgentProtocol.cs" Link="AgentProtocol.cs" />
         <Compile Include="../AgentCli/AgentExchange.cs" Link="AgentExchange.cs" />
+        <Compile Include="../AgentCli/AgentDiagnostics.cs" Link="AgentDiagnostics.cs" />
     </ItemGroup>
 </Project>
