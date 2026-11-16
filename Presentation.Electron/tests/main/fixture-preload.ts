@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld('fixtureHarness', {
   resolveResponse: (method: string, response: unknown) =>
     invoke('resolveResponse', method, response),
   resetResponses: () => invoke('resetResponses'),
+  endScenario: () => invoke('endScenario'),
   openPreferences: () => invoke('openPreferences'),
   pressEnter: () => invoke('pressEnter'),
   setUpdates: (value: UpdateState) => invoke('setUpdates', value),

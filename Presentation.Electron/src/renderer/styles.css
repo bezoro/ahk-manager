@@ -464,16 +464,6 @@ time {
 .status-blocked i {
   background: var(--colorStatusWarningForeground1);
 }
-.startup-value {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--colorNeutralForeground3);
-}
-.startup-on {
-  color: var(--colorNeutralForeground1);
-}
 .row-hotkey {
   min-width: 0;
 }
@@ -954,12 +944,6 @@ time {
   .inspector {
     padding: 22px 17px;
   }
-  .table-head,
-  .script-row {
-    grid-template-columns: minmax(115px, 1fr) 100px 87px 113px;
-    gap: 9px;
-    padding-inline: 9px;
-  }
   .script-filters {
     grid-template-columns: minmax(110px, 1fr) 140px 85px;
     gap: 7px;
@@ -982,12 +966,6 @@ time {
   }
 }
 @media (max-width: 1000px) and (min-width: 901px) {
-  .table-head,
-  .script-row {
-    grid-template-columns: minmax(90px, 1fr) 88px 75px 108px;
-    gap: 7px;
-    padding-inline: 6px;
-  }
   .table-head {
     font-size: 10px;
   }
@@ -1042,10 +1020,6 @@ time {
     border-left: 0;
     border-top: 1px solid var(--colorNeutralStroke2);
   }
-  .table-head,
-  .script-row {
-    grid-template-columns: minmax(135px, 1fr) 110px 93px 116px;
-  }
   .page-heading {
     margin-bottom: 18px;
   }
@@ -1073,12 +1047,6 @@ time {
   }
   .main-column {
     padding-inline: 12px;
-  }
-  .table-head,
-  .script-row {
-    grid-template-columns: minmax(105px, 1fr) 98px 78px 107px;
-    gap: 7px;
-    padding-inline: 6px;
   }
   .table-head {
     font-size: 10px;
@@ -1147,8 +1115,7 @@ time {
     forced-color-adjust: none;
   }
   .script-row.selected .name-cell small,
-  .script-row.selected .status-text,
-  .script-row.selected .startup-value {
+  .script-row.selected .status-text {
     color: HighlightText !important;
   }
   .status-text i {

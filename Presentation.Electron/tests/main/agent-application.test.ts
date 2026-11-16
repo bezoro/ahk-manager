@@ -11,6 +11,7 @@ import { resolveDeployment } from '../../src/main/storage/deployment.js';
 import { prepareDataMove } from '../../src/main/storage/data-migration.js';
 import { UpdateStore } from '../../src/main/updates/update-store.js';
 import { hostText as tText } from '../../src/shared/host-en-US.js';
+import { SHUTDOWN_DEADLINE_MS } from '../../src/main/lifecycle.js';
 import { planId, runningSnapshot } from './fixtures.js';
 
 const requireFixture = createRequire(path.join(process.cwd(), 'package.json'));
@@ -27,7 +28,12 @@ async function waitFor<T>(read: () => T | undefined | Promise<T | undefined>): P
   throw new Error('The fixture did not reach the expected state.');
 }
 
-async function fixture(t: TestContext, busyLogonMarker = false) {
+interface FixturePorts {
+  savePlacement?(): Promise<void>;
+  scheduleShutdown?(callback: () => void, milliseconds: number): () => void;
+}
+
+async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePorts = {}) {
   const staging = process.env.AHK_DIAGNOSTICS_TEST_ROOT;
   assert.ok(staging && path.isAbsolute(staging));
   const root = await fs.mkdtemp(path.join(staging, 'agent-application-'));
@@ -67,6 +73,7 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
     }
     async request(action: string, data: { selection?: unknown; confirmed?: boolean }) {
       if (action === 'refresh' || action === 'load') return structuredClone(state);
+      if (action === 'saveSettings') await ports.savePlacement?.();
       if (action === 'prepare') {
         const script = state.scripts[0]!;
         return {
@@ -159,6 +166,7 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
   });
   const store = new UpdateStore(layout.updatesDirectory);
   const mocks = {
+    fixturePorts: ports,
     electron: {
       app,
       Tray,
@@ -249,6 +257,37 @@ async function fixture(t: TestContext, busyLogonMarker = false) {
       {
         name: 'headless-test-ports',
         setup(build) {
+          // Inject only the shutdown operation's timer, retaining the real lifecycle
+          // implementation and all unrelated startup, polling and receipt timers.
+          if (ports.scheduleShutdown) {
+            build.onResolve({ filter: /^\.\/lifecycle\.js$/ }, (args) =>
+              args.importer === path.resolve('src/main/application.ts')
+                ? { path: path.resolve('src/main/lifecycle.ts'), namespace: 'shutdown-clock' }
+                : undefined,
+            );
+            build.onLoad({ filter: /.*/, namespace: 'shutdown-clock' }, ({ path: source }) => ({
+              contents: `
+                export * from ${JSON.stringify(source)};
+                import { shutdownWithinDeadline as actual } from ${JSON.stringify(source)};
+                export function shutdownWithinDeadline(boundary, milliseconds, options) {
+                  const ports = globalThis[Symbol.for(${JSON.stringify(Symbol.keyFor(bridge))})].fixturePorts;
+                  return actual(boundary, milliseconds, { ...options, schedule: ports.scheduleShutdown });
+                }
+              `,
+              resolveDir: path.dirname(source),
+            }));
+          }
+          // Only the host composition sees Windows in this isolated fixture.
+          // Filesystem adapters keep the real OS semantics for temporary paths;
+          // the shipped source and its Windows-only admission guard are unchanged.
+          build.onLoad({ filter: /[/\\]application\.ts$/ }, async (args) => {
+            if (args.path !== path.resolve('src/main/application.ts')) return;
+            const compiled = await esbuild.transform(await fs.readFile(args.path, 'utf8'), {
+              loader: 'ts',
+              define: { 'process.platform': '"win32"' },
+            });
+            return { contents: compiled.code, loader: 'js', resolveDir: path.dirname(args.path) };
+          });
           build.onResolve({ filter: /.*/ }, (args) =>
             (args.path === 'electron' || path.basename(args.importer) === 'application.ts') &&
             Object.hasOwn(mocks, args.path)
@@ -337,7 +376,7 @@ test('a cancelled restart receipt remains readable during a fresh explicit retry
       command: 'storage.restart',
       arguments: {},
     });
-    assert.equal(review.outcome, 'Confirmed');
+    assert.equal(review.outcome, 'Confirmed', JSON.stringify(review));
     const token = (review.result as { confirmationToken: string }).confirmationToken;
     const result = await f.request('storage.restart', { confirmationToken: token });
     assert.equal(result.outcome, 'Accepted', JSON.stringify(result.result));
@@ -363,6 +402,81 @@ test('a cancelled restart receipt remains readable during a fresh explicit retry
   await second.afterReply!(true);
   assert.ok(f.events.includes('app.relaunch'), f.events.join(', '));
 });
+
+test(
+  'an actual Manager quit cannot shut down the backend after its placement save misses the deadline',
+  { timeout: dispatchTimeout * 10 },
+  async (t) => {
+    let saving = false;
+    let saved = false;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let expire: () => void = () => {
+      throw new Error('No shutdown deadline was scheduled.');
+    };
+    let scheduledMilliseconds: number | undefined;
+    let timerCancelled = false;
+    t.after(() => release());
+    const f = await fixture(t, false, {
+      savePlacement: async () => {
+        saving = true;
+        await blocked;
+        saved = true;
+      },
+      scheduleShutdown: (callback, milliseconds) => {
+        assert.equal(
+          scheduledMilliseconds,
+          undefined,
+          'Only one shutdown deadline should be scheduled.',
+        );
+        expire = callback;
+        scheduledMilliseconds = milliseconds;
+        return () => {
+          timerCancelled = true;
+        };
+      },
+    });
+    const shown = await f.request('app.show');
+    assert.equal(shown.outcome, 'Confirmed', JSON.stringify(shown));
+    assert.equal(
+      scheduledMilliseconds,
+      undefined,
+      'Opening the Manager must not use the shutdown clock.',
+    );
+    const reply = await f.request('app.quit');
+    assert.equal(reply.outcome, 'Accepted', JSON.stringify(reply));
+    assert.equal(reply.code, 'ShutdownAccepted');
+    assert.ok(reply.afterReply);
+    const quitting = reply.afterReply(true);
+    await waitFor(() => (saving ? true : undefined));
+    assert.equal(scheduledMilliseconds, SHUTDOWN_DEADLINE_MS);
+    assert.equal(f.events.includes('backend.shutdown'), false);
+    expire();
+    await quitting;
+    assert.equal(timerCancelled, true);
+    const timedOut = await f.request('app.status');
+    assert.deepEqual(
+      {
+        ready: (timedOut.result as { ready: boolean }).ready,
+        connection: (timedOut.result as { connection: string }).connection,
+      },
+      { ready: false, connection: 'failed' },
+    );
+    release();
+    await waitFor(() => (saved ? true : undefined));
+    // Let the original, now-expired save continuation reach the shutdown boundary.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(f.events.includes('backend.shutdown'), false, f.events.join(', '));
+    assert.equal(f.events.includes('agent.close'), false, f.events.join(', '));
+    assert.equal(f.events.includes('app.quit'), false, f.events.join(', '));
+    assert.equal(f.events.includes('script.stop'), false, 'Independent scripts must keep running.');
+    const afterSave = await f.request('app.status');
+    assert.equal((afterSave.result as { ready: boolean }).ready, false);
+    assert.equal((afterSave.result as { connection: string }).connection, 'failed');
+  },
+);
 
 test('registered portable logon recovers a busy configuration before any native bootstrap or instance lock', async (t) => {
   if (process.platform !== 'win32') return t.skip('Packaged Windows logon only');

@@ -162,11 +162,7 @@ export function Preferences({
                     onRestart={storage.restart}
                     onCancelMove={storage.cancelMove}
                   />
-                  {settingsChanged && (
-                    <p className="muted">
-                      Save your preferences before changing the data location.
-                    </p>
-                  )}
+                  {settingsChanged && <p className="muted">{text.dataLocationSaveFirst}</p>}
                 </>
               ) : storage.error ? (
                 <p role="alert">{storage.error}</p>

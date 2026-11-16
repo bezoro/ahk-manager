@@ -298,6 +298,8 @@ jobs:
         run: |
           & "$env:CI_OUTPUT/backend-publish/update/AhkManager.UpdateHost.exe" --self-test --root "$env:CI_OUTPUT/update-host-tests" 2>&1 | Tee-Object -FilePath "$env:CI_OUTPUT/update-host.log"
           if ($LASTEXITCODE -ne 0) { throw 'Update host policy checks failed.' }
+          node.exe --experimental-strip-types Presentation.Electron/scripts/verify-update-host-diagnostics.cjs --input "$env:CI_OUTPUT/update-host-tests/update-refusal-contract.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Native update refusal contract verification failed.' }
 
       - name: Build the self-contained Agent CLI and test its native protocol
         id: agent-cli

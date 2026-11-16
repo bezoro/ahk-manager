@@ -11,6 +11,7 @@ import type {
 } from '../../src/shared/contracts.js';
 import { snapshot, scriptId } from './fixtures.js';
 import { emptyUpdateState, type UpdateState } from '../../src/shared/updates.js';
+import { FixtureResponseStore, type FixtureResponse } from './fixture-response-store.js';
 import type { StorageState } from '../../src/shared/storage.js';
 import {
   requireValid,
@@ -46,9 +47,7 @@ protocol.registerSchemesAsPrivileged([
 let window: BrowserWindow;
 let material: ThemeState['material'] = 'solid';
 let calls: { method: string; args: unknown[] }[] = [];
-type FixtureResponse = { value?: unknown; error?: string; pending?: boolean };
-const responses = new Map<string, FixtureResponse>();
-const waiting = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+const responses = new FixtureResponseStore();
 const scripts = snapshot().scripts;
 const example = scripts[0]!;
 const fixtureSnapshot: ManagerSnapshot = {
@@ -170,7 +169,7 @@ let state: HostState = {
   administrationPending: false,
 };
 let updates: UpdateState = { ...emptyUpdateState(), currentVersion: '1.2.1' };
-let storage: StorageState = {
+const initialStorage: StorageState = {
   mode: 'portable',
   currentDataDirectory: 'C:\\Portable Manager\\Data',
   defaultDataDirectory: 'C:\\Portable Manager\\Data',
@@ -178,6 +177,7 @@ let storage: StorageState = {
   canChange: true,
   error: null,
 };
+let storage = structuredClone(initialStorage);
 const currentTheme = (): ThemeState => ({
   dark: nativeTheme.shouldUseDarkColors,
   accent: `#${systemPreferences.getAccentColor().slice(0, 6)}`,
@@ -287,18 +287,16 @@ app
         return;
       }
       if (method === 'resolveResponse') {
-        const pending = waiting.get(String(args[0]));
-        if (!pending) throw new Error('No pending fixture response');
-        waiting.delete(String(args[0]));
-        const response = args[1] as FixtureResponse;
-        response.error
-          ? pending.reject(new Error(response.error))
-          : pending.resolve(response.value);
+        responses.resolve(String(args[0]), args[1] as FixtureResponse);
         return;
       }
       if (method === 'resetResponses') {
-        if (waiting.size) throw new Error('Unresolved fixture response');
-        responses.clear();
+        responses.reset();
+        return;
+      }
+      if (method === 'endScenario') {
+        responses.endScenario();
+        storage = structuredClone(initialStorage);
         return;
       }
       if (method === 'openPreferences') {
@@ -360,8 +358,7 @@ app
       });
       const response = responses.get(method);
       if (response) {
-        if (response.pending)
-          return new Promise((resolve, reject) => waiting.set(method, { resolve, reject }));
+        if (response.pending) return responses.wait(method);
         if (response.error) throw new Error(response.error);
         return response.value;
       }
