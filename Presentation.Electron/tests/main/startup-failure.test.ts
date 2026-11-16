@@ -15,6 +15,7 @@ import {
 import { LogonDeploymentError } from '../../src/main/desktop/logon-deployment.js';
 import { createDiagnosticArchive } from '../../src/main/logging/diagnostic-archive.js';
 import { unzipSync } from 'fflate';
+import { NativeStorageLeaseError } from '../../src/main/storage/native-storage-lease.js';
 
 function fixture(t: { after(work: () => void): void }): {
   root: string;
@@ -241,4 +242,54 @@ test('logon resolution failure records only typed details and participates in le
   assert.equal(fs.existsSync(legacy.file), false);
   assert.equal(fs.existsSync(malformed), true);
   assert.equal(fs.readdirSync(legacy.directory).length, 11);
+});
+
+test('portable lease admission refusals remain copyable and exportable before the profile is opened', (t) => {
+  const { root, context } = fixture(t);
+  const refusal = {
+    schemaVersion: 1 as const,
+    phase: 'portable-data-initialization',
+    code: 'access-denied',
+  };
+  context.error = new NativeStorageLeaseError('private native message and path', refusal);
+  const report = recordStartupFailure(context);
+  assert.ok(report.file && report.directory);
+  assert.deepEqual(JSON.parse(report.text).error, {
+    name: 'NativeStorageLeaseError',
+    message: 'Manager could not retain protected access to portable storage.',
+    code: 'NativeStorageLeaseFailed',
+    diagnostic: refusal,
+  });
+  assert.match(report.summary, /Phase: portable-data-initialization/);
+  assert.match(report.summary, /Failure code: access-denied/);
+  assert.doesNotMatch(report.text + report.summary, /private native message/);
+  assert.equal(fs.existsSync(context.layout!.dataDirectory), false);
+  const profileDirectory = path.join(root, 'Existing profile');
+  const updatesDirectory = path.join(root, 'Existing updates');
+  fs.mkdirSync(profileDirectory);
+  fs.mkdirSync(updatesDirectory);
+  const archive = createDiagnosticArchive({
+    deployment: { profileDirectory, updatesDirectory },
+    summary: report.summary,
+    commandLogs: { files: [], issues: [] },
+    startupDirectory: report.directory,
+  });
+  assert.equal(archive.complete, true);
+  const files = unzipSync(archive.bytes);
+  const exported = Buffer.from(files['Startup/' + path.basename(report.file)]!).toString();
+  assert.deepEqual(JSON.parse(exported).error.diagnostic, refusal);
+  assert.doesNotMatch(exported, /private native message/);
+
+  // Only the finite wire shape survives even when a caller forges error details.
+  for (const invalid of [null, { ...refusal, code: 'private-token' }]) {
+    context.error = new NativeStorageLeaseError('private native message', invalid);
+    const saved = recordStartupFailure(context);
+    assert.ok(saved.file);
+    assert.equal(JSON.parse(saved.text).error.diagnostic, null);
+    assert.doesNotMatch(saved.text, /private-token|private native message/);
+  }
+  for (let index = 0; index < 10; index++) assert.ok(recordStartupFailure(context).file);
+  assert.equal(fs.existsSync(report.file), false);
+  assert.equal(fs.readdirSync(report.directory).length, 10);
+  assert.equal(fs.existsSync(context.layout!.dataDirectory), false);
 });

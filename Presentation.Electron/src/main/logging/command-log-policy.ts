@@ -149,6 +149,7 @@ const commandNames = new Set([
   'storage:restore-default',
   'storage:restart',
   'storage:cancel',
+  'storageLease',
   'checkUpdates',
   'installUpdate',
   'cancelUpdateDownload',
