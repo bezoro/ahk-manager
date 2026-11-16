@@ -31,6 +31,7 @@ public sealed class LegacyImportService(
                 if (
                     root.ValueKind != JsonValueKind.Object
                     || !root.TryGetProperty("Schema", out var schema)
+                    || schema.ValueKind != JsonValueKind.Number
                     || !schema.TryGetInt32(out int version)
                     || version is < 1 or > 5
                     || !root.TryGetProperty("Scripts", out var rows)
@@ -49,11 +50,21 @@ public sealed class LegacyImportService(
                 string hash = SafeJsonFiles.Hash(bytes);
                 bool authoritySafe = await AuthoritySafeAsync(sourcePath, root, ct)
                     .ConfigureAwait(false);
-                bool migrationPending =
-                    root.TryGetProperty("Migration", out var migration)
-                    && migration.TryGetProperty("State", out var state)
-                    && state.ValueKind == JsonValueKind.Number
-                    && state.GetInt32() is 1 or 2;
+                bool migrationPending = false;
+                if (root.TryGetProperty("Migration", out var migration))
+                {
+                    if (migration.ValueKind != JsonValueKind.Object)
+                        throw new InvalidDataException("Invalid legacy migration state.");
+                    if (migration.TryGetProperty("State", out var state))
+                    {
+                        if (
+                            state.ValueKind != JsonValueKind.Number
+                            || !state.TryGetInt32(out int migrationState)
+                        )
+                            throw new InvalidDataException("Invalid legacy migration state.");
+                        migrationPending = migrationState is 1 or 2;
+                    }
+                }
                 HashSet<Guid> ids = [];
                 HashSet<string> paths = new(StringComparer.OrdinalIgnoreCase);
                 var scripts = ImmutableArray.CreateBuilder<ScriptRecord>();
@@ -217,7 +228,8 @@ public sealed class LegacyImportService(
                 using var pending = JsonDocument.Parse(bytes);
                 SafeJsonFiles.UniqueProperties(pending.RootElement);
                 if (
-                    !pending.RootElement.TryGetProperty("Requests", out var requests)
+                    pending.RootElement.ValueKind != JsonValueKind.Object
+                    || !pending.RootElement.TryGetProperty("Requests", out var requests)
                     || requests.ValueKind != JsonValueKind.Array
                     || requests.GetArrayLength() != 0
                 )
@@ -228,10 +240,12 @@ public sealed class LegacyImportService(
         if (
             authority.ValueKind != JsonValueKind.Object
             || !authority.TryGetProperty("Sid", out var sid)
+            || sid.ValueKind != JsonValueKind.String
             || sid.GetString() != owner.Sid
             || !authority.TryGetProperty("Fixture", out var fixture)
             || fixture.ValueKind != JsonValueKind.False
             || !authority.TryGetProperty("LedgerId", out var ledgerId)
+            || ledgerId.ValueKind != JsonValueKind.String
             || !ledgerId.TryGetGuid(out Guid id)
         )
             return false;
@@ -246,12 +260,19 @@ public sealed class LegacyImportService(
             SafeJsonFiles.UniqueProperties(parsed.RootElement);
             var document = parsed.RootElement;
             if (
-                !document.TryGetProperty("Schema", out var version)
-                || version.GetInt32() != 2
+                document.ValueKind != JsonValueKind.Object
+                || !document.TryGetProperty("Schema", out var version)
+                || version.ValueKind != JsonValueKind.Number
+                || !version.TryGetInt32(out int schema)
+                || schema != 2
                 || !document.TryGetProperty("Binding", out var binding)
+                || binding.ValueKind != JsonValueKind.Object
                 || !binding.TryGetProperty("LedgerId", out var bindingId)
-                || bindingId.GetGuid() != id
+                || bindingId.ValueKind != JsonValueKind.String
+                || !bindingId.TryGetGuid(out Guid boundId)
+                || boundId != id
                 || !binding.TryGetProperty("Sid", out var bindingSid)
+                || bindingSid.ValueKind != JsonValueKind.String
                 || bindingSid.GetString() != owner.Sid
                 || !binding.TryGetProperty("Fixture", out var bindingFixture)
                 || bindingFixture.ValueKind != JsonValueKind.False
@@ -272,9 +293,13 @@ public sealed class LegacyImportService(
             SafeJsonFiles.UniqueProperties(anchor.RootElement);
             if (
                 !(
-                    anchor.RootElement.TryGetProperty("LedgerId", out var anchorId)
-                    && anchorId.GetGuid() == id
+                    anchor.RootElement.ValueKind == JsonValueKind.Object
+                    && anchor.RootElement.TryGetProperty("LedgerId", out var anchorId)
+                    && anchorId.ValueKind == JsonValueKind.String
+                    && anchorId.TryGetGuid(out Guid anchoredId)
+                    && anchoredId == id
                     && anchor.RootElement.TryGetProperty("Sid", out var anchorSid)
+                    && anchorSid.ValueKind == JsonValueKind.String
                     && anchorSid.GetString() == owner.Sid
                     && anchor.RootElement.TryGetProperty("Fixture", out var anchorFixture)
                     && anchorFixture.ValueKind == JsonValueKind.False

@@ -297,7 +297,7 @@ public sealed partial class ManagerService
                     name.Length is 0 or > 120
                     || document.Collections.Any(c =>
                         c.Id != collectionId
-                        && c.Name.Equals(name, StringComparison.CurrentCultureIgnoreCase)
+                        && c.Name.Trim().Equals(name, StringComparison.OrdinalIgnoreCase)
                     )
                     || collectionId.HasValue && !document.Collections.Any(c => c.Id == collectionId)
                 )
