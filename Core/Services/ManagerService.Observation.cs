@@ -62,16 +62,34 @@ public sealed partial class ManagerService
 
     async Task Publish(bool reanalyze, CancellationToken ct)
     {
+        var activeIds = document.Scripts.Select(entry => entry.Id).ToHashSet();
+        foreach (var removed in analyses.Keys.Where(id => !activeIds.Contains(id)).ToArray())
+            analyses.Remove(removed);
         var scripts = ImmutableArray.CreateBuilder<ScriptSnapshot>();
         foreach (var entry in document.Scripts)
         {
             var issues = ImmutableArray.CreateBuilder<Issue>();
             bool exists = File.Exists(entry.Path);
-            if (reanalyze || !analyses.ContainsKey(entry.Id))
-                analyses[entry.Id] = exists
-                    ? await analyzer.AnalyzeAsync(entry.Path, ct).ConfigureAwait(false)
-                    : new([], AnalysisCoverage.Unanalysable, [new(ReasonCode.MissingFile)]);
-            var analysis = analyses[entry.Id];
+            if (
+                reanalyze
+                || !analyses.TryGetValue(entry.Id, out var cached)
+                || !ScriptPaths.Equal(cached.Path, entry.Path)
+                || cached.Exists != exists
+            )
+            {
+                var fresh = exists
+                    ? await (
+                        analyzeScript?.Invoke(entry.Path, ct)
+                        ?? analyzer.AnalyzeAsync(entry.Path, ct)
+                    ).ConfigureAwait(false)
+                    : new HotkeyAnalysis(
+                        [],
+                        AnalysisCoverage.Unanalysable,
+                        [new(ReasonCode.MissingFile)]
+                    );
+                analyses[entry.Id] = (entry.Path, exists, fresh);
+            }
+            var analysis = analyses[entry.Id].Analysis;
             issues.AddRange(analysis.Issues.Select(i => i with { ScriptId = entry.Id }));
             var matching = observed
                 .Processes.Where(p => ScriptPaths.Equal(p.Identity.ScriptPath, entry.Path))

@@ -16,6 +16,7 @@ internal static class Program
                         "--backend"
                         or "--core"
                         or "--core-document-validation"
+                        or "--core-derived-analysis"
                         or "--corrections"
                         or "--inventory"
                         or "--ahk-owned"
@@ -24,7 +25,7 @@ internal static class Program
                     )
             )
                 throw new ArgumentException(
-                    "Use --backend|--core|--core-document-validation|--corrections|--inventory|--ahk-owned|--startup-inspection|--startup-task-integration --root <fixture directory>."
+                    "Use --backend|--core|--core-document-validation|--core-derived-analysis|--corrections|--inventory|--ahk-owned|--startup-inspection|--startup-task-integration --root <fixture directory>."
                 );
             if (args[0] == "--ahk-owned" && !Path.IsPathFullyQualified(args[2]))
                 throw new ArgumentException(
@@ -53,6 +54,16 @@ internal static class Program
                     await Tests.Backend.Core.CoreSuite.RunAsync(root);
                 else if (args[0] == "--core-document-validation")
                     await Tests.Backend.Core.CoreSuite.RunDocumentPolicyChecksAsync(
+                        root,
+                        (passed, name) =>
+                        {
+                            if (!passed)
+                                throw new InvalidOperationException("FAILED: " + name);
+                            Console.WriteLine("PASS " + name);
+                        }
+                    );
+                else if (args[0] == "--core-derived-analysis")
+                    await Tests.Backend.Core.CoreSuite.RunDerivedAnalysisChecksAsync(
                         root,
                         (passed, name) =>
                         {
