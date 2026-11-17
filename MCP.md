@@ -42,6 +42,8 @@ Confirmation tokens belong to the reviewed arguments and host generation. If the
 
 ## Results and recovery
 
-Tool results contain the [CLI response envelope](CLI.md#input-and-output) as structured content and JSON text. Read `outcome`, `code` and `result` together. `Accepted` can mean that an operation is still running. Keep the operation ID and call `operations_get` to read its durable receipt. If the connection closes during an update, reconnect after Manager restarts and query the receipt before retrying. Use the client's normal disconnect control before updating from a separate client.
+Tool results contain the [CLI response envelope](CLI.md#input-and-output) as JSON text and, from protocol version `2025-06-18`, structured content. Read `outcome`, `code` and `result` together. `Accepted` can mean that an operation is still running. Keep the operation ID and call `operations_get` to read its durable receipt.
+
+Manager can commit an operation before the MCP client receives its reply. If the connection closes during an update, reconnect after Manager restarts and query the receipt. If the operation ID was lost, inspect the current version and update history before retrying. Disconnect other MCP sessions before applying an update so the updater can replace the portable application files.
 
 The client launches the server locally. The server communicates over standard input and output and uses the existing authenticated connection to Manager for live operations.
