@@ -388,6 +388,25 @@ public static class PortableUpdaterUi
         return owner == pid && Matches(pid, executable, started);
     }
 
+    static bool VisibleMainWindow(IntPtr window, int pid, string executable, DateTime started) =>
+        Owned(window, pid, executable, started)
+        && ClassName(window).StartsWith("Chrome_WidgetWin", StringComparison.Ordinal)
+        && IsWindowVisible(window);
+
+    public static bool HasVisibleMainWindow(int pid, string executable, DateTime started)
+    {
+        bool found = false;
+        EnumWindows(
+            (window, _) =>
+            {
+                found = VisibleMainWindow(window, pid, executable, started);
+                return !found;
+            },
+            IntPtr.Zero
+        );
+        return found && Matches(pid, executable, started);
+    }
+
     // The test may activate or close only this exact portable Manager session.
     static bool MainWindow(int pid, string executable, DateTime started, bool close)
     {
@@ -395,11 +414,7 @@ public static class PortableUpdaterUi
         EnumWindows(
             (window, _) =>
             {
-                if (
-                    !Owned(window, pid, executable, started)
-                    || !ClassName(window).StartsWith("Chrome_WidgetWin", StringComparison.Ordinal)
-                    || !IsWindowVisible(window)
-                )
+                if (!VisibleMainWindow(window, pid, executable, started))
                     return true;
                 if (close)
                     dispatched |= PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero);

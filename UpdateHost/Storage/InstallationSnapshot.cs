@@ -87,7 +87,8 @@ internal static class InstallationSnapshot
     internal static async Task<SnapshotManifest> Copy(
         string sourceRoot,
         string destination,
-        int maximumEntries = MaximumEntries
+        int maximumEntries = MaximumEntries,
+        Action<string>? beforeFinalization = null
     )
     {
         if (Directory.Exists(destination) || File.Exists(destination))
@@ -98,6 +99,8 @@ internal static class InstallationSnapshot
         if (new DriveInfo(Path.GetPathRoot(destination)!).AvailableFreeSpace < required)
             throw new IOException("Not enough space to preserve the installation.");
         SnapshotSecurity.CreatePrivateDirectory(destination);
+        using var destinationRoot = new DirectoryLease([destination]);
+        byte[] createdSecurity = SnapshotSecurity.CaptureFreshDirectory(destination);
         foreach (
             var directory in sources.Directories.OrderBy(directory => directory.RelativePath.Length)
         )
@@ -156,8 +159,22 @@ internal static class InstallationSnapshot
                 .ToArray(),
             files.ToArray()
         );
-        Verify(destination, manifest, maximumEntries);
+        beforeFinalization?.Invoke(destination);
         VerifySecurity(sourceRoot, manifest);
+        using var destinationDirectories = new DirectoryLease(
+            manifest.Directories.Select(directory =>
+                Path.Combine(destination, directory.RelativePath)
+            )
+        );
+        using var verifiedDestination = VerifyPinned(destination, manifest, maximumEntries);
+        VerifyPrivate(destination, manifest, requireProtectedRoot: false);
+        bool protectionChanged = SnapshotSecurity.FinalizeFreshDirectory(
+            destination,
+            createdSecurity
+        );
+        using var postProtection = protectionChanged
+            ? VerifyPinned(destination, manifest, maximumEntries)
+            : null;
         VerifyPrivate(destination, manifest);
         return manifest;
     }
@@ -168,34 +185,51 @@ internal static class InstallationSnapshot
         int maximumEntries = MaximumEntries
     )
     {
-        using var sources = Pin(root, maximumEntries);
-        if (
-            !sources
-                .Directories.Select(directory => directory.RelativePath)
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .SequenceEqual(
-                    manifest.Directories.Select(directory => directory.RelativePath),
-                    StringComparer.OrdinalIgnoreCase
-                )
-            || sources.Files.Count != manifest.Files.Length
-        )
-            throw new IOException("Installation snapshot structure changed.");
-        var expected = manifest.Files.ToDictionary(
-            file => file.RelativePath,
-            StringComparer.OrdinalIgnoreCase
-        );
-        foreach (var source in sources.Files)
-            if (
-                !expected.TryGetValue(source.RelativePath, out var file)
-                || source.Lease.Length != file.Bytes
-                || source.Lease.Hash() != file.Sha256
-            )
-                throw new IOException("Installation snapshot bytes changed.");
+        using var sources = VerifyPinned(root, manifest, maximumEntries);
     }
 
-    internal static void VerifyPrivate(string root, SnapshotManifest manifest)
+    static Sources VerifyPinned(string root, SnapshotManifest manifest, int maximumEntries)
     {
-        SnapshotSecurity.VerifyPrivate(root, true, true);
+        var sources = Pin(root, maximumEntries);
+        try
+        {
+            if (
+                !sources
+                    .Directories.Select(directory => directory.RelativePath)
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .SequenceEqual(
+                        manifest.Directories.Select(directory => directory.RelativePath),
+                        StringComparer.OrdinalIgnoreCase
+                    )
+                || sources.Files.Count != manifest.Files.Length
+            )
+                throw new IOException("Installation snapshot structure changed.");
+            var expected = manifest.Files.ToDictionary(
+                file => file.RelativePath,
+                StringComparer.OrdinalIgnoreCase
+            );
+            foreach (var source in sources.Files)
+                if (
+                    !expected.TryGetValue(source.RelativePath, out var file)
+                    || source.Lease.Length != file.Bytes
+                    || source.Lease.Hash() != file.Sha256
+                )
+                    throw new IOException("Installation snapshot bytes changed.");
+            return sources;
+        }
+        catch
+        {
+            sources.Dispose();
+            throw;
+        }
+    }
+
+    internal static void VerifyPrivate(string root, SnapshotManifest manifest) =>
+        VerifyPrivate(root, manifest, requireProtectedRoot: true);
+
+    static void VerifyPrivate(string root, SnapshotManifest manifest, bool requireProtectedRoot)
+    {
+        SnapshotSecurity.VerifyPrivate(root, true, requireProtectedRoot);
         foreach (var directory in manifest.Directories)
             SnapshotSecurity.VerifyPrivate(Path.Combine(root, directory.RelativePath), true);
         foreach (var file in manifest.Files)
