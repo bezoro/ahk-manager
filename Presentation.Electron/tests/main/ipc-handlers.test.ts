@@ -152,7 +152,11 @@ test('renderer management actions have published headless equivalents', () => {
     .filter((channel) => channel !== 'manager:connect')
     .map((channel) => channel.slice('manager:'.length));
   assert.deepEqual(registered.sort(), Object.keys(rendererCommands).sort());
-  const published = new Set(commandCatalog.map((command) => command.name));
+  const published = new Set(
+    commandCatalog
+      .filter((command) => command.surface === 'management')
+      .map((command) => command.name),
+  );
   for (const [action, equivalent] of Object.entries(rendererCommands)) {
     if (typeof equivalent === 'string')
       assert.ok(published.has(equivalent), `${action} uses unpublished command ${equivalent}`);

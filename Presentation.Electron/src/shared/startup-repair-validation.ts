@@ -1,8 +1,12 @@
 import type { StartupRepairPreview } from './contracts.js';
+import { described } from './json-schema.js';
 import { bool, nullable, reason, shapeFor, text, type Schema } from './validation.js';
 
-export const startupRepairFingerprint: Schema<string> = (value): value is string =>
-  typeof value === 'string' && value.length === 64 && /^[0-9a-f]{64}$/.test(value);
+const fingerprintPattern = /^[0-9a-f]{64}$/;
+export const startupRepairFingerprint = described(
+  (value: unknown): value is string => typeof value === 'string' && fingerprintPattern.test(value),
+  { type: 'string', pattern: fingerprintPattern.source },
+);
 
 const previewShape = shapeFor<StartupRepairPreview>()({
   canRepair: bool,

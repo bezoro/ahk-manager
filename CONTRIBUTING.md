@@ -165,6 +165,8 @@ Keep process/persistence rules in Core, protocol validation in Backend, native i
 
 Add management operations through the command catalog and agent dispatcher. Declare the equivalent command when adding a renderer handler, or document why the action is purely desktop behavior. Share controller and application operations across the surfaces so previews, effects and receipts have the same rules.
 
+The command validators in `Presentation.Electron/src/shared/agent-command-schemas.ts` also describe the inputs published by CLI and MCP. After changing command metadata or validators, run `node scripts/generate-agent-catalog.cjs` from `Presentation.Electron` and commit the regenerated catalog. Tests detect drift between the validators, tool schemas and registered commands.
+
 When contracts change, review `Core/Models`, `Backend/Protocol.cs`, `Presentation.Electron/src/shared`, JSON contexts, and runtime validators together. Preserve existing profile, registry, and mutex identifiers. Format changes need prior-profile and invalid-data coverage.
 
 Use `shapeFor<DTO>()` for an existing transport DTO so its required and optional validator fields are checked against that type. Use `shape` when the envelope type should be inferred, and keep custom `Schema<T>` validators as explicit type predicates. Compile-only negative checks in `Presentation.Electron/tests/types/validation-conformance.ts` run through `typecheck`; they are intentionally not Node test entry points.

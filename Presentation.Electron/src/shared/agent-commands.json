@@ -1,142 +1,869 @@
 [
   {
+    "name": "app.start",
+    "description": "Start Manager without opening a window and wait for its backend to be ready",
+    "parameters": {},
+    "surface": "management",
+    "execution": "client",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "app.status",
     "description": "Get profile, backend and window readiness",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "app.show",
     "description": "Open and focus the manager window",
-    "parameters": {}
+    "parameters": {},
+    "surface": "desktop",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "app.hide",
     "description": "Hide the manager window to the tray",
-    "parameters": {}
+    "parameters": {},
+    "surface": "desktop",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "app.toggleWindow",
     "description": "Toggle the manager window",
-    "parameters": {}
+    "parameters": {},
+    "surface": "desktop",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "app.preferences",
     "description": "Open Preferences",
-    "parameters": {}
+    "parameters": {},
+    "surface": "desktop",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "app.quit",
     "description": "Quit Manager while leaving scripts running",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "app.stopScriptsAndQuit",
     "description": "Stop scripts and quit once stopping is verified",
     "parameters": {},
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "app.cancelStopExit",
     "description": "Request cancellation of the active stop and exit",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "app.retryBackend",
     "description": "Reconnect the backend",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "commands.preview",
     "description": "Review a command that requires confirmation",
-    "parameters": {
-      "command": "command",
-      "arguments": "object"
+    "parameters": { "command": "command", "arguments": "object" },
+    "example": { "command": "app.stopScriptsAndQuit", "arguments": {} },
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "command": { "type": "string", "maxLength": 100, "pattern": "^[^\\u0000]*$" },
+        "arguments": { "type": "object" }
+      },
+      "required": ["command", "arguments"],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "command": { "const": "app.stopScriptsAndQuit" },
+            "arguments": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "scripts.remove" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "scriptId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                },
+                "revision": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
+                  "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+                }
+              },
+              "required": ["scriptId", "revision"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "scripts.locate" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "scriptId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                },
+                "revision": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
+                  "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+                },
+                "path": {
+                  "type": "string",
+                  "maxLength": 32768,
+                  "pattern": "^[^\\u0000]*$",
+                  "anyOf": [
+                    { "pattern": "^[a-zA-Z]:[\\\\/]" },
+                    { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+                  ],
+                  "description": "Absolute Windows path."
+                }
+              },
+              "required": ["scriptId", "revision", "path"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "scripts.recycle" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "scriptId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                },
+                "revision": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
+                  "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+                }
+              },
+              "required": ["scriptId", "revision"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "scripts.operate" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "scriptId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                },
+                "revision": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
+                  "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+                },
+                "operation": {
+                  "type": "string",
+                  "enum": [
+                    "Start",
+                    "Stop",
+                    "Restart",
+                    "TogglePause",
+                    "ToggleSuspend",
+                    "Edit",
+                    "OpenFolder",
+                    "Recover"
+                  ]
+                }
+              },
+              "required": ["scriptId", "revision", "operation"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "collections.remove" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "collectionId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                },
+                "revision": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
+                  "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+                }
+              },
+              "required": ["collectionId", "revision"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "settings.save" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "revision": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
+                  "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+                },
+                "settings": {
+                  "type": "object",
+                  "properties": {
+                    "interpreterPath": {
+                      "anyOf": [
+                        { "type": "string", "maxLength": 32768, "pattern": "^[^\\u0000]*$" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "editorPath": {
+                      "anyOf": [
+                        { "type": "string", "maxLength": 32768, "pattern": "^[^\\u0000]*$" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "editorArguments": {
+                      "type": "array",
+                      "items": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$" },
+                      "maxItems": 128
+                    },
+                    "launchManagerAtLogin": { "type": "boolean" },
+                    "launchManagerAsAdministrator": { "type": "boolean" },
+                    "showWindowAtLogin": { "type": "boolean" },
+                    "startInTray": { "type": "boolean" },
+                    "theme": { "type": "string", "enum": ["System", "Light", "Dark"] },
+                    "closeBehavior": { "type": "string", "enum": ["HideToTray", "Exit"] },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "y": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "width": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "height": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "maximized": { "type": "boolean" },
+                        "dpi": { "type": "number" }
+                      },
+                      "required": ["x", "y", "width", "height", "maximized", "dpi"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "interpreterPath",
+                    "editorPath",
+                    "editorArguments",
+                    "launchManagerAtLogin",
+                    "launchManagerAsAdministrator",
+                    "showWindowAtLogin",
+                    "startInTray",
+                    "theme",
+                    "closeBehavior",
+                    "window"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["revision", "settings"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "startup.transfer" },
+            "arguments": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "startup.resume" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "operationId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                }
+              },
+              "required": ["operationId"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "import.commit" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                }
+              },
+              "required": ["token"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "profile.migrate" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 32768,
+                  "pattern": "^[^\\u0000]*$",
+                  "anyOf": [
+                    { "pattern": "^[a-zA-Z]:[\\\\/]" },
+                    { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+                  ],
+                  "description": "Absolute Windows path."
+                }
+              },
+              "required": ["path"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "profile.restoreBackup" },
+            "arguments": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "storage.prepare" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 32768,
+                  "pattern": "^[^\\u0000]*$",
+                  "anyOf": [
+                    { "pattern": "^[a-zA-Z]:[\\\\/]" },
+                    { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+                  ],
+                  "description": "Absolute Windows path."
+                }
+              },
+              "required": ["path"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "storage.restoreDefault" },
+            "arguments": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "storage.restart" },
+            "arguments": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "storage.cancel" },
+            "arguments": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "updates.install" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "maxLength": 100, "pattern": "^[^\\u0000]*$" }
+              },
+              "required": ["id"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "command": { "const": "diagnostics.export" },
+            "arguments": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 32768,
+                  "pattern": "^[^\\u0000]*$",
+                  "anyOf": [
+                    { "pattern": "^[a-zA-Z]:[\\\\/]" },
+                    { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+                  ],
+                  "description": "Absolute Windows path."
+                }
+              },
+              "required": ["path"],
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
     },
-    "example": {
-      "command": "app.stopScriptsAndQuit",
-      "arguments": {}
-    }
+    "mcpNotes": "Use the dotted CLI command name. Apply the returned token to the same command and arguments."
   },
   {
     "name": "operations.get",
     "description": "Read a durable update or relocation receipt",
-    "parameters": {
-      "operationId": "uuid"
+    "parameters": { "operationId": "uuid" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        }
+      },
+      "required": ["operationId"],
+      "additionalProperties": false
     }
   },
   {
     "name": "state.get",
     "description": "Get manager state",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "theme.get",
     "description": "Get the desktop theme state",
-    "parameters": {}
+    "parameters": {},
+    "surface": "desktop",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "scripts.list",
     "description": "List registered scripts and revision",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "scripts.refresh",
     "description": "Refresh script observations",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "scripts.addFiles",
     "description": "Register script files",
-    "parameters": {
-      "paths": "absolute path[]"
-    },
-    "example": {
-      "paths": ["C:\\Scripts\\sample.ahk"]
+    "parameters": { "paths": "absolute path[]" },
+    "example": { "paths": ["C:\\Scripts\\sample.ahk"] },
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 32768,
+            "pattern": "^[^\\u0000]*$",
+            "anyOf": [
+              { "pattern": "^[a-zA-Z]:[\\\\/]" },
+              { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+            ],
+            "description": "Absolute Windows path."
+          },
+          "maxItems": 2000,
+          "minItems": 1
+        }
+      },
+      "required": ["paths"],
+      "additionalProperties": false
     }
   },
   {
     "name": "scripts.addFolder",
     "description": "Register scripts in a folder",
-    "parameters": {
-      "path": "absolute path"
+    "parameters": { "path": "absolute path" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 32768,
+          "pattern": "^[^\\u0000]*$",
+          "anyOf": [
+            { "pattern": "^[a-zA-Z]:[\\\\/]" },
+            { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+          ],
+          "description": "Absolute Windows path."
+        }
+      },
+      "required": ["path"],
+      "additionalProperties": false
     }
   },
   {
     "name": "scripts.remove",
     "description": "Remove a script from the catalog",
-    "parameters": {
-      "scriptId": "uuid",
-      "revision": "decimal"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "scriptId": "uuid", "revision": "decimal" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scriptId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["scriptId", "revision", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "scripts.saveMetadata",
     "description": "Update script metadata",
-    "parameters": {
-      "scriptId": "uuid",
-      "revision": "decimal",
-      "metadata": "ScriptMetadata"
+    "parameters": { "scriptId": "uuid", "revision": "decimal", "metadata": "ScriptMetadata" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scriptId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "friendlyName": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$" },
+            "description": { "type": "string", "maxLength": 32768, "pattern": "^[^\\u0000]*$" },
+            "collectionId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                },
+                { "type": "null" }
+              ]
+            },
+            "runAtLogin": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] },
+            "runAsAdministrator": { "type": "boolean" },
+            "launchBlocked": { "type": "boolean" },
+            "manualHotkeys": {
+              "type": "array",
+              "items": { "type": "string", "maxLength": 2048, "pattern": "^[^\\u0000]*$" },
+              "maxItems": 512
+            }
+          },
+          "required": [
+            "friendlyName",
+            "description",
+            "collectionId",
+            "runAtLogin",
+            "runAsAdministrator",
+            "launchBlocked",
+            "manualHotkeys"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": ["scriptId", "revision", "metadata"],
+      "additionalProperties": false
     }
   },
   {
     "name": "scripts.locate",
     "description": "Relink a missing script",
-    "parameters": {
-      "scriptId": "uuid",
-      "revision": "decimal",
-      "path": "absolute path"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "scriptId": "uuid", "revision": "decimal", "path": "absolute path" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scriptId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 32768,
+          "pattern": "^[^\\u0000]*$",
+          "anyOf": [
+            { "pattern": "^[a-zA-Z]:[\\\\/]" },
+            { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+          ],
+          "description": "Absolute Windows path."
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["scriptId", "revision", "path", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "scripts.recycle",
     "description": "Stop as required and recycle a script file",
-    "parameters": {
-      "scriptId": "uuid",
-      "revision": "decimal"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "scriptId": "uuid", "revision": "decimal" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scriptId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["scriptId", "revision", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "scripts.operate",
@@ -146,251 +873,873 @@
       "revision": "decimal",
       "operation": "Start | Stop | Restart | TogglePause | ToggleSuspend | Edit | OpenFolder | Recover"
     },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scriptId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "Start",
+            "Stop",
+            "Restart",
+            "TogglePause",
+            "ToggleSuspend",
+            "Edit",
+            "OpenFolder",
+            "Recover"
+          ]
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["scriptId", "revision", "operation", "confirmationToken"],
+      "additionalProperties": false
+    },
+    "mcpNotes": "Edit opens the configured editor. OpenFolder opens Explorer."
   },
   {
     "name": "collections.list",
     "description": "List collections and revision",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "collections.save",
     "description": "Create a collection or rename one at an explicit revision",
-    "parameters": {
-      "collectionId": "uuid|null",
-      "name": "string",
-      "revision?": "decimal"
-    },
-    "example": {
-      "collectionId": null,
-      "name": "Utility scripts"
+    "parameters": { "collectionId": "uuid|null", "name": "string", "revision?": "decimal" },
+    "example": { "collectionId": null, "name": "Utility scripts" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "collectionId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            { "type": "null" }
+          ]
+        },
+        "name": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$" },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+        }
+      },
+      "required": ["collectionId", "name"],
+      "additionalProperties": false
     }
   },
   {
     "name": "collections.remove",
     "description": "Remove a collection",
-    "parameters": {
-      "collectionId": "uuid",
-      "revision": "decimal"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "collectionId": "uuid", "revision": "decimal" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "collectionId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["collectionId", "revision", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "settings.get",
     "description": "Get application settings and revision",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "settings.save",
     "description": "Save settings with explicit executable paths",
-    "parameters": {
-      "revision": "decimal",
-      "settings": "ManagerSettings"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "revision": "decimal", "settings": "ManagerSettings" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Use the exact revision returned by Manager. The maximum is 9223372036854775807."
+        },
+        "settings": {
+          "type": "object",
+          "properties": {
+            "interpreterPath": {
+              "anyOf": [
+                { "type": "string", "maxLength": 32768, "pattern": "^[^\\u0000]*$" },
+                { "type": "null" }
+              ]
+            },
+            "editorPath": {
+              "anyOf": [
+                { "type": "string", "maxLength": 32768, "pattern": "^[^\\u0000]*$" },
+                { "type": "null" }
+              ]
+            },
+            "editorArguments": {
+              "type": "array",
+              "items": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$" },
+              "maxItems": 128
+            },
+            "launchManagerAtLogin": { "type": "boolean" },
+            "launchManagerAsAdministrator": { "type": "boolean" },
+            "showWindowAtLogin": { "type": "boolean" },
+            "startInTray": { "type": "boolean" },
+            "theme": { "type": "string", "enum": ["System", "Light", "Dark"] },
+            "closeBehavior": { "type": "string", "enum": ["HideToTray", "Exit"] },
+            "window": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "height": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "maximized": { "type": "boolean" },
+                "dpi": { "type": "number" }
+              },
+              "required": ["x", "y", "width", "height", "maximized", "dpi"],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "interpreterPath",
+            "editorPath",
+            "editorArguments",
+            "launchManagerAtLogin",
+            "launchManagerAsAdministrator",
+            "showWindowAtLogin",
+            "startInTray",
+            "theme",
+            "closeBehavior",
+            "window"
+          ],
+          "additionalProperties": false
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["revision", "settings", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "settings.validateExecutable",
     "description": "Validate an absolute executable selection",
-    "parameters": {
-      "path": "absolute path"
+    "parameters": { "path": "absolute path" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 32768,
+          "pattern": "^[^\\u0000]*$",
+          "anyOf": [
+            { "pattern": "^[a-zA-Z]:[\\\\/]" },
+            { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+          ],
+          "description": "Absolute Windows path."
+        }
+      },
+      "required": ["path"],
+      "additionalProperties": false
     }
   },
   {
     "name": "startup.previewRepair",
     "description": "Review the saved startup registration",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "startup.repair",
     "description": "Repair the reviewed startup registration",
-    "parameters": {
-      "fingerprint": "preview fingerprint"
-    }
+    "parameters": { "fingerprint": "preview fingerprint" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+      "required": ["fingerprint"],
+      "additionalProperties": false
+    },
+    "mcpNotes": "Pass the fingerprint returned by startup_previewRepair."
   },
   {
     "name": "startup.transfer",
     "description": "Transfer registration from a prior installation",
     "parameters": {},
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "startup.checkAdoption",
     "description": "Recheck an in-progress startup adoption",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "startup.continuation",
     "description": "Inspect resumable startup work",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "startup.resume",
     "description": "Resume an existing startup continuation",
-    "parameters": {
-      "operationId": "uuid"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "operationId": "uuid" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["operationId", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "startup.runLogin",
     "description": "Run the configured scripts at login explicitly",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "import.preview",
     "description": "Preview a catalog import from disk",
-    "parameters": {
-      "path": "absolute path"
+    "parameters": { "path": "absolute path" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 32768,
+          "pattern": "^[^\\u0000]*$",
+          "anyOf": [
+            { "pattern": "^[a-zA-Z]:[\\\\/]" },
+            { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+          ],
+          "description": "Absolute Windows path."
+        }
+      },
+      "required": ["path"],
+      "additionalProperties": false
     }
   },
   {
     "name": "import.commit",
     "description": "Apply a reviewed catalog import",
-    "parameters": {
-      "token": "uuid"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "token": "uuid" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["token", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "profile.migrate",
     "description": "Migrate a prior profile",
-    "parameters": {
-      "path": "absolute path"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "path": "absolute path" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 32768,
+          "pattern": "^[^\\u0000]*$",
+          "anyOf": [
+            { "pattern": "^[a-zA-Z]:[\\\\/]" },
+            { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+          ],
+          "description": "Absolute Windows path."
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["path", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "profile.restoreBackup",
     "description": "Restore the profile backup",
     "parameters": {},
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "profile.recoverPending",
     "description": "Reconcile unconfirmed effects",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "storage.get",
     "description": "Get current and pending data paths",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "storage.open",
     "description": "Open the current data folder",
-    "parameters": {}
+    "parameters": {},
+    "surface": "desktop",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "storage.prepare",
     "description": "Stage a move to an explicit data path",
-    "parameters": {
-      "path": "absolute path"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "path": "absolute path" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 32768,
+          "pattern": "^[^\\u0000]*$",
+          "anyOf": [
+            { "pattern": "^[a-zA-Z]:[\\\\/]" },
+            { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+          ],
+          "description": "Absolute Windows path."
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["path", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "storage.restoreDefault",
     "description": "Stage a move to the default data path",
     "parameters": {},
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "storage.restart",
     "description": "Restart Manager to apply a staged move",
     "parameters": {},
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "storage.cancel",
     "description": "Cancel a staged move",
     "parameters": {},
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "updates.get",
     "description": "Get update state and version history",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "updates.check",
     "description": "Check for versions on the active channel",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "updates.setChannel",
     "description": "Select stable or test updates",
-    "parameters": {
-      "channel": "stable | test"
+    "parameters": { "channel": "stable | test" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "channel": { "type": "string", "enum": ["stable", "test"] } },
+      "required": ["channel"],
+      "additionalProperties": false
     }
   },
   {
     "name": "updates.install",
     "description": "Install or roll back to an explicit release",
-    "parameters": {
-      "id": "release ID"
-    },
+    "parameters": { "id": "release ID" },
     "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
-    "example": {
-      "id": "local:1.2.1"
+    "example": { "id": "local:1.2.1" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 100, "pattern": "^[^\\u0000]*$" },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["id", "confirmationToken"],
+      "additionalProperties": false
     }
   },
   {
     "name": "updates.installLatest",
     "description": "Install the latest newer release from the official stable channel and restart Manager while scripts keep running",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "updates.cancelDownload",
     "description": "Cancel the active download",
-    "parameters": {
-      "id": "download UUID"
+    "parameters": { "id": "download UUID" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        }
+      },
+      "required": ["id"],
+      "additionalProperties": false
     }
   },
   {
     "name": "activity.list",
     "description": "Query the application activity log",
-    "parameters": {
-      "scriptId?": "uuid|null",
-      "outcome?": "outcome|null",
-      "search?": "string"
+    "parameters": { "scriptId?": "uuid|null", "outcome?": "outcome|null", "search?": "string" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scriptId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            { "type": "null" }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "Accepted",
+                "Pending",
+                "Confirmed",
+                "Partial",
+                "CancelledBeforeDispatch",
+                "Failed",
+                "Unknown"
+              ]
+            },
+            { "type": "null" }
+          ]
+        },
+        "search": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$" }
+      },
+      "required": [],
+      "additionalProperties": false
     }
   },
   {
     "name": "diagnostics.report",
     "description": "Return a bounded diagnostic report",
-    "parameters": {
-      "mode": "recent | errors"
+    "parameters": { "mode": "recent | errors" },
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "mode": { "type": "string", "enum": ["recent", "errors"] } },
+      "required": ["mode"],
+      "additionalProperties": false
     }
   },
   {
     "name": "diagnostics.export",
     "description": "Save a diagnostic archive at an absolute path",
-    "parameters": {
-      "path": "absolute path"
-    },
-    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments."
+    "parameters": { "path": "absolute path" },
+    "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
+    "surface": "management",
+    "execution": "host",
+    "effect": "destructive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 32768,
+          "pattern": "^[^\\u0000]*$",
+          "anyOf": [
+            { "pattern": "^[a-zA-Z]:[\\\\/]" },
+            { "pattern": "^\\\\\\\\[^.?\\\\/][^\\\\/]*[\\\\/][^\\\\/]+" }
+          ],
+          "description": "Absolute Windows path."
+        },
+        "confirmationToken": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "description": "Use the token returned by commands.preview for the same arguments."
+        }
+      },
+      "required": ["path", "confirmationToken"],
+      "additionalProperties": false
+    }
   },
   {
     "name": "diagnostics.openLogs",
     "description": "Open diagnostic logs in Explorer",
-    "parameters": {}
+    "parameters": {},
+    "surface": "desktop",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "clipboard.write",
     "description": "Copy text to the desktop clipboard",
-    "parameters": {
-      "text": "string"
+    "parameters": { "text": "string" },
+    "surface": "desktop",
+    "execution": "host",
+    "effect": "change",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "maxLength": 65536, "pattern": "^[^\\u0000]*$" }
+      },
+      "required": ["text"],
+      "additionalProperties": false
     }
   },
   {
     "name": "administration.status",
     "description": "Get the current authority mode",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   },
   {
     "name": "administration.request",
     "description": "Verify the authenticated host already runs with administrator authority",
-    "parameters": {}
+    "parameters": {},
+    "surface": "management",
+    "execution": "host",
+    "effect": "read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
   }
 ]
