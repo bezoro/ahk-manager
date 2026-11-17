@@ -28,6 +28,37 @@ function Invoke-AgentFixtureProcess {
     finally { $deadline.Dispose(); $process.Dispose() }
 }
 
+function Assert-PortableAgentHandoff([string]$Root) {
+    $release = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $remaining = @(Get-CimInstance Win32_Process -Filter (
+            "Name='ahk-manager.exe' OR Name='Bezoro.AhkManager.exe' OR " +
+            "Name='AhkManager.Backend.exe' OR Name='AhkManager.UpdateHost.exe'"
+        ) -OperationTimeoutSec 5 | Where-Object {
+            [string]::IsNullOrWhiteSpace($_.ExecutablePath) -or
+            $_.ExecutablePath.StartsWith($Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($remaining.Count) { Start-Sleep -Milliseconds 150 }
+    } while ($remaining.Count -and $release.Elapsed.TotalSeconds -lt 10)
+    if ($remaining.Count) { throw 'A packaged Manager process is still running in the fixture or its image could not be verified. It was preserved.' }
+
+    $app = Join-Path $Root 'App'
+    $probe = Join-Path $Root 'App-handoff-probe'
+    $appEntry = Get-Item -LiteralPath $app -Force
+    if (-not $appEntry.PSIsContainer -or ($appEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Test-Path -LiteralPath $probe)) {
+        throw 'The isolated application is unavailable for the handoff check.'
+    }
+    [IO.Directory]::Move($app, $probe)
+    try {
+        foreach ($image in @('Bezoro.AhkManager.exe', 'backend/agent/ahk-manager.exe', 'backend/AhkManager.Backend.exe', 'backend/update/AhkManager.UpdateHost.exe')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $probe $image) -PathType Leaf)) {
+                throw "The handoff check did not move the packaged image: $image"
+            }
+        }
+    }
+    finally { [IO.Directory]::Move($probe, $app) }
+}
+
 function Test-PortableAgentCli {
     param([string]$Root, [string]$EvidenceRoot, [string]$Version)
     if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
@@ -112,36 +143,10 @@ function Test-PortableAgentCli {
         $owned = $false
         $null = Call @('app.quit') 0 'ShutdownConfirmed' 90
 
-        $release = [Diagnostics.Stopwatch]::StartNew()
-        do {
-            $remaining = @(Get-CimInstance Win32_Process -Filter (
-                "Name='ahk-manager.exe' OR Name='Bezoro.AhkManager.exe' OR " +
-                "Name='AhkManager.Backend.exe' OR Name='AhkManager.UpdateHost.exe'"
-            ) -OperationTimeoutSec 5 | Where-Object {
-                [string]::IsNullOrWhiteSpace($_.ExecutablePath) -or
-                $_.ExecutablePath.StartsWith($Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
-            })
-            if ($remaining.Count) { Start-Sleep -Milliseconds 150 }
-        } while ($remaining.Count -and $release.Elapsed.TotalSeconds -lt 10)
-        if ($remaining.Count) { throw 'A packaged Manager process is still running in the fixture or its image could not be verified. It was preserved.' }
-
-        $app = Join-Path $Root 'App'
-        $probe = Join-Path $Root 'App-handoff-probe'
-        $appEntry = Get-Item -LiteralPath $app -Force
-        if (-not $appEntry.PSIsContainer -or ($appEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Test-Path -LiteralPath $probe)) {
-            throw 'The isolated application is unavailable for the handoff check.'
-        }
-        [IO.Directory]::Move($app, $probe)
-        try {
-            foreach ($image in @('Bezoro.AhkManager.exe', 'backend/agent/ahk-manager.exe', 'backend/AhkManager.Backend.exe', 'backend/update/AhkManager.UpdateHost.exe')) {
-                if (-not (Test-Path -LiteralPath (Join-Path $probe $image) -PathType Leaf)) {
-                    throw "The handoff check did not move the packaged image: $image"
-                }
-            }
-        }
-        finally { [IO.Directory]::Move($probe, $app) }
+        Assert-PortableAgentHandoff $Root
         $evidence.Add([ordered]@{ command = 'verifyAppHandoff'; noFixtureProcesses = $true; appMovedAndRestored = $true })
         Write-Host 'Agent CLI verified: isolated peer refusal, windowless startup, persistent fixture commands, confirmed tray exit, and released application files.'
+        return $name
     }
     finally {
         if ($owned) {
@@ -310,4 +315,5 @@ function Test-PortableLogonBootstrap {
     }
 }
 
-Export-ModuleMember -Function Test-PortableAgentCli, Test-PortableLogonBootstrap
+. (Join-Path $PSScriptRoot 'PortableMcp.ps1')
+Export-ModuleMember -Function Test-PortableAgentCli, Test-PortableLogonBootstrap, Test-PortableMcp

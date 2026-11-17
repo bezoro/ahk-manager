@@ -24,6 +24,7 @@ import type {
   StartupContinuationOffer,
   WindowPlacement,
 } from './contracts.js';
+import { described, jsonSchema } from './json-schema.js';
 
 /** Untyped checks remain useful for transport envelopes and custom predicates. */
 export type Validator = (value: unknown) => boolean;
@@ -39,45 +40,96 @@ type OptionalRules<T> = { [Key in OptionalKeys<T>]-?: Schema<Exclude<T[Key], und
 
 /** Pass-through boundaries keep the payload unknown until a later validator runs. */
 export const unknownValue: Schema<unknown> = (_value): _value is unknown => true;
-export const object = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === 'object' && !Array.isArray(v);
-export const text =
-  (max = 32768): Schema<string> =>
-  (v): v is string =>
-    typeof v === 'string' && v.length <= max && !v.includes('\0');
-export const bool: Schema<boolean> = (v): v is boolean => typeof v === 'boolean';
-export const integer: Schema<number> = (v): v is number =>
-  typeof v === 'number' && Number.isSafeInteger(v);
-export const finite: Schema<number> = (v): v is number =>
-  typeof v === 'number' && Number.isFinite(v);
-export const decimal: Schema<string> = (v): v is string =>
-  typeof v === 'string' && /^(0|[1-9][0-9]{0,18})$/.test(v) && BigInt(v) <= 9223372036854775807n;
-export const guid: Schema<string> = (v): v is string =>
-  typeof v === 'string' &&
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
-export const oneOf =
-  <const Values extends string[]>(...values: Values): Schema<Values[number]> =>
-  (v): v is Values[number] =>
-    typeof v === 'string' && values.includes(v);
-export const nullable =
-  <Check extends Validator>(check: Check): Schema<Validated<Check> | null> =>
-  (v): v is Validated<Check> | null =>
-    v === null || check(v);
-export const array =
-  <Check extends Validator>(check: Check, max = 20000): Schema<Validated<Check>[]> =>
-  (v): v is Validated<Check>[] =>
-    Array.isArray(v) && v.length <= max && v.every(check);
+export const object = described(
+  (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v),
+  { type: 'object' },
+);
+export const text = (max = 32768): Schema<string> =>
+  described(
+    (v: unknown): v is string => typeof v === 'string' && v.length <= max && !v.includes('\0'),
+    { type: 'string', maxLength: max, pattern: '^[^\\u0000]*$' },
+  );
+export const bool = described((v: unknown): v is boolean => typeof v === 'boolean', {
+  type: 'boolean',
+});
+export const integer = described(
+  (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v),
+  { type: 'integer', minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER },
+);
+export const finite = described(
+  (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v),
+  { type: 'number' },
+);
+const revisionPattern = /^(0|[1-9][0-9]{0,18})$/;
+const largestRevision = 9223372036854775807n;
+export const decimal = described(
+  (v: unknown): v is string =>
+    typeof v === 'string' && revisionPattern.test(v) && BigInt(v) <= largestRevision,
+  {
+    type: 'string',
+    pattern: revisionPattern.source,
+    description:
+      'Use the exact revision returned by Manager. The maximum is ' + largestRevision + '.',
+  },
+);
+const guidPattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+export const guid = described(
+  (v: unknown): v is string => typeof v === 'string' && guidPattern.test(v),
+  { type: 'string', format: 'uuid', pattern: guidPattern.source },
+);
+export const oneOf = <const Values extends string[]>(...values: Values): Schema<Values[number]> =>
+  described((v: unknown): v is Values[number] => typeof v === 'string' && values.includes(v), {
+    type: 'string',
+    enum: values,
+  });
+export const nullable = <Check extends Validator>(check: Check): Schema<Validated<Check> | null> =>
+  described(
+    (v: unknown): v is Validated<Check> | null => v === null || check(v),
+    () => ({
+      anyOf: [jsonSchema(check), { type: 'null' }],
+    }),
+  );
+export const array = <Check extends Validator>(
+  check: Check,
+  max = 20000,
+  min = 0,
+): Schema<Validated<Check>[]> =>
+  described(
+    (v: unknown): v is Validated<Check>[] =>
+      Array.isArray(v) && v.length >= min && v.length <= max && v.every(check),
+    () => ({
+      type: 'array',
+      items: jsonSchema(check),
+      maxItems: max,
+      ...(min && { minItems: min }),
+    }),
+  );
 
 export function shape<Required extends Rules, Optional extends Rules = {}>(
   required: Required,
   optional?: Optional,
 ): Schema<RequiredValue<Required> & OptionalValue<Optional>> {
   const optionalRules: Rules = optional ?? {};
-  return (v): v is RequiredValue<Required> & OptionalValue<Optional> =>
-    object(v) &&
-    Object.keys(v).every((k) => Object.hasOwn(required, k) || Object.hasOwn(optionalRules, k)) &&
-    Object.entries(required).every(([k, validate]) => Object.hasOwn(v, k) && validate(v[k])) &&
-    Object.entries(optionalRules).every(([k, validate]) => !Object.hasOwn(v, k) || validate(v[k]));
+  return described(
+    (v: unknown): v is RequiredValue<Required> & OptionalValue<Optional> =>
+      object(v) &&
+      Object.keys(v).every((k) => Object.hasOwn(required, k) || Object.hasOwn(optionalRules, k)) &&
+      Object.entries(required).every(([k, validate]) => Object.hasOwn(v, k) && validate(v[k])) &&
+      Object.entries(optionalRules).every(
+        ([k, validate]) => !Object.hasOwn(v, k) || validate(v[k]),
+      ),
+    () => ({
+      type: 'object',
+      properties: Object.fromEntries(
+        Object.entries({ ...required, ...optionalRules }).map(([key, check]) => [
+          key,
+          jsonSchema(check),
+        ]),
+      ),
+      required: Object.keys(required),
+      additionalProperties: false,
+    }),
+  );
 }
 
 /** Every DTO field must have a compatible rule, including all optional fields. */
@@ -89,10 +141,13 @@ export function shapeFor<T extends object>() {
       : [optional: Optional & Record<Exclude<keyof Optional, OptionalKeys<T>>, never>]
   ): Schema<T> => {
     const check = shape(required, optional[0]);
-    return (value): value is T => check(value);
+    return described(
+      (value: unknown): value is T => check(value),
+      () => jsonSchema(check),
+    );
   };
 }
-export const operation = oneOf(
+export const operationNames = [
   'Start',
   'Stop',
   'Restart',
@@ -102,7 +157,8 @@ export const operation = oneOf(
   'OpenFolder',
   'Recover',
   'RecycleFile',
-);
+] as const;
+export const operation = oneOf(...operationNames);
 export const outcome = oneOf(
   'Accepted',
   'Pending',

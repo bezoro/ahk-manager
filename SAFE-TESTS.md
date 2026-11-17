@@ -6,7 +6,7 @@ The active product is Electron with a .NET backend. Ordinary tests use temporary
 
 [Windows CI](.github/workflows/windows-ci.yml) runs on `windows-2025` automatically when changes reach `main`, including merges. A maintainer can request a PR run by applying **ci:windows**, or use manual dispatch for explicit validation. Ordinary PR commits and branch pushes do not trigger the suite. It uses the pinned .NET SDK, Node.js 24.22.0, and locked dependencies. Independent suites continue after other suites fail; any failure still fails the job.
 
-Backend, Core, correction, and startup-inspection checks publish snapshots for the integrated Node checks. Missing backend snapshots do not turn integration tests into passing skips. The official AutoHotkey v2.0.30 portable download has a pinned SHA256 and is used for interpreter discovery and metadata inspection. Ordinary CI does not execute user AHK scripts or the separate `--ahk-owned` suite.
+Backend, Core, correction, and startup-inspection checks publish snapshots for the integrated Node checks. Missing backend snapshots do not turn integration tests into passing skips. The official AutoHotkey v2.0.30 portable download has a pinned SHA256. CI uses it for interpreter discovery, metadata inspection and the owned packaged MCP script fixture. The separate `--ahk-owned` suite remains opt-in.
 
 Backend tests use fresh roots and effect adapters. Startup inspection reads WMI without changing login registration. Node tests do not open windows, launch scripts, or write Windows startup settings. The real Electron transport suite separately tests Chromium redirect, download, integrity, and cache behavior.
 
@@ -27,6 +27,8 @@ These captures establish layout and control behavior with solid backgrounds. The
 After verifying the release manifest and ZIP, Windows CI runs `tools/Test-PortableStartup.ps1` on its disposable GitHub-hosted runner with an existing administrative token. The test launches the ZIP through its root launcher with an empty, private portable profile and Windows login startup disabled. It checks the visible workspace, writable administrative backend, exact version and portable Data directory, and normal shutdown. Manager can create its standard Start Menu search shortcut pointing to the fixture on this runner. A smoke failure blocks the updater matrix and release, and CI still uploads the portable ZIP, smoke summary and available logs.
 
 After graphical shutdown, the same fixture tests the published CLI. It verifies offline discovery, refuses a local pipe presented by the wrong executable, starts without a window, registers inert catalog data, and exits from the tray. The test observes the released CLI and Electron processes, then moves the fixture's `App` directory away and back. The updater matrix separately exercises replacement and rollback with verified release packages.
+
+The packaged MCP test starts the same executable over stdio. It discovers tools with Manager closed, opens a headless session, reads the catalog through both surfaces and tests confirmation handling. The script lifecycle test starts and normally stops a dedicated inert script generated inside the smoke fixture with the pinned interpreter. User scripts and profiles stay outside the runner fixture.
 
 `tools/Test-PortableUpdater.ps1` verifies the source identity and complete version of each package. The default migration starts with the pinned published v1.6.2 package. The custom data and foreign-root scenarios use a separately packaged older baseline from the candidate's reviewed source.
 

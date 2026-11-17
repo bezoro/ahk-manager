@@ -13,5 +13,7 @@
         <Compile Include="../AgentCli/AgentExchange.cs" Link="AgentExchange.cs" />
         <Compile Include="../AgentCli/AgentDiagnostics.cs" Link="AgentDiagnostics.cs" />
         <Compile Include="../AgentCli/StableUpdateHandoff.cs" Link="StableUpdateHandoff.cs" />
+        <Compile Include="../AgentCli/McpServer.cs" Link="McpServer.cs" />
+        <Compile Include="../AgentCli/McpTransport.cs" Link="McpTransport.cs" />
     </ItemGroup>
 </Project>

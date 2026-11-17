@@ -149,7 +149,7 @@ jobs:
           npm.cmd run architecture:check
           if ($LASTEXITCODE -ne 0) { throw 'Architecture boundaries failed.' }
 
-      - name: Prepare read-only AutoHotkey version fixture
+      - name: Prepare pinned AutoHotkey fixture
         id: ahk-fixture
         if: ${{ !cancelled() }}
         run: |
@@ -158,7 +158,7 @@ jobs:
           Invoke-WebRequest -Uri 'https://github.com/AutoHotkey/AutoHotkey/releases/download/v2.0.30/AutoHotkey_2.0.30.zip' -OutFile $archive
           $expectedHash = '1e0ece7ecb2d5646e55758150472677996a57f9db5c83d2996d8b47b9e2f31a4'
           if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expectedHash) { throw 'AutoHotkey archive hash mismatch.' }
-          # Discovery reads executable metadata here; no application or AHK script runs.
+          # Discovery reads the executable metadata. The packaged MCP smoke runs one owned inert script.
           $fixture = Join-Path $env:LOCALAPPDATA 'Programs/AutoHotkey/v2'
           if (Test-Path -LiteralPath $fixture) { throw 'AutoHotkey fixture destination must be absent.' }
           Expand-Archive -LiteralPath $archive -DestinationPath $fixture
@@ -351,13 +351,14 @@ jobs:
           ./tools/Test-PortablePackage.ps1 -ArchivePath $portable -ManifestPath $manifest -OutputRoot "$env:CI_OUTPUT/portable-evidence"
           Get-FileHash -LiteralPath $portable -Algorithm SHA256 | Format-List | Out-File "$env:CI_OUTPUT/portable/SHA256.txt"
 
-      - name: Test graphical startup and the Agent CLI from the verified portable ZIP
-        if: ${{ !cancelled() && steps.portable-verify.outcome == 'success' }}
+      - name: Test graphical startup, CLI and MCP from the verified portable ZIP
+        if: ${{ !cancelled() && steps.portable-verify.outcome == 'success' && steps.ahk-fixture.outcome == 'success' }}
         timeout-minutes: 7
         run: |
           $portable = "$env:CI_OUTPUT/portable/AHK-Manager-$($env:AHK_RELEASE_VERSION)-Portable-x64.zip"
           $manifest = "$env:CI_OUTPUT/portable/ahk-manager-portable-release.json"
-          ./tools/Test-PortableStartup.ps1 -ArchivePath $portable -ManifestPath $manifest -Version $env:AHK_RELEASE_VERSION -SourceCommit $env:AHK_SOURCE_COMMIT -OutputRoot "$env:CI_OUTPUT/portable-startup"
+          $interpreter = Join-Path $env:LOCALAPPDATA 'Programs/AutoHotkey/v2/AutoHotkey64.exe'
+          ./tools/Test-PortableStartup.ps1 -ArchivePath $portable -ManifestPath $manifest -FixtureInterpreter $interpreter -Version $env:AHK_RELEASE_VERSION -SourceCommit $env:AHK_SOURCE_COMMIT -OutputRoot "$env:CI_OUTPUT/portable-startup"
 
       - name: Build a separate coherent portable baseline for update and rollback
         id: portable-baseline

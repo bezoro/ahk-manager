@@ -12,6 +12,8 @@ import {
   type IpcTransport,
 } from '../../src/main/ipc/register-handlers.js';
 import { type RequestPolicy } from '../../src/main/ipc/request-policy.js';
+import { rendererCommands } from '../../src/main/ipc/command-coverage.js';
+import commandCatalog from '../../src/shared/agent-commands.json';
 import { APP_URL, DocumentGuard } from '../../src/main/security.js';
 import { AdministrationPreflight, ElevationCoordinator } from '../../src/main/elevation.js';
 import { ManagerController } from '../../src/main/controller.js';
@@ -128,6 +130,38 @@ function fixture() {
     },
   };
 }
+
+test('renderer management actions have published headless equivalents', () => {
+  const f = fixture();
+  f.context.storage = {
+    get() {
+      throw new Error('Coverage registration must not invoke storage');
+    },
+    choose: async () => null,
+    open: async () => {},
+    restoreDefault: async () => {
+      throw new Error('Coverage registration must not mutate storage');
+    },
+    restart: async () => {},
+    cancel: async () => {
+      throw new Error('Coverage registration must not mutate storage');
+    },
+  };
+  registerHandlers(f.context);
+  const registered = [...f.ipc.handlers.keys()]
+    .filter((channel) => channel !== 'manager:connect')
+    .map((channel) => channel.slice('manager:'.length));
+  assert.deepEqual(registered.sort(), Object.keys(rendererCommands).sort());
+  const published = new Set(
+    commandCatalog
+      .filter((command) => command.surface === 'management')
+      .map((command) => command.name),
+  );
+  for (const [action, equivalent] of Object.entries(rendererCommands)) {
+    if (typeof equivalent === 'string')
+      assert.ok(published.has(equivalent), `${action} uses unpublished command ${equivalent}`);
+  }
+});
 
 test('command logs cover authenticated success, validation refusal, native failure and cancellation without request contents', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ahk-command-ipc-'));

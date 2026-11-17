@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$ArchivePath,
     [Parameter(Mandatory = $true)][string]$ManifestPath,
+    [Parameter(Mandatory = $true)][string]$FixtureInterpreter,
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][ValidatePattern('\A[0-9a-f]{40}\z')][string]$SourceCommit,
     [Parameter(Mandatory = $true)][string]$OutputRoot
@@ -107,6 +108,15 @@ try {
     $roaming = Get-CanonicalLocalPath ([Environment]::GetFolderPath('ApplicationData'))
     if ($env:LOCALAPPDATA -and (Get-CanonicalLocalPath $env:LOCALAPPDATA) -ne $local) { throw 'LOCALAPPDATA is redirected.' }
     if ($env:APPDATA -and (Get-CanonicalLocalPath $env:APPDATA) -ne $roaming) { throw 'APPDATA is redirected.' }
+    $FixtureInterpreter = Get-CanonicalLocalPath $FixtureInterpreter
+    if ($FixtureInterpreter -ne (Join-Path $local 'Programs/AutoHotkey/v2/AutoHotkey64.exe')) {
+        throw 'The pinned runner AutoHotkey interpreter is required.'
+    }
+    Assert-PortablePath $FixtureInterpreter File
+    $interpreterHash = '2eab99848ebc07f8ab0cc448bf69af8c700b2fc7fcd1ff8794df743dcc58da51'
+    if ((Get-FileHash -LiteralPath $FixtureInterpreter -Algorithm SHA256).Hash -ne $interpreterHash) {
+        throw 'The pinned AutoHotkey interpreter hash does not match.'
+    }
     Assert-PortablePath (Join-Path $local 'Bezoro/AhkManagerElectron') Absent
     Assert-PortablePath (Join-Path $roaming 'Bezoro/AhkManagerElectron/Chromium') Absent
     Assert-PortablePath (Join-Path $roaming 'Microsoft/Windows/Start Menu/Programs/AHK Manager Portable.lnk') Absent
@@ -143,22 +153,22 @@ try {
     $profileRoot = Join-Path $dataRoot 'Profile'
     Assert-PortablePath $profileRoot Fresh
     $null = [IO.Directory]::CreateDirectory($profileRoot)
-    [IO.File]::WriteAllText((Join-Path $profileRoot 'settings.json'), @'
-{
-  "Schema": 1,
-  "Scripts": [],
-  "Collections": [],
-  "LastLoginKey": "",
-  "Settings": {
-    "EditorArguments": [],
-    "LaunchManagerAtLogin": false,
-    "LaunchManagerAsAdministrator": true,
-    "StartInTray": false,
-    "CloseBehavior": 1,
-    "Window": { "X": 100, "Y": 100, "Width": 1200, "Height": 780, "Maximized": false, "Dpi": 96 }
-  }
-}
-'@)
+    $profile = [ordered]@{
+        Schema = 1
+        Scripts = @()
+        Collections = @()
+        LastLoginKey = ''
+        Settings = [ordered]@{
+            InterpreterPath = $FixtureInterpreter
+            EditorArguments = @()
+            LaunchManagerAtLogin = $false
+            LaunchManagerAsAdministrator = $true
+            StartInTray = $false
+            CloseBehavior = 1
+            Window = [ordered]@{ X = 100; Y = 100; Width = 1200; Height = 780; Maximized = $false; Dpi = 96 }
+        }
+    }
+    [IO.File]::WriteAllText((Join-Path $profileRoot 'settings.json'), ($profile | ConvertTo-Json -Depth 5))
 
     $summary.phase = 'launch-and-connect'
     Assert-PortablePath (Join-Path $portableRoot 'Bezoro.AhkManager.exe') File
@@ -228,7 +238,9 @@ finally {
             Assert-PortablePath (Join-Path $portableRoot 'portable.json') File
             Test-PortableLogonBootstrap -Root $portableRoot -EvidenceRoot $OutputRoot -Version $Version -DataRoot $dataRoot
             $summary.phase = 'agent-cli'
-            Test-PortableAgentCli -Root $portableRoot -EvidenceRoot $OutputRoot -Version $Version
+            $pipeName = Test-PortableAgentCli -Root $portableRoot -EvidenceRoot $OutputRoot -Version $Version
+            $summary.phase = 'mcp'
+            Test-PortableMcp -Root $portableRoot -EvidenceRoot $OutputRoot -Version $Version -PipeName $pipeName -Interpreter $FixtureInterpreter
             $summary.phase = 'verify-isolation'
             Assert-NoPortableRegistration $sid
             $summary.phase = 'complete'
