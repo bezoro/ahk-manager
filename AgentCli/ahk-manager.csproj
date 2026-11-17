@@ -18,6 +18,9 @@
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="../Core/AhkManager.Core.csproj" />
-        <EmbeddedResource Include="../Presentation.Electron/src/shared/agent-commands.json" LogicalName="Bezoro.AhkManager.AgentCli.CommandCatalog.json" />
+        <EmbeddedResource
+            Include="../Presentation.Electron/src/shared/agent-commands.json"
+            LogicalName="Bezoro.AhkManager.AgentCli.CommandCatalog.json"
+        />
     </ItemGroup>
 </Project>
