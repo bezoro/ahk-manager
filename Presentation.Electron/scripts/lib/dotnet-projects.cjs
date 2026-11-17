@@ -23,7 +23,6 @@ const dotnetProjects = [
     directory: 'AgentCli',
     project: 'AgentCli/ahk-manager.csproj',
     dependencies: ['Core/AhkManager.Core.csproj'],
-    propertySources: ['$(IntermediateOutputPath)AgentCatalog.g.cs'],
   },
   {
     directory: 'Tests.AgentCli',

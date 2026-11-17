@@ -123,6 +123,24 @@ function Test-PortableMcp {
                 throw "Missing or invalid MCP tool schema: $name."
             }
         }
+        $published = @(Invoke-FixtureCli @('commands') | Where-Object { $_.surface -ceq 'management' })
+        if ($published.Count -ne $tools.Count) { throw 'The published CLI and MCP management catalogs differ.' }
+        foreach ($command in $published) {
+            $name = $command.name.Replace('.', '_')
+            $tool = @($tools | Where-Object { $_.name -ceq $name })
+            if ($tool.Count -ne 1 -or
+                ($tool[0].inputSchema | ConvertTo-Json -Compress -Depth 40) -cne
+                ($command.inputSchema | ConvertTo-Json -Compress -Depth 40)) {
+                throw "The CLI and MCP argument schemas differ for $($command.name)."
+            }
+        }
+        $addFiles = $tools | Where-Object { $_.name -ceq 'scripts_addFiles' }
+        $pathPatterns = @($addFiles.inputSchema.properties.paths.items.anyOf.pattern)
+        if (-not ($pathPatterns | Where-Object { 'C:\Scripts\Demo.ahk' -cmatch $_ }) -or
+            -not ($pathPatterns | Where-Object { '\\server\share\Demo.ahk' -cmatch $_ }) -or
+            ($pathPatterns | Where-Object { 'Scripts\Demo.ahk' -cmatch $_ })) {
+            throw 'The packaged schema altered its Windows path patterns.'
+        }
         $unknown = Read-McpReply 'tools/call' @{ name = '--server'; arguments = @{} }
         if ($unknown.error.code -ne -32602) { throw 'MCP accepted a private CLI dispatch as a tool.' }
         $null = Invoke-McpTool 'scripts_list' @{} 'HostUnavailable' 'Failed'
