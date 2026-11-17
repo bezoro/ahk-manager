@@ -39,6 +39,7 @@ import type { UpdateChannel } from '../../shared/updates.js';
 import type { StorageChangeResult, StorageState } from '../../shared/storage.js';
 import { assertRequestAllowed, type RequestPolicy } from './request-policy.js';
 import { commandDetails, type CommandLogBoundary } from '../logging/command-log.js';
+import type { rendererCommands } from './command-coverage.js';
 
 export interface IpcTransport {
   handle(
@@ -88,7 +89,7 @@ export function registerHandlers(context: IpcContext): void {
   const registry = context.registry ?? new CommandRegistry();
 
   function bind<T = Record<string, never>>(
-    name: string,
+    name: keyof typeof rendererCommands,
     validate: Schema<T>,
     handler: (body: T) => unknown,
   ): void {
