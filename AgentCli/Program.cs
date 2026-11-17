@@ -9,7 +9,7 @@ namespace Bezoro.AhkManager.AgentCli;
 internal static class Program
 {
     static readonly string Usage =
-        "ahk-manager <command> [--json OBJECT | --stdin] [--start]\nahk-manager updates.installLatest [--elevate]";
+        "ahk-manager <command> [--json OBJECT | --stdin] [--start]\nahk-manager updates.installLatest [--elevate]\nahk-manager mcp";
 
     static async Task<int> Main(string[] args)
     {
@@ -28,6 +28,13 @@ internal static class Program
             ? "0.0.0"
             : FileVersionInfo.GetVersionInfo(executable).ProductVersion?.Split('+', 2)[0]
                 ?? "0.0.0";
+        if (args is ["mcp", ..])
+        {
+            if (args.Length == 1)
+                return await RunMcp(version, stopping.Token);
+            Console.Error.WriteLine("Usage: ahk-manager mcp");
+            return 2;
+        }
         try
         {
             if (privateMode)
@@ -132,38 +139,13 @@ internal static class Program
                 }
                 throw new AgentFailure("ElevationRequired");
             }
-            var activeLayout = AgentLayout.FromExecutable(local.Stamp.Executable);
-            if (stable != StableUpdateInvocation.Other)
-                Environment.CurrentDirectory = activeLayout.Root;
-            var response = await new AgentClient(activeLayout, local).Invoke(
-                request,
-                payload,
-                options.Start,
-                stopping.Token
+            return Write(
+                await InvokeLive(local, request, payload, options.Start, version, stopping.Token)
             );
-            if (
-                stable != StableUpdateInvocation.Other
-                && response.Outcome is "Confirmed" or "Accepted"
-                && StableUpdateHandoff.ChildExit(requestId, response)
-                    == StableUpdateHandoff.ChildUnknown
-            )
-                response = StableUpdateHandoff.FromExit(
-                    requestId,
-                    version,
-                    StableUpdateHandoff.ChildUnknown
-                );
-            return Write(response);
         }
         catch (Exception ex) when (AgentFailure.Expected(ex))
         {
-            string code = ex switch
-            {
-                AgentFailure failure => failure.Code,
-                JsonException or DecoderFallbackException => "InvalidInput",
-                OperationCanceledException => "CancelledBeforeDispatch",
-                UnauthorizedAccessException or ManagementException => "PeerUnverified",
-                _ => "InvalidInstallation",
-            };
+            string code = FailureCode(ex);
             if (updateChild)
                 return
                     code
@@ -184,28 +166,116 @@ internal static class Program
                     );
                 return Exit("Failed", code);
             }
-            string outcome = code is "ReplyUnconfirmed" or "StartupUnconfirmed"
-                ? "Unknown"
-                : "Failed";
-            if (outcome == "Unknown" && args[0] == StableUpdateHandoff.Command)
-                return Write(
-                    StableUpdateHandoff.FromExit(
-                        requestId,
-                        version,
-                        StableUpdateHandoff.ChildUnknown
-                    )
-                );
-            return Write(
-                new AgentResponse(
-                    AgentProtocol.Version,
-                    requestId,
-                    version,
-                    null,
-                    outcome,
-                    code,
-                    null
-                )
+            return Write(Failed(requestId, args.FirstOrDefault(), version, code));
+        }
+    }
+
+    static string FailureCode(Exception ex) =>
+        ex switch
+        {
+            AgentFailure failure => failure.Code,
+            JsonException or DecoderFallbackException => "InvalidInput",
+            OperationCanceledException => "CancelledBeforeDispatch",
+            UnauthorizedAccessException or ManagementException => "PeerUnverified",
+            _ => "InvalidInstallation",
+        };
+
+    static AgentResponse Failed(Guid id, string? command, string version, string code)
+    {
+        string outcome = code is "ReplyUnconfirmed" or "StartupUnconfirmed" ? "Unknown" : "Failed";
+        return outcome == "Unknown" && command == StableUpdateHandoff.Command
+            ? StableUpdateHandoff.FromExit(id, version, StableUpdateHandoff.ChildUnknown)
+            : new(AgentProtocol.Version, id, version, null, outcome, code, null);
+    }
+
+    static async Task<AgentResponse> InvokeLive(
+        AgentPeer local,
+        AgentRequest request,
+        byte[] payload,
+        bool start,
+        string version,
+        CancellationToken ct
+    )
+    {
+        var layout = AgentLayout.FromExecutable(local.Stamp.Executable);
+        bool stable = request.Command == StableUpdateHandoff.Command;
+        if (stable)
+            Environment.CurrentDirectory = layout.Root;
+        var response = await new AgentClient(layout, local).Invoke(request, payload, start, ct);
+        return
+            stable
+            && response.Outcome is "Confirmed" or "Accepted"
+            && StableUpdateHandoff.ChildExit(request.RequestId, response)
+                == StableUpdateHandoff.ChildUnknown
+            ? StableUpdateHandoff.FromExit(
+                request.RequestId,
+                version,
+                StableUpdateHandoff.ChildUnknown
+            )
+            : response;
+    }
+
+    static async Task<int> RunMcp(string version, CancellationToken ct)
+    {
+        try
+        {
+            // A client may start us with a working directory in the portable
+            // payload. Do not retain that directory while waiting on stdio.
+            if (OperatingSystem.IsWindows())
+                Environment.CurrentDirectory = Environment.SystemDirectory;
+            var catalog = new McpToolCatalog(AgentCatalog.Json);
+            using var input = Console.OpenStandardInput();
+            using var output = Console.OpenStandardOutput();
+            await new McpServer(version, catalog.Tools, catalog.Resolve, Invoke).Run(
+                input,
+                output,
+                ct
             );
+            return 0;
+
+            async Task<AgentResponse> Invoke(AgentRequest request, CancellationToken calling)
+            {
+                try
+                {
+                    if (
+                        request.Command == "commands.preview"
+                        && !catalog.AcceptsPreview(request.Arguments)
+                    )
+                        throw new AgentFailure("InvalidArguments");
+                    // The startup command is dispatched locally by AgentClient. Its
+                    // argument contract must hold before the host can be launched.
+                    if (request.Command == "app.start" && request.Arguments.EnumerateObject().Any())
+                        throw new AgentFailure("InvalidArguments");
+                    var payload = JsonSerializer.SerializeToUtf8Bytes(
+                        request,
+                        AgentJson.Default.AgentRequest
+                    );
+                    if (payload.Length > AgentProtocol.MaxRequest)
+                        throw new AgentFailure("InvalidInput");
+                    calling.ThrowIfCancellationRequested();
+                    if (!OperatingSystem.IsWindows())
+                        throw new AgentFailure("PlatformUnsupported");
+                    using var local = new AgentPeer(Environment.ProcessId);
+                    if (!local.Administrator)
+                        throw new AgentFailure("ElevationRequired");
+                    return await InvokeLive(local, request, payload, false, version, calling);
+                }
+                catch (Exception ex) when (AgentFailure.Expected(ex))
+                {
+                    return Failed(request.RequestId, request.Command, version, FailureCode(ex));
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return 0;
+        }
+        catch (Exception ex) when (AgentFailure.Expected(ex))
+        {
+            // After stdio service starts, CLI JSON and diagnostics must never mix
+            // with the client's JSON-RPC stream.
+            Console.Error.WriteLine("The AHK Manager MCP session could not continue.");
+            return Exit("Failed", FailureCode(ex));
         }
     }
 

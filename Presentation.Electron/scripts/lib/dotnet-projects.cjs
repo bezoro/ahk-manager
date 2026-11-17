@@ -34,6 +34,8 @@ const dotnetProjects = [
       'AgentCli/AgentExchange.cs',
       'AgentCli/AgentDiagnostics.cs',
       'AgentCli/StableUpdateHandoff.cs',
+      'AgentCli/McpServer.cs',
+      'AgentCli/McpTransport.cs',
     ],
   },
 ];

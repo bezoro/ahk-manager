@@ -2,6 +2,13 @@ using System.Buffers.Binary;
 using System.Text.Json;
 using Bezoro.AhkManager.AgentCli;
 
+if (args is ["--mcp"])
+{
+    await McpTransportChecks.Run();
+    Console.WriteLine("MCP framing, lifecycle, tools and cancellation checks passed.");
+    return;
+}
+
 var id = Guid.NewGuid();
 var request = new AgentRequest(1, id, "app.status", AgentProtocol.Empty);
 byte[] payload = JsonSerializer.SerializeToUtf8Bytes(request, AgentJson.Default.AgentRequest);
@@ -93,6 +100,7 @@ Check(
 await AgentExchangeChecks.Run();
 StableUpdateHandoffChecks.Run();
 AgentDiagnosticsChecks.Run();
+await McpTransportChecks.Run();
 Console.WriteLine("Agent CLI frames, limits, cancellation, typed receipts and strict JSON passed.");
 
 static byte[] Prefix(int length)
