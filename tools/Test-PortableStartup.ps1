@@ -195,7 +195,11 @@ window.ahkManager ? window.ahkManager.getState().then(state => ({
 })) : null
 '@
         if ($summary.host -and $summary.host.connection -ceq 'failed') { throw "The portable backend failed: $($summary.host.error)" }
-        $ready = $summary.host -and $summary.host.visible -and $summary.host.connection -ceq 'ready' -and $summary.host.busy -eq $false
+        $summary['nativeWindowVisible'] = [AhkManager.TestSupport.PortableUpdaterUi]::HasVisibleMainWindow(
+            $session.Process.Id, $session.Image, $session.Started
+        )
+        $ready = $summary.host -and $summary.host.visible -and $summary.host.connection -ceq 'ready' -and
+            $summary.host.busy -eq $false -and $summary.nativeWindowVisible
         if (-not $ready) { Start-Sleep -Milliseconds 100 }
     } while (-not $ready -and $clock.Elapsed.TotalSeconds -lt 45)
     if (-not $ready -or $clock.Elapsed.TotalSeconds -ge 45) { throw 'The visible Manager workspace and backend did not become ready within 45 seconds.' }
