@@ -157,6 +157,19 @@ internal static class SnapshotSecurity
     internal static void VerifyPrivate(string path, bool directory, bool requireProtected = false)
     {
         UpdatePaths.NoRedirects(path);
+        var security = directory
+            ? (FileSystemSecurity)
+                new DirectoryInfo(path).GetAccessControl(
+                    AccessControlSections.Owner | AccessControlSections.Access
+                )
+            : new FileInfo(path).GetAccessControl(
+                AccessControlSections.Owner | AccessControlSections.Access
+            );
+        VerifyPrivate(security, requireProtected);
+    }
+
+    static void VerifyPrivate(FileSystemSecurity security, bool requireProtected)
+    {
         using var identity = WindowsIdentity.GetCurrent();
         var trusted = new HashSet<string>(
             [
@@ -166,14 +179,6 @@ internal static class SnapshotSecurity
             ],
             StringComparer.Ordinal
         );
-        var security = directory
-            ? (FileSystemSecurity)
-                new DirectoryInfo(path).GetAccessControl(
-                    AccessControlSections.Owner | AccessControlSections.Access
-                )
-            : new FileInfo(path).GetAccessControl(
-                AccessControlSections.Owner | AccessControlSections.Access
-            );
         if (
             new RawSecurityDescriptor(
                 security.GetSecurityDescriptorBinaryForm(),
@@ -205,6 +210,108 @@ internal static class SnapshotSecurity
                 throw new UnauthorizedAccessException(
                     "Recovery copy inherited access for another principal."
                 );
+    }
+
+    internal static byte[] CaptureFreshDirectory(string path)
+    {
+        var security = new DirectoryInfo(path).GetAccessControl(
+            AccessControlSections.Owner | AccessControlSections.Access
+        );
+        VerifyPrivate(security, true);
+        return security.GetSecurityDescriptorBinaryForm();
+    }
+
+    internal static bool FinalizeFreshDirectory(string path, byte[] originalDescriptor)
+    {
+        UpdatePaths.NoRedirects(path);
+        var security = new DirectoryInfo(path).GetAccessControl(
+            AccessControlSections.Owner | AccessControlSections.Access
+        );
+        VerifyPrivate(security, false);
+        var original = new RawSecurityDescriptor(originalDescriptor, 0);
+        var current = new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0);
+        if (
+            original.Owner != current.Owner
+            || original.DiscretionaryAcl is not { } expected
+            || current.DiscretionaryAcl is not { } actual
+        )
+            throw new UnauthorizedAccessException("Fresh recovery descriptor changed.");
+        int explicitIndex = 0;
+        foreach (GenericAce ace in actual)
+        {
+            if ((ace.AceFlags & AceFlags.Inherited) != 0)
+            {
+                if (!expected.Cast<GenericAce>().Any(candidate => SameAce(candidate, ace)))
+                    throw new UnauthorizedAccessException(
+                        "Fresh recovery inherited an unexpected ACE."
+                    );
+            }
+            else if (explicitIndex >= expected.Count || !SameAce(expected[explicitIndex++], ace))
+                throw new UnauthorizedAccessException(
+                    "Fresh recovery explicit permissions changed."
+                );
+        }
+        if (explicitIndex != expected.Count)
+            throw new UnauthorizedAccessException("Fresh recovery explicit permissions changed.");
+        bool changed = !security.AreAccessRulesProtected;
+        if (changed)
+        {
+            // Freeze the descriptor just validated, preserving its owner and effective access.
+            security.SetAccessRuleProtection(true, true);
+            RemoveDuplicateAces(security);
+            VerifyPrivate(security, true);
+            new DirectoryInfo(path).SetAccessControl(security);
+        }
+        var persisted = new DirectoryInfo(path).GetAccessControl(
+            AccessControlSections.Owner | AccessControlSections.Access
+        );
+        VerifyPrivate(persisted, true);
+        if (
+            security.GetOwner(typeof(SecurityIdentifier))
+                != persisted.GetOwner(typeof(SecurityIdentifier))
+            || !Equivalent(
+                security.GetSecurityDescriptorSddlForm(AccessControlSections.Access),
+                persisted.GetSecurityDescriptorSddlForm(AccessControlSections.Access)
+            )
+        )
+            throw new UnauthorizedAccessException(
+                "Fresh recovery descriptor changed during finalization."
+            );
+        return changed;
+    }
+
+    static void RemoveDuplicateAces(DirectorySecurity security)
+    {
+        // Windows coalesces exact duplicate inherited/explicit entries when
+        // freezing inheritance. Prepare that same descriptor before writing it.
+        var descriptor = new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0);
+        var original = descriptor.DiscretionaryAcl!;
+        var normalized = new RawAcl(original.Revision, original.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (GenericAce ace in original)
+        {
+            ace.AceFlags &= ~AceFlags.Inherited;
+            byte[] bytes = new byte[ace.BinaryLength];
+            ace.GetBinaryForm(bytes, 0);
+            if (seen.Add(Convert.ToHexString(bytes)))
+                normalized.InsertAce(normalized.Count, ace);
+        }
+        descriptor.DiscretionaryAcl = normalized;
+        byte[] result = new byte[descriptor.BinaryLength];
+        descriptor.GetBinaryForm(result, 0);
+        security.SetSecurityDescriptorBinaryForm(result, AccessControlSections.Access);
+    }
+
+    static bool SameAce(GenericAce expected, GenericAce actual)
+    {
+        byte[] first = new byte[expected.BinaryLength],
+            second = new byte[actual.BinaryLength];
+        expected.GetBinaryForm(first, 0);
+        actual.GetBinaryForm(second, 0);
+        // Inherited copies may only duplicate an original trusted ACE.
+        first[1] &= unchecked((byte)~(byte)AceFlags.Inherited);
+        second[1] &= unchecked((byte)~(byte)AceFlags.Inherited);
+        return first.AsSpan().SequenceEqual(second);
     }
 
     internal static void Write(string path, bool directory, string dacl, bool protect = false)

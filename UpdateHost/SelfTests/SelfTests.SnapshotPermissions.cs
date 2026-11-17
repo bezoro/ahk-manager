@@ -7,6 +7,7 @@ internal static partial class SelfTests
 {
     static async Task CheckSnapshotPermissions(string root, Action<bool, string> check)
     {
+        await CheckFreshSnapshotProtection(root, check);
         string aclParent = Path.Combine(root, "permission-parent");
         Directory.CreateDirectory(aclParent);
         var parentAcl = new DirectoryInfo(aclParent).GetAccessControl();
@@ -139,6 +140,162 @@ internal static partial class SelfTests
         check(
             changedParent,
             "changed parent permissions refuse recovery while staging still has its private DACL"
+        );
+    }
+
+    static async Task CheckFreshSnapshotProtection(string root, Action<bool, string> check)
+    {
+        string parent = Path.Combine(root, "fresh-snapshot-protection");
+        SnapshotSecurity.CreatePrivateDirectory(parent);
+        string source = Path.Combine(parent, "source");
+        SnapshotSecurity.CreatePrivateDirectory(source);
+        Directory.CreateDirectory(Path.Combine(source, "nested"));
+        string relative = Path.Combine("nested", "payload.txt");
+        await File.WriteAllTextAsync(Path.Combine(source, relative), "verified recovery bytes");
+        string sourceDacl = SnapshotSecurity.Read(source, true),
+            parentDacl = SnapshotSecurity.Read(parent, true);
+        string backup = Path.Combine(parent, "backup");
+        var snapshot = await InstallationSnapshot.Copy(
+            source,
+            backup,
+            beforeFinalization: path =>
+            {
+                var acl = new DirectoryInfo(path).GetAccessControl();
+                acl.SetAccessRuleProtection(false, true);
+                new DirectoryInfo(path).SetAccessControl(acl);
+                bool retained = false;
+                try
+                {
+                    Directory.Move(path, path + "-replaced");
+                }
+                catch (IOException)
+                {
+                    retained = true;
+                }
+                check(retained, "fresh recovery root cannot be replaced during copy finalization");
+            }
+        );
+        InstallationSnapshot.VerifyPrivate(backup, snapshot);
+        InstallationSnapshot.Verify(backup, snapshot);
+        check(
+            true,
+            "copy finalizes trusted inheritance drift with strict content and private DACL checks"
+        );
+        string staging = Path.Combine(parent, "rollback-staging");
+        _ = await InstallationSnapshot.Copy(backup, staging);
+        InstallationSnapshot.RestoreSecurity(staging, snapshot);
+        InstallationSnapshot.Verify(staging, snapshot);
+        InstallationSnapshot.VerifySecurity(staging, snapshot);
+        check(true, "a finalized recovery copy retains normal rollback bytes and original ACLs");
+
+        foreach (
+            string fault in new[]
+            {
+                "content",
+                "foreign-child",
+                "foreign-access",
+                "null-dacl",
+                "trusted-explicit",
+            }
+        )
+        {
+            bool refused = false;
+            try
+            {
+                await InstallationSnapshot.Copy(
+                    source,
+                    Path.Combine(parent, "refused-" + fault),
+                    beforeFinalization: path =>
+                    {
+                        var directory = new DirectoryInfo(path);
+                        var acl = directory.GetAccessControl();
+                        acl.SetAccessRuleProtection(false, true);
+                        directory.SetAccessControl(acl);
+                        switch (fault)
+                        {
+                            case "content":
+                                File.WriteAllText(
+                                    Path.Combine(path, relative),
+                                    "corrupted recovery bytes"
+                                );
+                                break;
+                            case "foreign-access":
+                                acl.AddAccessRule(
+                                    new(
+                                        new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                                        FileSystemRights.ReadAndExecute,
+                                        AccessControlType.Allow
+                                    )
+                                );
+                                directory.SetAccessControl(acl);
+                                break;
+                            case "foreign-child":
+                                var child = new FileInfo(Path.Combine(path, relative));
+                                var childAcl = child.GetAccessControl();
+                                childAcl.AddAccessRule(
+                                    new(
+                                        new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                                        FileSystemRights.ReadAndExecute,
+                                        AccessControlType.Allow
+                                    )
+                                );
+                                child.SetAccessControl(childAcl);
+                                check(
+                                    child
+                                        .GetAccessControl()
+                                        .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                                        .Cast<FileSystemAccessRule>()
+                                        .Any(rule =>
+                                            rule.IdentityReference.Value == "S-1-1-0"
+                                            && rule.AccessControlType == AccessControlType.Allow
+                                        ),
+                                    "foreign child access is effective before recovery finalization"
+                                );
+                                break;
+                            case "null-dacl":
+                                SnapshotSecurity.Write(path, true, "D:NO_ACCESS_CONTROL");
+                                break;
+                            case "trusted-explicit":
+                                acl.AddAccessRule(
+                                    new(
+                                        new SecurityIdentifier(
+                                            WellKnownSidType.LocalSystemSid,
+                                            null
+                                        ),
+                                        FileSystemRights.ReadAndExecute,
+                                        AccessControlType.Deny
+                                    )
+                                );
+                                directory.SetAccessControl(acl);
+                                break;
+                        }
+                    }
+                );
+            }
+            catch (Exception error)
+                when (error
+                        is IOException
+                            or UnauthorizedAccessException
+                            or System.ComponentModel.Win32Exception
+                )
+            {
+                refused = true;
+            }
+            check(refused, "fresh recovery finalization refuses " + fault);
+            if (fault is "content" or "foreign-child")
+                check(
+                    !new DirectoryInfo(Path.Combine(parent, "refused-" + fault))
+                        .GetAccessControl()
+                        .AreAccessRulesProtected,
+                    fault + " is refused before promoting the root DACL"
+                );
+        }
+        check(
+            SnapshotSecurity.Equivalent(sourceDacl, SnapshotSecurity.Read(source, true))
+                && SnapshotSecurity.Equivalent(parentDacl, SnapshotSecurity.Read(parent, true))
+                && await File.ReadAllTextAsync(Path.Combine(source, relative))
+                    == "verified recovery bytes",
+            "fresh recovery finalization preserves source and parent"
         );
     }
 
