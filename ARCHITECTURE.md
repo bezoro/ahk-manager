@@ -7,6 +7,8 @@ flowchart LR
   Launcher[Native root launcher] --> Main[Electron main]
   Renderer[React] <--> Preload[Preload API]
   Preload <-->|Validated IPC| Main
+  McpClient[MCP client] <-->|MCP over stdio| Agent[Portable CLI and MCP server]
+  Agent <-->|Authenticated local pipe| Main
   Main <-->|JSON over stdio| Backend[.NET backend]
   Backend --> Core[Core]
   Main -->|Plan and receipts| UpdateHost[.NET update host]
@@ -24,7 +26,7 @@ flowchart LR
 | `Backend/`                                                             | Authenticated host session, bounded commands and startup/profile coordination |
 | `Core/`                                                                | Models, persistence, AHK parsing, process observation and operation rules     |
 | `PortableLauncher/`                                                    | Native root entry point and execution-level manifest                          |
-| `AgentCli/`                                                            | Self-contained authenticated Windows command-line transport                   |
+| `AgentCli/`                                                            | Self-contained CLI and local MCP transport for Windows                        |
 | `UpdateHost/`                                                          | Offline portable package validation, application, rollback and recovery       |
 | `Tests.Backend/`, `Tests.AgentCli/` and `Presentation.Electron/tests/` | Isolated domain, transport and presentation checks                            |
 
@@ -41,6 +43,8 @@ Electron `main/desktop/` owns Windows integration, `main/ipc/` authenticates ren
 5. The backend publishes observed state; the renderer shows results and reasons an action is unavailable.
 
 Start and restart require a verified interpreter and script. Stop requests normal exit and observes completion. Uncertain effects remain pending, retain their evidence and are never replayed automatically.
+
+CLI and MCP expose the shared agent catalog. MCP discovery uses the command schemas, while live requests use the existing agent command dispatcher and authenticated Windows peer checks. The renderer retains its narrow IPC surface and invokes the same controller and application services. Each renderer action must name its headless equivalent or declare its desktop purpose in `main/ipc/command-coverage.ts`. Tests check the registered actions against the catalog.
 
 `ManagerService` partial files share one lock and owner. Catalog, settings, files, operations, observation, recovery, startup and continuation code remain separate without creating independent authorities. C# wire types belong in `Backend/Protocol.cs` and its JSON context; domain documents belong in `Core/Models` and `ManagerJson`.
 

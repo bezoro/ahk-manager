@@ -14,6 +14,8 @@ $manager = 'C:\Apps\AHK Manager Portable\App\backend\agent\ahk-manager.exe'
 
 `commands` returns the shared command catalog. Use `version` for the installed CLI version and `app.status` for the running host. The catalog, help, and CLI version work with Manager closed and from an ordinary shell.
 
+Use `mcp` to serve the management commands over MCP `stdio`. See [MCP.md](MCP.md) for client configuration and an example of a reviewed script operation.
+
 Live commands require an elevated administrator token in the same Windows user and session as Manager. An unattended process must already have that authority. A regular shell receives `ElevationRequired` unless it requests Windows consent for the stable update command.
 
 `app.start` waits for the authenticated host and backend to become ready. If Manager is closed, it starts the root launcher without opening a window or running login startup. Other commands require a running host unless you explicitly pass `--start`. Use `app.show`, `app.hide`, and `app.preferences` for notification area actions. `app.quit` exits Manager while preserving independent scripts. `app.stopScriptsAndQuit` requests verified script shutdown before exit and may report partial success while Manager stays open.

@@ -18,9 +18,9 @@ Manager always runs as administrator. The root launcher requests UAC approval wh
 
 Closing the window can leave Manager in the notification area. **Exit and keep scripts running** preserves independent scripts. **Stop scripts and exit** requests normal shutdown for verified processes and keeps Manager open if it cannot confirm the result. Adding or inspecting files does not execute them.
 
-## Command line
+## CLI and MCP
 
-The portable package includes `App/backend/agent/ahk-manager.exe`. Run `commands` to list the available actions. An elevated shell for the same Windows user and session can start Manager without a window, use the catalog and update controls, or exit from the notification area. See [CLI.md](CLI.md) for invocation, permissions, and result codes.
+The portable package includes `App/backend/agent/ahk-manager.exe`. Run `commands` for the command catalog or use `mcp` to connect an MCP client over `stdio`. Both surfaces use the same management operations for scripts, settings, updates and diagnostics. An elevated process for the same Windows user and session can start Manager without a window. See [CLI.md](CLI.md) and [MCP.md](MCP.md) for setup, permissions and result handling.
 
 ## Data, cloud folders and moving the app
 
@@ -48,6 +48,7 @@ Use English for code, comments, documentation, commits, issues and pull requests
 | `Backend/`               | Authenticated host session, command protocol and administrative coordination |
 | `Presentation.Electron/` | Desktop integration, narrow preload API and React interface                  |
 | `PortableLauncher/`      | Native root launcher with mandatory administrator manifest                   |
+| `AgentCli/`              | Portable CLI and local MCP adapters                                          |
 | `UpdateHost/`            | Verified portable update, rollback and recovery                              |
 | `Tests.Backend/`         | Isolated backend and Core checks                                             |
 | `tools/`                 | Build, portable distribution, publication and validation                     |

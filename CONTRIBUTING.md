@@ -114,14 +114,14 @@ dotnet publish UpdateHost/AhkManager.UpdateHost.csproj -c Release -r win-x64 --s
 node.exe --experimental-strip-types Presentation.Electron/scripts/verify-update-host-diagnostics.cjs --input "$work/update-host-tests/update-refusal-contract.json"
 ```
 
-For the authenticated Agent CLI frame/exchange checks:
+For the authenticated Agent CLI exchange and MCP session checks:
 
 ```powershell
 dotnet restore Tests.AgentCli/Tests.AgentCli.csproj --locked-mode --configfile NuGet.Config
 dotnet run --project Tests.AgentCli/Tests.AgentCli.csproj -c Release --no-restore
 ```
 
-These tests use in-memory streams and temporary endpoints. Packaged CLI and graphical startup are checked together by Windows CI. See [CLI.md](CLI.md) for the command catalog and authority requirements.
+These tests use in-memory streams and temporary endpoints. Windows CI checks the packaged CLI, MCP session and graphical startup. See [CLI.md](CLI.md) and [MCP.md](MCP.md) for the command catalog and authority requirements.
 
 ## Windows interface and package
 
@@ -162,6 +162,8 @@ Use a disposable Windows environment without an existing Manager or personal pro
 ## Preparing a change
 
 Keep process/persistence rules in Core, protocol validation in Backend, native integration in Electron main, and presentation in the renderer. Preload methods must remain specific; do not expose arbitrary commands, module paths, or Node access.
+
+Add management operations through the command catalog and agent dispatcher. Declare the equivalent command when adding a renderer handler, or document why the action is purely desktop behavior. Share controller and application operations across the surfaces so previews, effects and receipts have the same rules.
 
 When contracts change, review `Core/Models`, `Backend/Protocol.cs`, `Presentation.Electron/src/shared`, JSON contexts, and runtime validators together. Preserve existing profile, registry, and mutex identifiers. Format changes need prior-profile and invalid-data coverage.
 

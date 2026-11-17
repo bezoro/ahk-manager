@@ -27,6 +27,8 @@ Cloud Files tests use a private, owned Windows CFAPI fixture where supported. Th
 
 Portable integration scenarios use disposable NTFS roots, synthetic profiles and inert external files. They exercise default/custom data paths, real updates and rollback, folder relocation, shortcut repair and refusal of unrelated root contents. User script files and personal profiles are outside those fixtures.
 
+Packaged CLI and MCP checks use the published executable from the verified ZIP. Check offline MCP discovery, the authenticated headless session, script start and normal stop for the owned AutoHotkey fixture, and refusal of an unconfirmed operation. The Windows runner already has administrative authority for live calls.
+
 ## Interface scope
 
 The synthetic Electron presentation host uses the production renderer without connecting to the backend or executing scripts. Inspect the captured layouts when changing UI behavior. Captures establish controls, text and layout for the recorded sizes and themes; they do not establish Windows Mica composition or behavior at another DPI unless that case was captured.
