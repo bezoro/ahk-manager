@@ -17,6 +17,7 @@ internal static class Program
                         or "--core"
                         or "--core-document-validation"
                         or "--core-derived-analysis"
+                        or "--core-reliability"
                         or "--corrections"
                         or "--inventory"
                         or "--ahk-owned"
@@ -25,7 +26,7 @@ internal static class Program
                     )
             )
                 throw new ArgumentException(
-                    "Use --backend|--core|--core-document-validation|--core-derived-analysis|--corrections|--inventory|--ahk-owned|--startup-inspection|--startup-task-integration --root <fixture directory>."
+                    "Use --backend|--core|--core-document-validation|--core-derived-analysis|--core-reliability|--corrections|--inventory|--ahk-owned|--startup-inspection|--startup-task-integration --root <fixture directory>."
                 );
             if (args[0] == "--ahk-owned" && !Path.IsPathFullyQualified(args[2]))
                 throw new ArgumentException(
@@ -62,8 +63,13 @@ internal static class Program
                             Console.WriteLine("PASS " + name);
                         }
                     );
-                else if (args[0] == "--core-derived-analysis")
-                    await Tests.Backend.Core.CoreSuite.RunDerivedAnalysisChecksAsync(
+                else if (args[0] is "--core-derived-analysis" or "--core-reliability")
+                {
+                    Func<string, Action<bool, string>, Task> run =
+                        args[0] == "--core-reliability"
+                            ? Tests.Backend.Core.CoreSuite.RunReliabilityChecksAsync
+                            : Tests.Backend.Core.CoreSuite.RunDerivedAnalysisChecksAsync;
+                    await run(
                         root,
                         (passed, name) =>
                         {
@@ -72,6 +78,7 @@ internal static class Program
                             Console.WriteLine("PASS " + name);
                         }
                     );
+                }
                 else
                     await BackendChecks.RunAsync(root);
             }

@@ -8,19 +8,34 @@ public sealed partial class ManagerService
 {
     async void ProcessInvalidated(object? sender, EventArgs e)
     {
-        if (disposed || Interlocked.Exchange(ref refreshQueued, 1) != 0)
-            return;
-        try
+        lock (refreshLock)
         {
-            await RefreshAsync().ConfigureAwait(false);
+            if (refreshRunning)
+            {
+                refreshRequested = true;
+                return;
+            }
+            refreshRunning = true;
         }
-        catch (Exception ex)
-            when (SafeJsonFiles.Known(ex)
-                || ex is ObjectDisposedException or InvalidOperationException
-            ) { }
-        finally
+        while (true)
         {
-            Volatile.Write(ref refreshQueued, 0);
+            try
+            {
+                await RefreshAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+                when (SafeJsonFiles.Known(ex)
+                    || ex is ObjectDisposedException or InvalidOperationException
+                ) { }
+            lock (refreshLock)
+            {
+                if (!refreshRequested)
+                {
+                    refreshRunning = false;
+                    return;
+                }
+                refreshRequested = false;
+            }
         }
     }
 
