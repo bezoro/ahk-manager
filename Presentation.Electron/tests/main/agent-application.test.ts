@@ -43,6 +43,7 @@ interface FixturePorts {
   connectDocument?: boolean;
   exitOnClose?: boolean;
   refuseFirstProfile?: boolean;
+  registeredLogin?: boolean;
   dataMoveFailure?: Error;
   createUpdates?(
     boundary: Pick<UpdateBoundary, 'preflight' | 'confirm' | 'changed'>,
@@ -105,6 +106,7 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
       events.push('backend.shutdown');
     }
     async request(action: string, data: { selection?: unknown; confirmed?: boolean }) {
+      if (ports.registeredLogin) events.push('backend.' + action);
       if (action === 'initializeProfile' && ++profileAttempts === 1 && ports.refuseFirstProfile)
         return { ...done, outcome: 'Failed', code: 'PendingOperation' };
       if (action === 'refresh' || action === 'load') return structuredClone(state);
@@ -406,9 +408,10 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
   });
   Reflect.set(globalThis, bridge, mocks);
   Reflect.set(process, 'resourcesPath', root);
-  process.argv = busyLogonMarker
-    ? [executable, '--login', '--background']
-    : [...argv, '--agent-host'];
+  process.argv =
+    busyLogonMarker || ports.registeredLogin
+      ? [executable, '--login', '--background']
+      : [...argv, '--agent-host'];
   if (busyLogonMarker) {
     const open = fsSync.openSync;
     let busy = true;
@@ -439,16 +442,16 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
       ? status
       : undefined;
   });
-  if (!busyLogonMarker && !ports.activateDuringUpdateSetup)
+  if (!busyLogonMarker && !ports.registeredLogin && !ports.activateDuringUpdateSetup)
     assert.equal(events.includes('window.create'), false);
   return {
     events,
     documentTokens,
     window: () => currentWindow!,
     backendCounts: () => ({ starts: backendStarts, profiles: profileAttempts }),
-    documentState: (token: string) => {
+    documentRequest: (token: string, command = 'getState') => {
       const sender = currentWindow!.webContents;
-      return ipc.get('manager:getState')!(
+      return ipc.get('manager:' + command)!(
         { sender, senderFrame: sender.mainFrame },
         { token, body: {} },
       );
@@ -469,7 +472,7 @@ test('foreground activation during update setup waits for document IPC', async (
   const f = await fixture(t, false, { activateDuringUpdateSetup: true, connectDocument: true });
   await waitFor(() => f.events.find((event) => event === 'window.show'));
   assert.equal(f.documentTokens.length, 1);
-  assert.ok(await f.documentState(f.documentTokens[0]!));
+  assert.ok(await f.documentRequest(f.documentTokens[0]!));
 });
 
 test('tray activation reloads a crashed renderer with a fresh document lease', async (t) => {
@@ -479,13 +482,13 @@ test('tray activation reloads a crashed renderer with a fresh document lease', a
   const first = await waitFor(() => f.documentTokens[0]);
   await waitFor(() => f.events.find((event) => event === 'window.show'));
   f.window().webContents.emit('render-process-gone');
-  await assert.rejects(async () => f.documentState(first), /Stale IPC document/);
+  await assert.rejects(async () => f.documentRequest(first), /Stale IPC document/);
   activate();
   activate();
   const second = await waitFor(() => f.documentTokens[1]);
   assert.notEqual(second, first);
-  assert.ok(await f.documentState(second));
-  await assert.rejects(async () => f.documentState(first), /Stale IPC document/);
+  assert.ok(await f.documentRequest(second));
+  await assert.rejects(async () => f.documentRequest(first), /Stale IPC document/);
   assert.equal(f.documentTokens.length, 2);
   assert.equal(f.events.filter((event) => event === 'window.create').length, 1);
 });
@@ -494,6 +497,29 @@ test('retry after profile refusal initializes the original backend again', async
   const f = await fixture(t, false, { refuseFirstProfile: true });
   const result = await f.request('app.retryBackend');
   assert.equal(result.outcome, 'Confirmed', JSON.stringify(result));
+  assert.deepEqual(f.backendCounts(), { starts: 1, profiles: 2 });
+});
+
+test('registered login survives profile refusal and runs once after authenticated retry loads the profile', async (t) => {
+  const f = await fixture(t, false, {
+    registeredLogin: true,
+    refuseFirstProfile: true,
+    connectDocument: true,
+  });
+  const profileEvents = () =>
+    f.events.filter((event) =>
+      ['backend.initializeProfile', 'backend.load', 'backend.runLogin'].includes(event),
+    );
+  assert.deepEqual(profileEvents(), ['backend.initializeProfile']);
+  assert.equal(f.events.includes('window.show'), false);
+  await f.documentRequest(f.documentTokens[0]!, 'retryBackend');
+  assert.deepEqual(profileEvents(), [
+    'backend.initializeProfile',
+    'backend.initializeProfile',
+    'backend.load',
+    'backend.runLogin',
+  ]);
+  assert.equal(f.events.includes('window.show'), false);
   assert.deepEqual(f.backendCounts(), { starts: 1, profiles: 2 });
 });
 

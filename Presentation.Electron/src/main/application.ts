@@ -1211,7 +1211,8 @@ export function startManager(): void {
       stopExit.active ||
       quitting ||
       !backend?.ready ||
-      !controller ||
+      controller?.state.connection !== 'ready' ||
+      !controller.state.snapshot ||
       !lifecycle.takeLogin()
     )
       return;
