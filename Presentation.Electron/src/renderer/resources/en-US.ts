@@ -27,6 +27,7 @@ export const text = {
   updateInstall: 'Update and reopen',
   updateInstallVersion: 'Install this version',
   updateRollback: 'Return to this version',
+  updateUseSavedCopy: 'Use saved copy',
   updateInstallHint: 'Manager will reopen after installation. Your scripts will keep running.',
   updateRecoveryHint:
     'Manager encountered a problem. You can try recovering it by reinstalling an available version below.',

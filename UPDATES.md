@@ -14,6 +14,8 @@ Entering Test explicitly can offer a preview older than the current stable relea
 
 Version history combines compatible published portable releases with verified packages preserved locally. Rolling back changes application files, not profile or script contents. Stable does not offer cached previews. Releases without portable assets are not compatible rollback choices.
 
+When a version has a separate saved copy, **Use saved copy** chooses that local package. The published choice verifies the GitHub release before reusing or downloading its archive. Both choices still verify package integrity and applicable publisher policy before installation.
+
 ## Public transport and package integrity
 
 The client reconstructs fixed GitHub API routes from validated asset identifiers. Renderer input and release-provided arbitrary URLs cannot select download locations. HTTPS origins, redirects, response sizes and request durations are bounded.

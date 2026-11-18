@@ -63,6 +63,21 @@ export function Updates({
     state.channel === 'stable' &&
     isEarlierUpdateVersion(available.version, state.currentVersion);
   const availablePreview = available?.version.includes('-test.') ?? false;
+  const publishedVersions = new Set(
+    state.releases
+      .filter((release) => release.id.startsWith('github:'))
+      .map((release) => release.version),
+  );
+  const localAlternatives = new Map(
+    state.releases
+      .filter(
+        (release) => release.id.startsWith('local:') && publishedVersions.has(release.version),
+      )
+      .map((release) => [release.version, release]),
+  );
+  const history = state.releases.filter(
+    (release) => release !== localAlternatives.get(release.version),
+  );
   const feedbackFailed =
     !!state.error ||
     [text.updateInstallFailed, text.updateCheckFailed, text.updateChannelFailed].some(
@@ -261,9 +276,9 @@ export function Updates({
         <section className="update-history" aria-labelledby="update-history-title">
           <h2 id="update-history-title">{text.updateHistory}</h2>
           <p className="muted">{text.updateHistoryHint}</p>
-          {state.releases.length ? (
+          {history.length ? (
             <ol className="update-release-list">
-              {state.releases.map((release) => (
+              {history.map((release) => (
                 <li key={release.id} className="update-release">
                   <div className="update-release-heading">
                     <div>
@@ -298,6 +313,8 @@ export function Updates({
                           ? text.updateRollback
                           : text.updateInstallVersion,
                       )}
+                    {localAlternatives.has(release.version) &&
+                      install(localAlternatives.get(release.version)!, text.updateUseSavedCopy)}
                     <span className="muted">
                       {release.cached
                         ? text.updateCached

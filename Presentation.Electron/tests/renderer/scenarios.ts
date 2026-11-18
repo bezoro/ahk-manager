@@ -4337,6 +4337,43 @@ export async function runUpdateScenarios(): Promise<AssertionRecord[]> {
       'English update controls are missing',
     );
   });
+  await check(
+    'saved and published rollback choices share one history entry and dispatch their exact IDs',
+    async () => {
+      const cached = updates.releases.find((release) => release.id === 'fixture-cached-120')!;
+      const published = { ...cached, id: 'github:120', cached: false };
+      const saved = { ...cached, id: 'local:1.2.0' };
+      const history = {
+        ...updates,
+        releases: [...updates.releases.filter((release) => release !== cached), published, saved],
+      };
+      await window.fixtureHarness.setUpdates(history);
+      await window.fixtureHarness.setResponse('installUpdate', { value: history });
+      await tick();
+      button(text.updates).click();
+      await tick();
+      const cards = [...document.querySelectorAll<HTMLElement>('.update-release')].filter(
+        (card) => card.querySelector('h3')?.textContent === saved.version,
+      );
+      assert(cards.length === 1, 'The same version appears twice in the history');
+      for (const [label, id] of [
+        [text.updateRollback, published.id],
+        [text.updateUseSavedCopy, saved.id],
+      ] as const) {
+        await window.fixtureHarness.clearCalls();
+        button(label, cards[0]!).click();
+        await untilCall('installUpdate');
+        await tick();
+        const requests = (await window.fixtureHarness.calls()).filter(
+          (call) => call.method === 'installUpdate',
+        );
+        assert(
+          requests.length === 1 && requests[0]!.args[0] === id,
+          'Rollback used a different package choice',
+        );
+      }
+    },
+  );
   await window.fixtureHarness.setUpdates({ ...updates, availableVersion: null, releases: [] });
   await tick();
   return results;

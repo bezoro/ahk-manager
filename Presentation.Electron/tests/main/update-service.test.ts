@@ -793,7 +793,7 @@ test('a verified complete local archive stays usable offline without requesting 
   assert.deepEqual(f.applied[0]!.target, cached('1.2.0'));
 });
 
-test('metadata-only GitHub history preserves a complete cached rollback even when the next network check fails', async () => {
+test('metadata-only GitHub history keeps a separate saved rollback selectable without resolving the publication', async () => {
   const f = fixture();
   f.store.items = [cached('1.2.0')];
   f.hooks.releases = async () => [metadata()];
@@ -802,11 +802,15 @@ test('metadata-only GitHub history preserves a complete cached rollback even whe
   };
   await f.service.initialize();
   const listed = await f.service.check();
-  assert.equal(listed.releases.find((item) => item.id === metadata().id)?.cached, false);
-  f.hooks.releases = async () => {
-    throw new Error('Fixture offline.');
-  };
-  assert.equal((await f.service.check()).phase, 'error');
+  assert.deepEqual(
+    listed.releases
+      .filter((item) => item.version === '1.2.0')
+      .map(({ id, cached, canInstall }) => ({ id, cached, canInstall })),
+    [
+      { id: metadata().id, cached: false, canInstall: true },
+      { id: 'local:1.2.0', cached: true, canInstall: true },
+    ],
+  );
   const state = await f.service.install('local:1.2.0');
   assert.equal(state.phase, 'installing');
   assert.deepEqual(f.resolved, []);
