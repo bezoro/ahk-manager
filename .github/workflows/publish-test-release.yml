@@ -1,9 +1,11 @@
 name: Publish test channel
+run-name: Test preview for ${{ github.event.workflow_run.head_branch }} (Windows CI #${{ github.event.workflow_run.run_number }}.${{ github.event.workflow_run.run_attempt }})
 
 on:
   workflow_run:
     workflows: [Windows CI]
     types: [completed]
+    branches-ignore: [main]
 
 permissions:
   contents: read
@@ -15,58 +17,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  candidates:
-    name: Find approved current PR builds
-    if: ${{ github.repository == 'bezoro/ahk-manager' && github.event.workflow_run.conclusion == 'success' }}
+  eligibility:
+    name: Check preview eligibility
+    if: >-
+      github.repository == 'bezoro/ahk-manager' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.id == github.event.repository.id
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
-      runs: ${{ steps.candidates.outputs.runs }}
+      eligible: ${{ steps.eligibility.outputs.eligible }}
     steps:
       - name: Check out trusted default-branch release tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Select current successful builds and bootstrap backfill
-        id: candidates
+      - name: Verify the CI run and its artifact
+        id: eligibility
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: ./tools/Get-TestReleaseCandidates.ps1 -TriggerRunId $env:TRIGGER_RUN_ID
+          TEST_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: ./tools/Test-PreviewEligibility.ps1 -RunId $env:TEST_RUN_ID
 
   publish:
     name: Publish immutable PR preview
-    needs: candidates
-    if: ${{ needs.candidates.outputs.runs != '[]' }}
+    needs: eligibility
+    if: ${{ needs.eligibility.outputs.eligible == 'true' }}
     runs-on: windows-2025
     timeout-minutes: 20
-    concurrency:
-      group: test-channel-run-${{ matrix.run-id }}
-      cancel-in-progress: false
     permissions:
       contents: write
       actions: read
       pull-requests: read
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        run-id: ${{ fromJSON(needs.candidates.outputs.runs) }}
     steps:
       - name: Check out trusted default-branch release tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Verify provenance, sign if configured and publish without executing the package
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          TEST_RUN_ID: ${{ matrix.run-id }}
+          TEST_RUN_ID: ${{ github.event.workflow_run.id }}
           CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
           AHK_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}

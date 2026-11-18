@@ -59,25 +59,6 @@ foreach ($case in @(
     }
     finally { $case.object.($case.field) = $original }
 }
-$selected = @(Get-TestReleaseCandidates -Repository $repository.full_name -RunId 7 -Request $request)
-Assert-Preview ($selected.Count -eq 1 -and $selected[0] -eq 7) 'successful PR trigger selects its current tested build'
-$run.head_repository = [pscustomobject]@{ id = 1; full_name = 'fork/ahk-manager' }
-$selected = @(Get-TestReleaseCandidates -Repository $repository.full_name -RunId 7 -Request $request)
-Assert-Preview ($selected.Count -eq 0) 'successful fork CI is normally excluded without failing the publisher'
-$run.head_repository = $repository
-$mainRun = $run | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-$mainRun.id = 8; $mainRun.event = 'push'; $mainRun.head_branch = 'main'
-$responses["$base/actions/runs/8"] = $mainRun
-$deletedForkRun = $run | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-$deletedForkRun.head_repository = $null
-$responses["$base/actions/workflows/windows-ci.yml/runs?event=pull_request&status=success&per_page=100"] = [pscustomobject]@{ workflow_runs = @($deletedForkRun, $run, $run) }
-$selected = @(Get-TestReleaseCandidates -Repository $repository.full_name -RunId 8 -Request $request)
-Assert-Preview ($selected.Count -eq 1 -and $selected[0] -eq 7) 'bootstrap main trigger backfills current PR builds and deduplicates them'
-$pull.state = 'closed'
-$selected = @(Get-TestReleaseCandidates -Repository $repository.full_name -RunId 8 -Request $request)
-Assert-Preview ($selected.Count -eq 0) 'bootstrap backfill skips PRs closed since their CI completed'
-$pull.state = 'open'
-
 $archiveName = "AHK-Manager-$version-Portable-x64.zip"
 $archivePath = Join-Path $OutputRoot $archiveName
 [IO.File]::WriteAllBytes($archivePath, [byte[]](1..255))
@@ -170,11 +151,24 @@ function Invoke-RestMethod {
     throw 'Unexpected mock API route; no network fallback is allowed.'
 }
 $saved = @{}
-foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_EVENT_NAME', 'GITHUB_REF', 'GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_TOKEN', 'AHK_PUBLISHER_NAME', 'CSC_LINK', 'CSC_KEY_PASSWORD')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+foreach ($name in @('GITHUB_ACTIONS', 'GITHUB_EVENT_NAME', 'GITHUB_OUTPUT', 'GITHUB_REF', 'GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_TOKEN', 'AHK_PUBLISHER_NAME', 'CSC_LINK', 'CSC_KEY_PASSWORD')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 try {
     $env:GITHUB_ACTIONS = 'true'; $env:GITHUB_EVENT_NAME = 'workflow_run'; $env:GITHUB_REF = 'refs/heads/main'
     $env:AHK_PUBLISHER_NAME = ''; $env:CSC_LINK = ''; $env:CSC_KEY_PASSWORD = ''
     $env:GITHUB_REPOSITORY = 'bezoro/ahk-manager'; $env:GITHUB_SHA = 'b' * 40; $env:GITHUB_TOKEN = 'fixture-only'
+    $env:GITHUB_OUTPUT = Join-Path $OutputRoot 'preview-eligibility.txt'
+    $eligibilityScript = Join-Path $PSScriptRoot 'Test-PreviewEligibility.ps1'
+    & $eligibilityScript -RunId 7
+    $pull.state = 'closed'
+    & $eligibilityScript -RunId 7
+    $pull.state = 'open'
+    $run.event = 'push'
+    & $eligibilityScript -RunId 7
+    $run.event = 'pull_request'
+    $eligibility = [IO.File]::ReadAllLines($env:GITHUB_OUTPUT)
+    Assert-Preview (($eligibility -join ',') -ceq 'eligible=true,eligible=false,eligible=false') 'only the triggering successful CI run for a current PR is eligible for preview publication'
+    Assert-Refused { & $eligibilityScript -RunId 8 } 'unexpected API errors fail the preview eligibility job'
+
     $parameters = @{ PortableArchivePath = $archivePath; PortableManifestPath = $manifestPath; Repository = $env:GITHUB_REPOSITORY; Commit = $run.head_sha; Channel = 'test'; TestRunId = 7 }
     & (Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1') @parameters
     $fixture = $global:AhkPreviewPublisherFixture

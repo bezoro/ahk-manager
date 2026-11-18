@@ -22,8 +22,7 @@ try {
     $identity = Read-TestReleaseArtifactIdentity -ArchivePath $archive
     $suffix = "-test.$($context.RunNumber).$($context.Attempt).$($context.PullRequest)"
     if ((Get-ReleaseVersionChannel $identity.Version) -cne 'test' -or -not $identity.Version.EndsWith($suffix, [StringComparison]::Ordinal) -or $identity.Commit -cne $context.Commit) { throw 'The preview version or source does not match its CI run.' }
-    # Keep the version calculated at build time. Bootstrap publication can add a
-    # stable tag before this backfill runs; rebuilding would change the identity.
+    # Keep the version calculated at build time even if stable tags have changed.
     $root = Join-Path $directory 'package'
     Expand-TestReleaseArtifact -ArchivePath $archive -OutputRoot $root -Version $identity.Version
     $family = @{

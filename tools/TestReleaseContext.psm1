@@ -62,37 +62,4 @@ function Get-TestReleaseContext {
     }
 }
 
-
-
-function Get-TestReleaseCandidates {
-    param([string]$Repository, [long]$RunId, [scriptblock]$Request)
-    if ($Repository -cne 'bezoro/ahk-manager' -or $RunId -le 0) { throw 'Unexpected preview trigger repository or run.' }
-    $base = "https://api.github.com/repos/$Repository"
-    $trigger = & $request "$base/actions/runs/$RunId"
-    if ($trigger.id -ne $RunId -or $trigger.status -cne 'completed' -or $trigger.conclusion -cne 'success' -or $trigger.name -cne 'Windows CI' -or $trigger.path -cne '.github/workflows/windows-ci.yml' -or $trigger.repository.id -ne 1430333503 -or $trigger.repository.full_name -cne $Repository) { throw 'The trigger is not an approved completed Windows CI run.' }
-    if ($null -eq $trigger.head_repository -or $trigger.head_repository.id -ne $trigger.repository.id) { return @() }
-    $rows = @()
-    if ($trigger.event -ceq 'pull_request') { $rows = @($trigger) }
-    elseif ($trigger.event -ceq 'push' -and $trigger.head_branch -ceq 'main') {
-        # Bootstrap activation also publishes previews whose CI completed before the
-        # trusted publisher existed on main. No rebuild or manual download is needed.
-        $runs = & $request "$base/actions/workflows/windows-ci.yml/runs?event=pull_request&status=success&per_page=100"
-        $rows = @($runs.workflow_runs)
-        if ($rows.Count -gt 100) { throw 'The preview backfill query exceeds its bound.' }
-    }
-    $selected = [Collections.Generic.List[long]]::new()
-    $pulls = [Collections.Generic.HashSet[int]]::new()
-    foreach ($row in $rows) {
-        if ($selected.Count -ge 10) { break }
-        if ($null -eq $row.head_repository -or $row.head_repository.id -ne 1430333503) { continue }
-        try { $context = Get-TestReleaseContext -Repository $Repository -RunId $row.id -Request $request }
-        catch {
-            if ($_.Exception.Data['AhkTestIneligible'] -eq $true) { Write-Host "Run $($row.id) is no longer eligible for preview publication."; continue }
-            throw
-        }
-        if ($pulls.Add($context.PullRequest)) { $selected.Add($context.RunId) }
-    }
-    return $selected.ToArray()
-}
-
-Export-ModuleMember -Function Get-TestReleaseContext, Get-TestReleaseCandidates
+Export-ModuleMember -Function Get-TestReleaseContext
