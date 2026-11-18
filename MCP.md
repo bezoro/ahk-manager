@@ -44,7 +44,7 @@ For pending startup work, `startup_continuation` returns the offer. After review
 
 ## Results and recovery
 
-Tool results contain the [CLI response envelope](CLI.md#input-and-output) as JSON text and, from protocol version `2025-06-18`, structured content. Read `outcome`, `code` and `result` together. `Accepted` can mean that an operation is still running. Keep the operation ID and call `operations_get` to read its durable receipt. Query after Manager reopens on the target version or directory to record the first verified completion. Once recorded, it stays queryable across later updates or moves while its supporting evidence is retained.
+Tool results contain the [CLI response envelope](CLI.md#input-and-output) as JSON text and, from protocol version `2025-06-18`, structured content. Read `outcome`, `code` and `result` together. `Accepted` can mean that an operation is still running. Keep the operation ID and call `operations_get` to read its durable receipt. Query after Manager reopens on the target version or directory to record the first verified completion. If the history store is temporarily unwritable, a query can confirm the current target from live evidence. Query again while the target is active to retry recording the observation. Once recorded, it stays queryable across later updates or moves while its supporting evidence is retained.
 
 Manager can commit an operation before the MCP client receives its reply. If the connection closes during an update, reconnect after Manager restarts and query the receipt. If the operation ID was lost, inspect the current version and update history before retrying. Disconnect other MCP sessions before applying an update so the updater can replace the portable application files.
 

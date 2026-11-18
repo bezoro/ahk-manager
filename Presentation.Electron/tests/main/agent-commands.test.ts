@@ -17,7 +17,11 @@ import {
 import { CommandRegistry } from '../../src/main/command-registry.js';
 import { ManagerController, type NativeBoundary } from '../../src/main/controller.js';
 import { desktopPreflight } from '../../src/main/lifecycle.js';
-import { readDirectoryIdentity } from '../../src/main/storage/data-files.js';
+import {
+  copyDataInventory,
+  inventoryData,
+  readDirectoryIdentity,
+} from '../../src/main/storage/data-files.js';
 import { UpdateStore } from '../../src/main/updates/update-store.js';
 import type { OperationResult, SelectionContext } from '../../src/shared/contracts.js';
 import { planId, runningSnapshot, selection } from './fixtures.js';
@@ -457,7 +461,7 @@ test('a worker receipt requires the expected reopened version, and cancelled mov
   const later = { ...current, version: '1.3.0', generation: 'later' };
   const restarted = new AgentReceipts(new UpdateStore(root));
   assert.equal((await restarted.reconcile(update, later)).outcome, 'Confirmed');
-  const markerFile = path.join(root, 'agent-operations', update + '-confirmed.json');
+  const markerFile = path.join(root, 'agent-operations', update + '-confirmed', 'observation.json');
   const marker = await fs.readFile(markerFile, 'utf8');
   await fs.writeFile(
     markerFile,
@@ -531,7 +535,9 @@ test('a confirmed relocation keeps its history only while its dispatch and sourc
     ['Confirmed', 'Confirmed'],
   );
   const next = path.join(root, 'Second');
-  await fs.rename(destination, next);
+  await fs.mkdir(next);
+  await copyDataInventory(destination, next, await inventoryData(destination));
+  await fs.rm(destination, { recursive: true });
   const moved = new AgentReceipts(new UpdateStore(path.join(next, 'Updates')));
   const later = { ...current, generation: 'later', directory: next };
   assert.equal((await moved.reconcile(id, later)).outcome, 'Confirmed');
@@ -540,4 +546,53 @@ test('a confirmed relocation keeps its history only while its dispatch and sourc
     JSON.stringify({ ...proof, identity: { ...proof.identity, ino: '0' } }),
   );
   assert.equal((await moved.reconcile(id, later)).outcome, 'Unknown');
+});
+
+test('a live update confirmation survives failed publication and retries without replacing a competitor', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ahk-confirm-publish-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new UpdateStore(root);
+  const receipts = new AgentReceipts(store);
+  const id = randomUUID();
+  const version = '2.1.0';
+  await receipts.begin(id, 'before', { kind: 'Update', version });
+  await store.writeNew(
+    path.join(root, 'operations', id, 'outcome.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      operationId: id,
+      version,
+      outcome: 'Installed',
+      installerExitCode: 0,
+    }),
+  );
+  const live = { generation: 'reopened', version, directory: root, ready: true, active: false };
+  const later = { ...live, generation: 'subsequent', version: '2.2.0' };
+  const parent = path.join(root, 'agent-operations');
+  const directory = path.join(parent, id + '-confirmed');
+  const file = path.join(directory, 'observation.json');
+  const refused = t.mock.method(fs, 'mkdtemp', async () => {
+    throw Object.assign(new Error('Fixture storage refusal'), { code: 'EACCES' });
+  });
+  assert.equal((await receipts.reconcile(id, live)).outcome, 'Confirmed');
+  assert.equal((await receipts.reconcile(id, later)).outcome, 'Unknown');
+  refused.mock.restore();
+  assert.equal((await receipts.reconcile(id, live)).outcome, 'Confirmed');
+  assert.equal((await fs.lstat(file)).nlink, 1);
+  assert.equal((await receipts.reconcile(id, later)).outcome, 'Confirmed');
+
+  const conflicting = JSON.stringify({
+    ...JSON.parse(await fs.readFile(file, 'utf8')),
+    evidenceSha256: '0'.repeat(64),
+  });
+  await fs.rm(directory, { recursive: true });
+  const rename = fs.rename;
+  t.mock.method(fs, 'rename', async (...args: Parameters<typeof rename>) => {
+    await fs.mkdir(directory);
+    await fs.writeFile(file, conflicting);
+    return rename(...args);
+  });
+  assert.equal((await receipts.reconcile(id, live)).outcome, 'Unknown');
+  assert.equal(await fs.readFile(file, 'utf8'), conflicting);
+  assert.deepEqual((await fs.readdir(parent)).sort(), [id + '-confirmed', id + '.json'].sort());
 });

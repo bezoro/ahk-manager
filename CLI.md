@@ -59,7 +59,7 @@ Each invocation writes one JSON response with the protocol, request ID, version,
 
 A confirmed quit means the exact authenticated Manager process exited with code zero. For accepted updates, rollback, restart, or relocation, use the receipt and the command catalog’s read-only status and recovery commands to check the result. A timeout, disconnect, or lost reply can leave a result unknown. Inspect the current state before issuing another mutation.
 
-After the target version or data directory reopens, query `operations.get` to record its verified completion. Later queries can confirm that historical operation after another update or move while the matching source evidence is retained. If the target changes before any successful query, its history can remain `Unknown`.
+After the target version or data directory reopens, query `operations.get` to record its verified completion. Later queries can confirm that historical operation after another update or move while the matching source evidence is retained. When the history store is unwritable, the query can still confirm the current target. Query again while that target is active to retry recording its history. If the target changes before completion is recorded, its history can remain `Unknown`.
 
 ## Developing the CLI
 
