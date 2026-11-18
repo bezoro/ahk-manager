@@ -62,7 +62,11 @@ internal static class StableUpdateHandoffChecks
         Check(!StableUpdateHandoff.MatchesAccount(identity, identity.Sid, 5, admin: true));
         Check(!StableUpdateHandoff.MatchesAccount(identity, identity.Sid, 4, admin: false));
 
-        Guid id = identity.OperationId;
+        CheckOutcomes(identity.OperationId);
+    }
+
+    internal static void CheckOutcomes(Guid id)
+    {
         const string version = "2.1.3";
         var reply = new AgentResponse(
             1,
@@ -85,6 +89,34 @@ internal static class StableUpdateHandoffChecks
                     Code = "UpdateCheckFailed",
                 }
             ) == 7
+        );
+        foreach (
+            string code in new[]
+            {
+                "OperationBlocked",
+                "PreflightBlocked",
+                "CancelledBeforeDispatch",
+            }
+        )
+        {
+            var refused = reply with { Outcome = "Failed", Code = code };
+            var outer = StableUpdateHandoff.FromExit(
+                id,
+                version,
+                StableUpdateHandoff.ChildExit(id, refused)
+            );
+            Check(outer.Outcome == "Failed" && outer.Code == code && outer.Result is null);
+            Check(StableUpdateHandoff.ChildExit(id, refused with { Outcome = "Unknown" }) == 8);
+        }
+        Check(
+            StableUpdateHandoff.ChildExit(
+                id,
+                reply with
+                {
+                    Outcome = "Failed",
+                    Code = "Unexpected",
+                }
+            ) == 8
         );
         var accepted = StableUpdateHandoff.FromExit(id, version, 5);
         Check(
@@ -121,9 +153,7 @@ internal static class StableUpdateHandoffChecks
             timedOut is { Outcome: "Unknown", Code: "UpdateDispatchUnconfirmed" }
                 && OperationId(timedOut) == id
         );
-        Console.WriteLine(
-            "Stable update syntax, bound child credentials, cancellation and exit receipts passed."
-        );
+        Console.WriteLine("Stable update cancellation and exit receipts passed.");
     }
 
     static Guid OperationId(AgentResponse response) =>

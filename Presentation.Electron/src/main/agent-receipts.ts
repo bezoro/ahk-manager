@@ -1,11 +1,13 @@
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { guid, object } from '../shared/validation.js';
 import { failed, ok } from './agent-commands.js';
 import type { AgentReply } from './agent-transport.js';
-import { completedMoveMatches } from './storage/data-migration.js';
+import { readDirectoryIdentity, sameDirectoryIdentity } from './storage/data-files.js';
+import { completedMoveIdentity } from './storage/data-migration.js';
 import { samePath } from './storage/deployment.js';
-import { parseStorageJson } from './storage/json.js';
+import { parseStorageJson, storageKeys } from './storage/json.js';
 import type { UpdateStore } from './updates/update-store.js';
 
 export type AgentTransition =
@@ -73,6 +75,47 @@ export class AgentReceipts {
     });
   }
 
+  // The observation records what a ready host verified after reopening. The original
+  // receipt and its worker/migration evidence must still match for every later query.
+  private async confirmed(
+    operationId: string,
+    generation: string,
+    originalGeneration: string,
+    evidence: unknown[],
+    observe: () => Promise<boolean>,
+  ): Promise<boolean> {
+    const file = this.file(operationId, '-confirmed');
+    const digest = createHash('sha256').update(JSON.stringify(evidence)).digest('hex');
+    const previous = await this.read(file);
+    if (previous)
+      return (
+        storageKeys(previous, ['schemaVersion', 'operationId', 'generation', 'evidenceSha256']) &&
+        previous.operationId === operationId &&
+        typeof previous.generation === 'string' &&
+        previous.generation.length > 0 &&
+        previous.generation !== originalGeneration &&
+        previous.evidenceSha256 === digest
+      );
+    if (!(await observe())) return false;
+    // Publish a complete file atomically so overlapping reads never see a partial marker.
+    const temporary = file + '.' + randomUUID() + '.tmp';
+    const handle = await fs.open(temporary, 'wx', 0o600);
+    try {
+      try {
+        await handle.writeFile(
+          JSON.stringify({ schemaVersion: 1, operationId, generation, evidenceSha256: digest }),
+        );
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await fs.rename(temporary, file);
+    } finally {
+      await fs.rm(temporary, { force: true });
+    }
+    return true;
+  }
+
   async reconcile(
     operationId: string,
     current: {
@@ -105,14 +148,28 @@ export class AgentReceipts {
     ) {
       const dispatch = await this.read(this.file(operationId, '-dispatch'));
       if (
-        reopened &&
         dispatch?.operationId === operationId &&
         dispatch.moveId === receipt.moveId &&
-        dispatch.generation === receipt.generation &&
-        samePath(current.directory, receipt.destination) &&
-        (await completedMoveMatches(this.store.root, receipt.moveId, current.directory))
-      )
-        return ok(result);
+        dispatch.generation === receipt.generation
+      ) {
+        const destination = receipt.destination;
+        const identity = completedMoveIdentity(this.store.root, receipt.moveId, destination);
+        if (
+          identity &&
+          (await this.confirmed(
+            operationId,
+            current.generation,
+            receipt.generation,
+            [receipt, dispatch, identity],
+            async () => {
+              if (!reopened || !samePath(current.directory, destination)) return false;
+              const live = await readDirectoryIdentity(current.directory).catch(() => null);
+              return live !== null && sameDirectoryIdentity(live, identity);
+            },
+          ))
+        )
+          return ok(result);
+      }
     } else if (receipt.kind === 'Update' && typeof receipt.version === 'string') {
       const update = await this.read(
         path.join(this.store.root, 'operations', operationId, 'outcome.json'),
@@ -122,8 +179,13 @@ export class AgentReceipts {
         if (
           update.outcome === 'Installed' &&
           update.installerExitCode === 0 &&
-          reopened &&
-          current.version === receipt.version
+          (await this.confirmed(
+            operationId,
+            current.generation,
+            receipt.generation,
+            [receipt, update],
+            async () => reopened && current.version === receipt.version,
+          ))
         )
           return ok(details);
         if (update.outcome === 'RolledBack' || update.outcome === 'Failed')

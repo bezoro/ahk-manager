@@ -17,6 +17,7 @@ import {
 import { CommandRegistry } from '../../src/main/command-registry.js';
 import { ManagerController, type NativeBoundary } from '../../src/main/controller.js';
 import { desktopPreflight } from '../../src/main/lifecycle.js';
+import { readDirectoryIdentity } from '../../src/main/storage/data-files.js';
 import { UpdateStore } from '../../src/main/updates/update-store.js';
 import type { OperationResult, SelectionContext } from '../../src/shared/contracts.js';
 import { planId, runningSnapshot, selection } from './fixtures.js';
@@ -453,6 +454,25 @@ test('a worker receipt requires the expected reopened version, and cancelled mov
     (await receipts.reconcile(update, { ...current, version: '1.2.2', generation: 'new' })).outcome,
     'Confirmed',
   );
+  const later = { ...current, version: '1.3.0', generation: 'later' };
+  const restarted = new AgentReceipts(new UpdateStore(root));
+  assert.equal((await restarted.reconcile(update, later)).outcome, 'Confirmed');
+  const markerFile = path.join(root, 'agent-operations', update + '-confirmed.json');
+  const marker = await fs.readFile(markerFile, 'utf8');
+  await fs.writeFile(
+    markerFile,
+    JSON.stringify({ ...JSON.parse(marker), generation: current.generation }),
+  );
+  assert.equal((await restarted.reconcile(update, later)).outcome, 'Unknown');
+  await fs.writeFile(markerFile, marker);
+  const workerFile = path.join(root, 'operations', update, 'outcome.json');
+  const worker = JSON.parse(await fs.readFile(workerFile, 'utf8'));
+  await fs.writeFile(workerFile, JSON.stringify({ ...worker, detail: 'different evidence' }));
+  assert.equal((await restarted.reconcile(update, later)).outcome, 'Unknown');
+  await fs.writeFile(workerFile, JSON.stringify({ ...worker, outcome: 'RolledBack' }));
+  assert.equal((await restarted.reconcile(update, later)).outcome, 'Failed');
+  await fs.rm(workerFile);
+  assert.equal((await restarted.reconcile(update, later)).outcome, 'Unknown');
   const move = await receipts.begin(randomUUID(), current.generation, {
     kind: 'DataMove',
     moveId: randomUUID(),
@@ -476,4 +496,48 @@ test('a worker receipt requires the expected reopened version, and cancelled mov
     (await receipts.reconcile(move.operationId, { ...current, generation: 'new' })).code,
     'CancelledBeforeDispatch',
   );
+});
+
+test('a confirmed relocation keeps its history only while its dispatch and source evidence survive', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ahk-move-history-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const destination = path.join(root, 'First');
+  const store = new UpdateStore(path.join(destination, 'Updates'));
+  const receipts = new AgentReceipts(store);
+  const id = randomUUID();
+  const moveId = randomUUID();
+  const receipt = await receipts.begin(id, 'before', { kind: 'DataMove', destination, moveId });
+  assert.ok(receipt.kind === 'DataMove');
+  await receipts.markDataMoveDispatch(receipt);
+  const proof = {
+    schemaVersion: 1,
+    operationId: moveId,
+    destination,
+    identity: await readDirectoryIdentity(destination),
+  };
+  const relative = path.join('agent-operations', moveId + '-completed-data-move.json');
+  await store.writeNew(path.join(store.root, relative), JSON.stringify(proof));
+  const current = {
+    generation: 'reopened',
+    version: '1.2.2',
+    directory: destination,
+    ready: true,
+    active: false,
+  };
+  assert.deepEqual(
+    (await Promise.all([receipts.reconcile(id, current), receipts.reconcile(id, current)])).map(
+      (reply) => reply.outcome,
+    ),
+    ['Confirmed', 'Confirmed'],
+  );
+  const next = path.join(root, 'Second');
+  await fs.rename(destination, next);
+  const moved = new AgentReceipts(new UpdateStore(path.join(next, 'Updates')));
+  const later = { ...current, generation: 'later', directory: next };
+  assert.equal((await moved.reconcile(id, later)).outcome, 'Confirmed');
+  await fs.writeFile(
+    path.join(next, 'Updates', relative),
+    JSON.stringify({ ...proof, identity: { ...proof.identity, ino: '0' } }),
+  );
+  assert.equal((await moved.reconcile(id, later)).outcome, 'Unknown');
 });

@@ -392,27 +392,28 @@ function completedMoveFile(updatesDirectory: string, operationId: string): strin
   return path.join(updatesDirectory, 'agent-operations', operationId + '-completed-data-move.json');
 }
 
-export async function completedMoveMatches(
+export function completedMoveIdentity(
   updatesDirectory: string,
   operationId: string,
-  dataDirectory: string,
-): Promise<boolean> {
-  if (!guid.test(operationId)) return false;
+  destination: string,
+): DirectoryIdentity | null {
+  if (!guid.test(operationId)) return null;
   try {
     const proof = readStorageJson(completedMoveFile(updatesDirectory, operationId), 16384);
-    return (
+    if (
       storageObject(proof) &&
       storageKeys(proof, ['schemaVersion', 'operationId', 'destination', 'identity']) &&
       proof.schemaVersion === 1 &&
       proof.operationId === operationId &&
       typeof proof.destination === 'string' &&
-      samePath(proof.destination, dataDirectory) &&
-      directoryIdentity(proof.identity) &&
-      sameDirectoryIdentity(await readDirectoryIdentity(dataDirectory), proof.identity)
-    );
+      samePath(proof.destination, destination) &&
+      directoryIdentity(proof.identity)
+    )
+      return proof.identity;
   } catch {
-    return false;
+    // Missing or invalid migration evidence cannot confirm the operation.
   }
+  return null;
 }
 
 /** Runs under the native namespace lease after claiming the original instance lock,

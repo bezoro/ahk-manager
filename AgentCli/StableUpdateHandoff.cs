@@ -23,6 +23,9 @@ internal static class StableUpdateHandoff
     internal const int ChildAccepted = 5;
     internal const int ChildCheckFailed = 7;
     internal const int ChildUnknown = 8;
+    internal const int ChildOperationBlocked = 9;
+    internal const int ChildPreflightBlocked = 10;
+    internal const int ChildCancelled = 11;
 
     internal static StableUpdateInvocation Invocation(string[] args) =>
         args switch
@@ -92,8 +95,15 @@ internal static class StableUpdateHandoff
             return ChildUnknown;
         if (response is { Outcome: "Confirmed", Code: "NoNewerStable" })
             return ChildNoUpdate;
-        if (response is { Outcome: "Failed", Code: "UpdateCheckFailed" })
-            return ChildCheckFailed;
+        if (response.Outcome == "Failed")
+            return response.Code switch
+            {
+                "UpdateCheckFailed" => ChildCheckFailed,
+                "OperationBlocked" => ChildOperationBlocked,
+                "PreflightBlocked" => ChildPreflightBlocked,
+                "CancelledBeforeDispatch" => ChildCancelled,
+                _ => ChildUnknown,
+            };
         if (
             response
                 is {
@@ -122,6 +132,9 @@ internal static class StableUpdateHandoff
                 "OperationAccepted",
                 withOperation: true
             ),
+            ChildOperationBlocked => Reply(id, version, "Failed", "OperationBlocked"),
+            ChildPreflightBlocked => Reply(id, version, "Failed", "PreflightBlocked"),
+            ChildCancelled => Reply(id, version, "Failed", "CancelledBeforeDispatch"),
             ChildCheckFailed => Reply(id, version, "Failed", "UpdateCheckFailed"),
             _ => Reply(id, version, "Unknown", "UpdateDispatchUnconfirmed", withOperation: true),
         };
