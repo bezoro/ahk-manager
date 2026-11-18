@@ -802,12 +802,12 @@ test('metadata-only GitHub history preserves a complete cached rollback even whe
   };
   await f.service.initialize();
   const listed = await f.service.check();
-  assert.equal(listed.releases.find((item) => item.id === metadata().id)?.cached, true);
+  assert.equal(listed.releases.find((item) => item.id === metadata().id)?.cached, false);
   f.hooks.releases = async () => {
     throw new Error('Fixture offline.');
   };
   assert.equal((await f.service.check()).phase, 'error');
-  const state = await f.service.install(metadata().id);
+  const state = await f.service.install('local:1.2.0');
   assert.equal(state.phase, 'installing');
   assert.deepEqual(f.resolved, []);
   assert.deepEqual(f.downloaded, []);
@@ -1175,4 +1175,30 @@ test('an unavailable or inconsistent official stable check is not a no-update re
   assert.deepEqual(f.confirmed, []);
   assert.deepEqual(f.applied, []);
   assert.equal(f.service.busy, false);
+});
+
+test('historical same-version cache cannot replace a resolved GitHub archive', async () => {
+  const f = fixture();
+  f.store.items = [{ ...cached('1.2.0'), sha256: 'f'.repeat(64) }];
+  f.hooks.releases = async () => [metadata()];
+  await f.service.check();
+  assert.equal((await f.service.install(metadata().id)).phase, 'installing');
+  assert.equal(f.downloaded.length, 1);
+  assert.equal(f.applied[0]?.target.sha256, hash);
+});
+
+test('invalid cached publisher signature repairs an online target and rejects a local-only target', async () => {
+  for (const remote of [false, true]) {
+    const f = fixture();
+    f.store.items = [cached('1.2.0')];
+    f.hooks.releases = async () => (remote ? [release('1.2.0')] : []);
+    f.boundary.verifyPublisher = async () => {
+      throw new Error('Invalid cached signature');
+    };
+    await f.service.check();
+    const state = await f.service.install(remote ? release('1.2.0').id : 'local:1.2.0');
+    assert.equal(state.phase, remote ? 'installing' : 'error');
+    assert.equal(f.downloaded.length, remote ? 1 : 0);
+    assert.equal(f.applied.length, remote ? 1 : 0);
+  }
 });

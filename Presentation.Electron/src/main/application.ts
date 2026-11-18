@@ -137,6 +137,7 @@ export function startManager(): void {
   let closeAgent: (() => Promise<void>) | null = null;
   let desktopReady = false;
   let explicitWindowPending = false;
+  let rendererNeedsReload = false;
   let windowLoading: Promise<void> | null = null;
   let cliExitPending = false;
   let deployment: DeploymentLayout;
@@ -165,6 +166,7 @@ export function startManager(): void {
   let window: BrowserWindow | null = null;
   let guard: DocumentGuard | null = null;
   let backend: BackendClient | null = null;
+  let retryableProfileOwner: BackendClient | null = null;
   let controller: ManagerController | null = null;
   let tray: Tray | null = null;
   let trayRegistered = false;
@@ -717,10 +719,18 @@ export function startManager(): void {
   }
   async function ensureWindow(): Promise<void> {
     if (windowLoading) return windowLoading;
-    if (window && !window.isDestroyed()) return;
-    windowLoading = openWindow();
+    if (window && !window.isDestroyed()) {
+      if (!rendererNeedsReload) return;
+      windowLoading = window.loadURL(APP_URL);
+    } else {
+      windowLoading = openWindow();
+    }
+    rendererNeedsReload = false;
     try {
       await windowLoading;
+    } catch (error) {
+      rendererNeedsReload = true;
+      throw error;
     } finally {
       windowLoading = null;
     }
@@ -753,6 +763,7 @@ export function startManager(): void {
       }
     });
     window.webContents.on('render-process-gone', () => {
+      rendererNeedsReload = true;
       rendererReady = false;
       documentLease = null;
       preflight.invalidate();
@@ -792,7 +803,6 @@ export function startManager(): void {
     await serveAssets();
     lockSession();
     Menu.setApplicationMenu(null);
-    desktopReady = true;
     nativeTheme.on('updated', updateTheme);
     systemPreferences.on('accent-color-changed', updateTheme);
     const native = {
@@ -902,6 +912,7 @@ export function startManager(): void {
     await configureUpdates();
     registerIpc();
     registerCommands();
+    desktopReady = true;
     if (!agentHost) await ensureWindow();
     createTray();
     updateTheme();
@@ -975,38 +986,44 @@ export function startManager(): void {
     if (stopExit.active) throw new Error(t.stopExitBusy);
     if (quitting) throw new Error(t.closing);
     if (!controller) throw new Error('Controller unavailable');
-    if (backend && !backend.exited) throw new Error(t.backendStillAlive(backend.pid));
+    const liveOwner = backend && !backend.exited ? backend : null;
+    if (liveOwner && (!liveOwner.ready || retryableProfileOwner !== liveOwner))
+      throw new Error(t.backendStillAlive(liveOwner.pid));
+    retryableProfileOwner = null;
     agentCommands?.invalidate();
-    backend = new BackendClient({
-      executable: packagedBackend(path.dirname(process.execPath)),
-      hostExecutable: process.execPath,
-      commandLog: commandTrace,
-      ...(initialAdoption.descriptor ? { startupAdoption: initialAdoption.descriptor } : {}),
-    });
+    const owner =
+      liveOwner ??
+      new BackendClient({
+        executable: packagedBackend(path.dirname(process.execPath)),
+        hostExecutable: process.execPath,
+        commandLog: commandTrace,
+        ...(initialAdoption.descriptor ? { startupAdoption: initialAdoption.descriptor } : {}),
+      });
+    if (!liveOwner) {
+      backend = owner;
+      controller.setAuthority(owner);
+      owner.on('snapshot', (snapshot: ManagerSnapshot) => controller?.setSnapshot(snapshot));
+      owner.on('unavailable', (error: Error) => {
+        if (!quitting) {
+          agentCommands?.invalidate();
+          controller?.setConnection('failed', error.message);
+        }
+      });
+    }
     if (adoptionPending) controller.setAdministrationPending(true);
-    controller.setAuthority(backend);
     controller.setConnection('starting');
-    backend.on('snapshot', (snapshot: ManagerSnapshot) => controller?.setSnapshot(snapshot));
-    backend.on('unavailable', (error: Error) => {
-      if (!quitting) {
-        agentCommands?.invalidate();
-        controller?.setConnection('failed', error.message);
-      }
-    });
     try {
-      await trace('backend', 'start', () => backend!.start());
-      controller.setHostAuthority(backend.authorityMode);
-      const initialized = await backend.request<OperationResult>('initializeProfile', {});
-      if (initialized.outcome !== 'Confirmed')
+      if (!liveOwner) await trace('backend', 'start', () => owner.start());
+      controller.setHostAuthority(owner.authorityMode);
+      const initialized = await owner.request<OperationResult>('initializeProfile', {});
+      if (initialized.outcome !== 'Confirmed') {
+        retryableProfileOwner = owner;
         throw new Error(initialized.detail ?? 'The application profile could not be prepared.');
-      controller.setSnapshot(await backend.request<ManagerSnapshot>('load', {}));
+      }
+      controller.setSnapshot(await owner.request<ManagerSnapshot>('load', {}));
       controller.setConnection('ready');
       if (initialAdoption.descriptor) {
-        const result = await backend.request<OperationResult>(
-          'adoptStartupContinuation',
-          {},
-          150000,
-        );
+        const result = await owner.request<OperationResult>('adoptStartupContinuation', {}, 150000);
         adoptionPending = startupAdoptionBlocksInteraction(result);
         controller.setAdministrationPending(adoptionPending);
         if (!lifecycle.quietStartup) show();
@@ -1194,7 +1211,8 @@ export function startManager(): void {
       stopExit.active ||
       quitting ||
       !backend?.ready ||
-      !controller ||
+      controller?.state.connection !== 'ready' ||
+      !controller.state.snapshot ||
       !lifecycle.takeLogin()
     )
       return;
@@ -1493,7 +1511,7 @@ export function startManager(): void {
           return failed('OperationNotFound');
         await confirm(t.continuationTitle, t.continuationDetail(offer.scriptNames), offer);
         // Startup adoption owns the original normal-to-administrator process handoff.
-        return failed('StartupHandoffRequired');
+        return failed('StartupHandoffRequired', { offer });
       },
       update: requestAgentUpdate,
       updateLatest: requestAgentUpdateLatest,
@@ -1670,20 +1688,22 @@ export function startManager(): void {
       return;
     }
     if (quitting) return;
+    if (
+      lifecycle.closeAction(
+        controller?.state.snapshot?.settings.closeBehavior ?? 'Exit',
+        trayRegistered,
+      ) === 'exit'
+    ) {
+      await quit();
+      return;
+    }
     try {
       await controller?.savePlacement();
     } catch (error) {
       controller?.setConnection('failed', safeError(error));
     }
-    if (
-      lifecycle.closeAction(
-        controller?.state.snapshot?.settings.closeBehavior ?? 'Exit',
-        trayRegistered,
-      ) === 'hide'
-    ) {
-      window?.hide();
-      updateTray();
-    } else await quit();
+    window?.hide();
+    updateTray();
   }
   async function quit(administrativeAcknowledgement = false, quiet = false): Promise<void> {
     if (cliExitPending || transitions.active) return;
@@ -1832,7 +1852,7 @@ export function startManager(): void {
       retryBackend: async () => {
         if (shutdown.inFlight) throw new Error('Wait for confirmed backend shutdown.');
         await startBackend();
-        if (backend?.ready && !agentScope() && !agentHost) await runLogin();
+        if (hostReady() && !agentScope() && !agentHost) await runLogin();
         if (backend) registerPortableApplication(backend);
       },
       selectionChanged: (selected) => {

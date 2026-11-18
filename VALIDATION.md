@@ -6,12 +6,12 @@ Validation applies to the portable product and the exact reviewed source commit.
 
 [Windows CI](.github/workflows/windows-ci.yml) runs after changes reach `main`. A maintainer can explicitly request a substantial PR validation; ordinary branch pushes and PR commits do not spend Windows runner time. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-| Evidence                                                | What to verify                                                                                                                                                      |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `windows-ci-evidence`                                   | Locked restore, formatting, architecture, .NET and Node checks, native protocol/storage tests, backend snapshots, launcher manifest and actual child-token evidence |
-| `windows-ui-evidence`                                   | Renderer assertion results, graceful fixture shutdown, and light/dark, narrow and zoom captures                                                                     |
-| `windows-portable` or `windows-portable-test-<attempt>` | The exact versioned portable ZIP, protocol-2 manifest, hashes and optional signature                                                                                |
-| Portable-updater scenario artifacts                     | Real application update and rollback outcomes, source identity, selected data paths, preservation and cleanup receipts                                              |
+| Evidence                                                          | What to verify                                                                                                                                                      |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `windows-ci-evidence-<attempt>`                                   | Locked restore, formatting, architecture, .NET and Node checks, native protocol/storage tests, backend snapshots, launcher manifest and actual child-token evidence |
+| `windows-ui-evidence-<attempt>`                                   | Renderer assertion results, graceful fixture shutdown, and light/dark, narrow and zoom captures                                                                     |
+| `windows-portable-<attempt>` or `windows-portable-test-<attempt>` | The exact versioned portable ZIP, protocol-2 manifest, hashes and optional signature                                                                                |
+| Portable-updater scenario artifacts                               | Real application update and rollback outcomes, source identity, selected data paths, preservation and cleanup receipts                                              |
 
 Report the workflow run, source commit, package version, assertion counts and any skips from that run's actual results. Preserve failing stdout, stderr, result documents and recovery records. Do not report expected counts as observed results or treat missing evidence as a passing skip.
 

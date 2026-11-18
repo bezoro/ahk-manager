@@ -182,6 +182,10 @@ async function assertUpdatesSettled(dataDirectory: string): Promise<void> {
     const entry = await fs.lstat(operation);
     if (!entry.isDirectory() || entry.isSymbolicLink())
       throw fail('The update recovery history could not be verified.');
+    // Earlier versions created an empty operation before writing its plan. The helper
+    // requires that plan to start. Leave any other incomplete evidence untouched.
+    assertStoragePath(operation);
+    if ((await fs.readdir(operation)).length === 0) continue;
     const outcomePath = path.join(operation, 'outcome.json');
     if (await dataDirectoryExists(outcomePath)) {
       const outcome = readStorageJson(outcomePath, 65536);
@@ -392,27 +396,28 @@ function completedMoveFile(updatesDirectory: string, operationId: string): strin
   return path.join(updatesDirectory, 'agent-operations', operationId + '-completed-data-move.json');
 }
 
-export async function completedMoveMatches(
+export function completedMoveIdentity(
   updatesDirectory: string,
   operationId: string,
-  dataDirectory: string,
-): Promise<boolean> {
-  if (!guid.test(operationId)) return false;
+  destination: string,
+): DirectoryIdentity | null {
+  if (!guid.test(operationId)) return null;
   try {
     const proof = readStorageJson(completedMoveFile(updatesDirectory, operationId), 16384);
-    return (
+    if (
       storageObject(proof) &&
       storageKeys(proof, ['schemaVersion', 'operationId', 'destination', 'identity']) &&
       proof.schemaVersion === 1 &&
       proof.operationId === operationId &&
       typeof proof.destination === 'string' &&
-      samePath(proof.destination, dataDirectory) &&
-      directoryIdentity(proof.identity) &&
-      sameDirectoryIdentity(await readDirectoryIdentity(dataDirectory), proof.identity)
-    );
+      samePath(proof.destination, destination) &&
+      directoryIdentity(proof.identity)
+    )
+      return proof.identity;
   } catch {
-    return false;
+    // Missing or invalid migration evidence cannot confirm the operation.
   }
+  return null;
 }
 
 /** Runs under the native namespace lease after claiming the original instance lock,

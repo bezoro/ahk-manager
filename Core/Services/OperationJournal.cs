@@ -7,6 +7,7 @@ public sealed class OperationJournal(string path)
 {
     JournalDocument document = new();
     string? fingerprint;
+    bool validated;
     public bool Ready { get; private set; }
     public IReadOnlyList<OperationRecord> Records => document.Operations.AsReadOnly();
     public bool HasPending => document.Operations.Any(IsPending);
@@ -26,6 +27,7 @@ public sealed class OperationJournal(string path)
     public async Task LoadAsync(CancellationToken ct = default)
     {
         Ready = false;
+        validated = false;
         var bytes = await SafeJsonFiles.ReadAsync(path, ct).ConfigureAwait(false);
         fingerprint = bytes is null ? null : SafeJsonFiles.Hash(bytes);
         if (bytes is not null)
@@ -69,7 +71,29 @@ public sealed class OperationJournal(string path)
             )
                 throw new InvalidDataException("Invalid operation journal entries.");
         }
+        else
+            document = new();
+        validated = true;
         Ready = true;
+    }
+
+    // Only resume from the exact last validated document. A changed or missing
+    // ledger could conceal an already dispatched operation.
+    internal async Task<bool> TryRecoverAsync(CancellationToken ct)
+    {
+        if (!validated)
+            return false;
+        try
+        {
+            using var lease = SafeJsonFiles.OpenWriterLease(path);
+            var bytes = await SafeJsonFiles.ReadAsync(path, ct).ConfigureAwait(false);
+            Ready = (bytes is null ? null : SafeJsonFiles.Hash(bytes)) == fingerprint;
+            return Ready;
+        }
+        catch (Exception ex) when (SafeJsonFiles.Known(ex))
+        {
+            return false;
+        }
     }
 
     public async Task<OperationResult> PutAsync(

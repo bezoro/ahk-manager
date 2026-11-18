@@ -154,29 +154,17 @@ public sealed class SettingsStore(string path, bool managerRequiresAdministrator
                 await gate.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
+                    using var lease = SafeJsonFiles.OpenWriterLease(FilePath);
                     var backup =
                         await SafeJsonFiles.ReadAsync(FilePath + ".bak", ct).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Backup absent.");
                     _ = Parse(backup);
-                    var primary = await SafeJsonFiles.ReadAsync(FilePath, ct).ConfigureAwait(false);
-                    // Preserve the invalid/old primary separately; never replace the valid recovery backup with it.
-                    if (primary is not null)
-                        await SafeJsonFiles
-                            .WriteNewAsync(
-                                FilePath + ".recovery-" + Guid.NewGuid().ToString("N"),
-                                primary,
-                                ct
-                            )
-                            .ConfigureAwait(false);
-                    fingerprint = await SafeJsonFiles
-                        .ReplaceAsync(
-                            FilePath,
-                            backup,
-                            primary is null ? null : SafeJsonFiles.Hash(primary),
-                            ct,
-                            false
-                        )
+                    SafeJsonFiles.SafePath(FilePath);
+                    string recoveryPath = FilePath + ".recovery-" + Guid.NewGuid().ToString("N");
+                    await SafeJsonFiles
+                        .InstallAsync(FilePath, backup, File.Exists(FilePath), recoveryPath, ct)
                         .ConfigureAwait(false);
+                    fingerprint = SafeJsonFiles.Hash(backup);
                     loaded = true;
                     ReadOnly = false;
                     return new OperationResult(Outcome.Confirmed);

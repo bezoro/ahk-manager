@@ -29,6 +29,15 @@ $request = { param($Uri) if (-not $responses.ContainsKey($Uri)) { throw 'Unexpec
 $context = Get-TestReleaseContext -Repository $repository.full_name -RunId 7 -Request $request
 Assert-Preview ($context.Commit -ceq $run.head_sha -and $context.PullRequest -eq 2 -and $context.ArtifactId -eq 9 -and $context.RunNumber -eq 20 -and $context.Attempt -eq 1) 'successful current same-repository PR and exact artifact are admitted'
 
+$run.run_attempt = 2
+$producer = [pscustomobject]@{ name = 'Build and isolated tests (Windows x64)'; run_id = 7L; head_sha = $run.head_sha; conclusion = 'success'; run_attempt = 1 }
+$responses["$base/actions/runs/7/jobs?filter=all&per_page=100"] = [pscustomobject]@{ total_count = 1; jobs = @($producer) }
+$retried = Get-TestReleaseContext -Repository $repository.full_name -RunId 7 -Request $request
+Assert-Preview ($retried.Attempt -eq 1 -and $retried.ValidationAttempt -eq 2 -and $retried.ArtifactId -eq 9) 'a downstream-only retry uses the actual successful package producer'
+$producer.run_attempt = 2
+Assert-Refused { Get-TestReleaseContext -Repository $repository.full_name -RunId 7 -Request $request } 'a rebuilt producer cannot fall back to an earlier package'
+$run.run_attempt = 1
+
 foreach ($case in @(
     @{ object = $run; field = 'conclusion'; value = 'failure'; name = 'failed CI run' },
     @{ object = $run; field = 'event'; value = 'pull_request_target'; name = 'privileged PR event' },
@@ -108,11 +117,15 @@ Assert-Refused { Read-TestReleaseArtifactIdentity $zip } 'duplicate JSON identit
 
 # Exercise the actual publisher, including its last provenance check, with no
 # network fallback and no executable launched from the fixture artifact.
-$global:AhkPreviewPublisherFixture = @{ Responses = $responses; Release = $null; Tag = $null; Calls = [Collections.Generic.List[string]]::new(); Created = $null; Published = $null; ChangeHead = $false; FailAssetName = $null; MutatePathAfterArchive = $null }
+$global:AhkPreviewPublisherFixture = @{ EvidenceRef = $null; EvidenceBlob = $null; Responses = $responses; Release = $null; Tag = $null; Calls = [Collections.Generic.List[string]]::new(); Created = $null; Published = $null; ChangeHead = $false; FailAssetName = $null; MutatePathAfterArchive = $null }
+. (Join-Path $PSScriptRoot 'test-support/ReleaseEvidenceFixture.ps1')
 function Invoke-RestMethod {
     param($Uri, $Method = 'Get', $Headers, $ContentType, $Body, $InFile)
     $fixture = $global:AhkPreviewPublisherFixture
     $fixture.Calls.Add("$Method $Uri")
+    if ($Uri -match '/git/(?:ref/tags/portable-evidence/|blobs(?:/|$))' -or ($Method -ceq 'Post' -and $Uri.EndsWith('/git/refs') -and ($Body | ConvertFrom-Json).ref.StartsWith('refs/tags/portable-evidence/'))) {
+        return Invoke-ReleaseEvidenceFixture $fixture $Method $Uri $Body
+    }
     if ($Method -eq 'Get' -and $fixture.Responses.ContainsKey($Uri)) { return $fixture.Responses[$Uri] }
     if ($Method -eq 'Get' -and $Uri -match '/git/ref/tags/') {
         if ($null -ne $fixture.Tag) { return $fixture.Tag }

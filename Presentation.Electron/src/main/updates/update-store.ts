@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { UpdateStaging } from './update-staging.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, type BigIntStats, type Stats } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -301,73 +302,57 @@ export class UpdateStore {
       throw new Error('The cached update metadata does not match the checked release.');
     return requirePortablePackageProof(manifest, entry);
   }
+  private readonly downloads = new Map<string, UpdateStaging>();
+
+  async beginPortableDownload(): Promise<UpdateStaging> {
+    const root = path.join(this.root, 'downloads');
+    await this.safeDirectory(root, true);
+    const stage = await UpdateStaging.create(path.join(root, 'portable-'), (dir) =>
+      this.safeDirectory(dir),
+    );
+    this.downloads.set(path.join(stage.directory, 'archive.zip'), stage);
+    return stage;
+  }
+
   async discardPortableDownload(source: string): Promise<void> {
+    const stage = this.downloads.get(source);
     try {
-      const directory = path.dirname(source);
-      if (
-        path.dirname(directory) !== path.join(this.root, 'downloads') ||
-        !/^portable-[A-Za-z0-9]+$/.test(path.basename(directory)) ||
-        path.basename(source) !== 'archive.zip'
-      )
-        throw new Error('Invalid staging path.');
-      await this.safeDirectory(directory);
-      const allowed = new Set(['archive.zip', portableManifestFile, portableSignatureFile]);
-      const files = await fs.readdir(directory);
-      for (const name of files) {
-        if (!allowed.has(name)) throw new Error('Unknown staging entry.');
-        const stat = await fs.lstat(path.join(directory, name));
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
-          throw new Error('Invalid staging file.');
-      }
-      for (const name of files) await fs.unlink(path.join(directory, name));
-      await fs.rmdir(directory);
+      if (!stage) throw new Error('Unknown staging directory.');
+      await stage.discard();
     } catch {
       throw new Error('The temporary update download could not be removed.');
+    } finally {
+      this.downloads.delete(source);
     }
   }
-  private async cachePortableProof(
-    source: string,
-    destination: string,
-    expected: { version: string; sha256: string; bytes: number },
-  ): Promise<void> {
-    const manifest = path.join(source, portableManifestFile);
+
+  private async signature(directory: string): Promise<Buffer | undefined> {
+    const file = path.join(directory, portableSignatureFile);
     try {
-      await this.regular(manifest, 65536);
+      await this.regular(file, 65536);
+      return await fs.readFile(file);
     } catch (error) {
-      if (missing(error)) throw new Error('The portable package release metadata is unavailable.');
+      if (missing(error)) return undefined;
       throw error;
     }
-    const bytes = await fs.readFile(manifest);
-    requirePortablePackageProof(new TextDecoder('utf-8', { fatal: true }).decode(bytes), expected);
-    for (const name of [portableManifestFile, portableSignatureFile]) {
-      const input = path.join(source, name);
-      try {
-        await this.regular(input, 65536);
-      } catch (error) {
-        if (missing(error) && name === portableSignatureFile) continue;
-        throw error;
-      }
-      const target = path.join(destination, name);
-      try {
-        await this.regular(target, 65536);
-      } catch (error) {
-        if (!missing(error)) throw error;
-      }
-      const temporary = path.join(destination, `proof-${randomUUID()}.tmp`);
-      await fs.copyFile(input, temporary, 1);
-      try {
-        if (name === portableManifestFile)
-          requirePortablePackageProof(
-            new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(temporary)),
-            expected,
-          );
-        await fs.rename(temporary, target);
-      } finally {
-        await fs.unlink(temporary).catch(() => {});
-      }
+  }
+
+  async cache(
+    versionName: string,
+    source: string,
+    sha256: string,
+    bytes: number,
+  ): Promise<CachedPackage> {
+    try {
+      return await this.publishCache(versionName, source, sha256, bytes);
+    } finally {
+      // An inaccessible or replaced download stays available for inspection. Cleanup
+      // cannot change the publication result or hide its original failure.
+      if (this.downloads.has(source)) await this.discardPortableDownload(source).catch(() => {});
     }
   }
-  async cache(
+
+  private async publishCache(
     versionName: string,
     source: string,
     sha256: string,
@@ -376,70 +361,105 @@ export class UpdateStore {
     if (!version(versionName) || !digest(sha256)) throw new Error('The update version is invalid.');
     if ((await this.regular(source)).size !== bytes || (await this.hash(source)) !== sha256)
       throw new Error('The downloaded package failed its integrity check.');
-
-    const proof = path.join(path.dirname(source), portableManifestFile);
-    await this.regular(proof, 65536);
-    requirePortablePackageProof(
-      new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(proof)),
-      { version: versionName, sha256, bytes },
-    );
-
-    const directory = path.join(this.root, 'installers', versionName);
-    await this.safeDirectory(directory, true);
-    const archivePath = path.join(directory, packageFileName());
-    let existing = (await this.cached()).find(
-      (item) => item.version === versionName && item.sha256 === sha256 && item.bytes === bytes,
-    );
-    if (existing) {
-      try {
-        await this.verify(existing);
-      } catch {
-        /* Preserve corrupt bytes below and replace through a fresh file. */
-        existing = undefined;
-      }
-    }
-    if (existing) {
-      // A valid archive can still need a fresh signature after interrupted cache
-      // publication. Retain the archive while repairing its downloaded proof.
-      await this.cachePortableProof(path.dirname(source), directory, {
-        version: versionName,
-        sha256,
-        bytes,
-      });
-      // A completed package remains valid if temporary cleanup fails.
-      await this.discardPortableDownload(source).catch(() => {});
-      return existing;
-    }
-    const temporary = path.join(directory, `download-${randomUUID()}.tmp`);
-    await fs.copyFile(source, temporary, 1);
-    if ((await this.hash(temporary)) !== sha256)
-      throw new Error('The package changed while preparing the update.');
+    const proofPath = path.join(path.dirname(source), portableManifestFile);
+    await this.regular(proofPath, 65536);
+    const proof = await fs.readFile(proofPath);
+    const manifest = new TextDecoder('utf-8', { fatal: true }).decode(proof);
+    requirePortablePackageProof(manifest, { version: versionName, sha256, bytes });
+    const signature = await this.signature(path.dirname(source));
+    const history = path.join(this.root, 'installers');
+    await this.safeDirectory(history, true);
+    const directory = path.join(history, versionName);
+    let original: BigIntStats | undefined;
     try {
-      await this.regular(archivePath);
-      await fs.rename(archivePath, path.join(directory, `preserved-${randomUUID()}.zip`));
+      await this.safeDirectory(directory);
+      original = await fs.lstat(directory, { bigint: true });
     } catch (error) {
       if (!missing(error)) throw error;
     }
-    await fs.rename(temporary, archivePath);
-    await this.cachePortableProof(path.dirname(source), directory, {
+    const entry = {
       version: versionName,
+      archivePath: path.join(directory, packageFileName()),
       sha256,
       bytes,
-    });
-    const receipt = path.join(directory, 'receipt.json');
-    const tempReceipt = path.join(directory, `receipt-${randomUUID()}.tmp`);
-    await this.writeNew(
-      tempReceipt,
-      JSON.stringify({
-        schemaVersion: 1,
-        updateProtocol: packageProtocol(),
-        version: versionName,
-        sha256,
-        bytes,
-      }),
+    };
+    if (original) {
+      const existing = (await this.cached()).find(
+        (item) => item.version === versionName && item.sha256 === sha256 && item.bytes === bytes,
+      );
+      if (existing) {
+        try {
+          await this.verify(existing, manifest);
+          const saved = await this.signature(directory);
+          if (signature ? saved && signature.equals(saved) : !saved) return existing;
+        } catch {
+          // Replace the complete edition, retaining the earlier archive and its proof together.
+        }
+      }
+    }
+    const stage = await UpdateStaging.create(path.join(history, '.cache-'), (dir) =>
+      this.safeDirectory(dir),
     );
-    await fs.rename(tempReceipt, receipt);
-    await this.discardPortableDownload(source).catch(() => {});
-    return { version: versionName, archivePath, sha256, bytes };
+    let published = false;
+    try {
+      const archive = await stage.open(packageFileName());
+      try {
+        const input = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        try {
+          const opened = await input.stat();
+          requireRegular(opened, maximumUpdateBytes);
+          if (opened.size !== bytes) throw changed();
+          for await (const chunk of input.createReadStream({ end: bytes - 1 })) {
+            await archive.writeFile(chunk as Buffer);
+          }
+          await archive.sync();
+        } finally {
+          await input.close();
+        }
+      } finally {
+        await archive.close();
+      }
+      if ((await this.hash(path.join(stage.directory, packageFileName()))) !== sha256)
+        throw new Error('The package changed while preparing the update.');
+      await stage.write(portableManifestFile, proof);
+      if (signature) await stage.write(portableSignatureFile, signature);
+      await stage.write(
+        'receipt.json',
+        JSON.stringify({
+          schemaVersion: 1,
+          updateProtocol: packageProtocol(),
+          version: versionName,
+          sha256,
+          bytes,
+        }),
+      );
+      await stage.verify();
+      const preserved = path.join(history, 'preserved-' + randomUUID());
+      if (original) {
+        await this.safeDirectory(directory);
+        const current = await fs.lstat(directory, { bigint: true });
+        if (!sameFile(current, original)) throw changed();
+        await fs.rename(directory, preserved);
+      }
+      try {
+        await fs.rename(stage.directory, directory);
+      } catch (error) {
+        if (original) {
+          // Restore only to an absent name. Preserve the full backup on any conflict.
+          const occupant = await fs.lstat(directory).catch((e: unknown) => {
+            if (!missing(e)) throw e;
+            return null;
+          });
+          await this.safeDirectory(preserved);
+          const backup = await fs.lstat(preserved, { bigint: true });
+          if (!occupant && sameFile(backup, original)) await fs.rename(preserved, directory);
+        }
+        throw error;
+      }
+      published = true;
+      return entry;
+    } finally {
+      if (!published) await stage.discard().catch(() => {});
+    }
   }
 }

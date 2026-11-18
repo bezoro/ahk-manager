@@ -82,7 +82,7 @@ foreach ($bad in @(@($entries[0], $entries[1]), @($entries[0], @{ name = 'ahk-ma
 $publisher = Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1'
 $parameters = @{ PortableArchivePath = $archivePath; PortableManifestPath = $portableManifestPath; Repository = 'bezoro/ahk-manager'; Commit = $Commit; Channel = 'test'; TestRunId = 7 }
 & $publisher @parameters -ValidateOnly
-$RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.ChangeHead = $false
+$RequestFixture.EvidenceRef = $null; $RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.ChangeHead = $false
 $RequestFixture.Responses['https://api.github.com/repos/bezoro/ahk-manager/pulls/2'].head.sha = $Commit
 & $publisher @parameters
 Assert-PortableCheck (-not $RequestFixture.Release.draft -and $RequestFixture.Release.assets.Count -eq 2) 'portable archive and manifest are uploaded before a single prerelease publication'
@@ -106,13 +106,13 @@ $portableAsset.digest = 'sha256:' + ('0' * 64)
 Assert-PortableRefused { & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit -PortableArchivePath $archivePath -PortableManifestPath $portableManifestPath } 'already-published status cannot hide different portable bytes'
 $portableAsset.digest = $originalDigest
 Assert-PortableRefused { & (Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1') -Repository 'bezoro/ahk-manager' -Version $Version -Commit $Commit -RequirePortableSignature } 'signed portable policy refuses a release missing its sidecar'
-$RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.FailAssetName = 'ahk-manager-portable-release.json'
+$RequestFixture.EvidenceRef = $null; $RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.FailAssetName = 'ahk-manager-portable-release.json'
 Assert-PortableRefused { & $publisher @parameters } 'portable upload interruption prevents publication'
 Assert-PortableCheck ($null -eq $RequestFixture.Published -and $RequestFixture.Release.draft -and $RequestFixture.Release.assets.Count -eq 1) 'an interrupted portable family remains a recoverable draft'
 $RequestFixture.FailAssetName = $null
 & $publisher @parameters
 Assert-PortableCheck (-not $RequestFixture.Release.draft -and $RequestFixture.Release.assets.Count -eq 2) 'retry resumes identical draft assets and publishes only the complete family'
-$RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.MutatePathAfterArchive = $archivePath
+$RequestFixture.EvidenceRef = $null; $RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null; $RequestFixture.MutatePathAfterArchive = $archivePath
 Assert-PortableRefused { & $publisher @parameters } 'a portable file changed during upload cannot redefine the approved package digest'
 Assert-PortableCheck ($null -eq $RequestFixture.Published -and $RequestFixture.Release.draft) 'concurrent package mutation leaves its mismatched asset family unpublished'
 [IO.File]::WriteAllBytes($archivePath, [byte[]](3, 1, 4, 1, 5, 9))
@@ -160,7 +160,7 @@ try {
         if ($PassThru) { return [pscustomobject]@{ ManifestSha256 = $identity.ManifestSha256; SignatureSha256 = $identity.SignatureSha256; Bytes = $identity.Bytes } }
     }
     $savedPublisher = $env:AHK_PUBLISHER_NAME
-    $RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null
+    $RequestFixture.EvidenceRef = $null; $RequestFixture.Release = $null; $RequestFixture.Tag = $null; $RequestFixture.Published = $null
     try {
         & $module { param($Verifier) Set-Item Function:script:Assert-PortableManifestSignature $Verifier; Export-ModuleMember -Function Assert-PortableManifestSignature } $fixtureVerifier
         $env:AHK_PUBLISHER_NAME = 'Portable Fixture Publisher'

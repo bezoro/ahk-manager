@@ -2,6 +2,12 @@ using System.Buffers.Binary;
 using System.Text.Json;
 using Bezoro.AhkManager.AgentCli;
 
+if (args is ["--handoff-results"])
+{
+    StableUpdateHandoffChecks.CheckOutcomes(Guid.NewGuid());
+    return;
+}
+
 if (args is ["--mcp"])
 {
     await McpTransportChecks.Run();

@@ -212,11 +212,14 @@ test('changed cached bytes are refused and a verified replacement preserves the 
   const repaired = await cache(store, '1.2.4', source, sha(body), body.length);
   await store.verify(repaired);
   const directory = path.dirname(value.archivePath);
-  const preserved = (await fs.readdir(directory)).filter(
-    (name) => name.startsWith('preserved-') && name.endsWith('.zip'),
+  const preserved = (await fs.readdir(path.dirname(directory))).filter((name) =>
+    name.startsWith('preserved-'),
   );
   assert.equal(preserved.length, 1);
-  assert.deepEqual(await fs.readFile(path.join(directory, preserved[0]!)), corrupt);
+  assert.deepEqual(
+    await fs.readFile(path.join(path.dirname(directory), preserved[0]!, 'archive.zip')),
+    corrupt,
+  );
   assert.deepEqual(await fs.readFile(repaired.archivePath), body);
 });
 
@@ -497,4 +500,52 @@ test('a cached archive with identical bytes must match the full verified release
   const other = JSON.stringify({ ...JSON.parse(saved), notes: 'A different release manifest.' });
   await assert.rejects(store.verify(entry, other), /does not match the checked release/);
   await store.verify(entry);
+});
+
+test('publication failure restores the previous cache and removes both owned staging directories', async (t) => {
+  const { store, source, body } = await fixture(t);
+  const entry = await cache(store, '1.2.4', source, sha(body), body.length);
+  const stage = await store.beginPortableDownload();
+  const replacement = Buffer.from('another verified archive');
+  await stage.write('archive.zip', replacement);
+  const proof = JSON.parse(
+    await fs.readFile(path.join(path.dirname(source), 'release.json'), 'utf8'),
+  );
+  proof.archive = {
+    ...proof.archive,
+    bytes: replacement.length,
+    sha256: sha(replacement),
+    sha512: createHash('sha512').update(replacement).digest('base64'),
+  };
+  await stage.write('release.json', JSON.stringify(proof));
+  const rename = fs.rename;
+  t.mock.method(fs, 'rename', async (from: string, to: string) => {
+    if (path.basename(from).startsWith('.cache-'))
+      throw Object.assign(new Error('sharing violation'), { code: 'EBUSY' });
+    return rename(from, to);
+  });
+  await assert.rejects(
+    store.cache(
+      '1.2.4',
+      path.join(stage.directory, 'archive.zip'),
+      sha(replacement),
+      replacement.length,
+    ),
+    { code: 'EBUSY' },
+  );
+  await store.verify(entry);
+  assert.deepEqual(await fs.readdir(path.join(store.root, 'installers')), ['1.2.4']);
+  assert.deepEqual(await fs.readdir(path.join(store.root, 'downloads')), []);
+});
+
+test('cache failure keeps its primary error and preserves replaced download entries', async (t) => {
+  const { store } = await fixture(t);
+  const stage = await store.beginPortableDownload();
+  const source = path.join(stage.directory, 'archive.zip');
+  await stage.write('archive.zip', 'original');
+  await fs.rename(source, path.join(stage.directory, 'first.zip'));
+  await fs.writeFile(source, 'replaced');
+  await assert.rejects(store.cache('1.2.4', source, sha('original'), 8), /integrity/);
+  assert.equal(await fs.readFile(source, 'utf8'), 'replaced');
+  assert.equal(await fs.readFile(path.join(stage.directory, 'first.zip'), 'utf8'), 'original');
 });

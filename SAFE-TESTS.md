@@ -18,7 +18,7 @@ The native Windows self-test also creates a private, nonce-bound Cloud Files syn
 
 ## Interface captures
 
-`tools/Test-ElectronPresentation.ps1` opens the production renderer with a synthetic Electron host. It does not connect to the backend or execute scripts. It exercises light and dark themes, narrow layouts, 200% zoom, updates and rollback, preferences, and preparing or cancelling a custom data location. Screenshots and assertion results are saved in `windows-ui-evidence`.
+`tools/Test-ElectronPresentation.ps1` opens the production renderer with a synthetic Electron host. It does not connect to the backend or execute scripts. It exercises light and dark themes, narrow layouts, 200% zoom, updates and rollback, preferences, and preparing or cancelling a custom data location. Screenshots and assertion results are saved in `windows-ui-evidence-<attempt>`.
 
 These captures establish layout and control behavior with solid backgrounds. They do not establish Windows Mica composition, interactive UAC, or behavior at the next real sign-in. Inspect the captures when changing the interface.
 

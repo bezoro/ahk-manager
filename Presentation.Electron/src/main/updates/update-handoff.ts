@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { UpdateStaging } from './update-staging.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { CachedPackage, UpdateStore } from './update-store.js';
 import { observeUpdateHost, updateHostRefusalMessage } from './update-host-diagnostics.js';
@@ -155,7 +156,7 @@ export async function prepareUpdate(
     throw new Error('The update helper could not be verified.');
   const directory = path.join(store.root, 'operations', operationId);
   await store.safeDirectory(path.dirname(directory), true);
-  await fs.mkdir(directory, { mode: 0o700 });
+
   const plan = {
     schemaVersion: 2,
     deployment: 'portable',
@@ -171,7 +172,24 @@ export async function prepareUpdate(
   };
   const bytes = Buffer.from(JSON.stringify(plan), 'utf8');
   const planPath = path.join(directory, 'plan.json');
-  await store.writeNew(planPath, bytes);
+  const stage = await UpdateStaging.create(path.join(store.root, '.prepare-'), (dir) =>
+    store.safeDirectory(dir),
+  );
+  let published = false;
+  try {
+    await stage.write('plan.json', bytes);
+    await stage.verify();
+    try {
+      await fs.lstat(directory);
+      throw new Error('The update operation already exists.');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await fs.rename(stage.directory, directory);
+    published = true;
+  } finally {
+    if (!published) await stage.discard();
+  }
   let child: ChildProcess | null = null;
   const control = preparedUpdateControl(store, operationId, parentStartedAtUtc);
   try {

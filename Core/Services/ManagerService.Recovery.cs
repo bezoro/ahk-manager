@@ -33,6 +33,8 @@ public sealed partial class ManagerService
                 .ToArray();
             bool same =
                 record.Identity is not null
+                && record.Identity.ScriptHash == record.ScriptHash
+                && record.Identity.InterpreterHash == record.InterpreterHash
                 && targets.Any(p => NativeProcessIdentity.Same(p.Identity, record.Identity));
             Outcome? resolution =
                 (
@@ -73,7 +75,7 @@ public sealed partial class ManagerService
     {
         if (!owner.Held || !owner.Trusted)
             return new(Outcome.Failed, ReasonCode.EffectOwnerUnavailable);
-        if (!journal.Ready)
+        if (!journal.Ready && !await journal.TryRecoverAsync(ct).ConfigureAwait(false))
             return new(Outcome.Failed, ReasonCode.PendingOperation);
         await ObserveCore(ct).ConfigureAwait(false);
         bool unresolved = await ResolveObservedPendingCore(ct).ConfigureAwait(false);

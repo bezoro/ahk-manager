@@ -1210,12 +1210,12 @@
   },
   {
     "name": "startup.resume",
-    "description": "Resume an existing startup continuation",
+    "description": "Review an existing startup continuation. Complete the handoff in Manager on the desktop.",
     "parameters": { "operationId": "uuid" },
     "confirmation": "Use commands.preview, then pass its confirmationToken with the same arguments.",
     "surface": "management",
     "execution": "host",
-    "effect": "destructive",
+    "effect": "read",
     "inputSchema": {
       "type": "object",
       "properties": {

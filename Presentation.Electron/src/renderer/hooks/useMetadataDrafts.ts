@@ -1,6 +1,8 @@
 import * as React from 'react';
 import type { HostState, ManagerSnapshot, OperationResult } from '../../shared/contracts.js';
 import {
+  confirmMetadataDraft,
+  mergeMetadataDraft,
   metadataOf,
   newDraft,
   rebaseRowPreference,
@@ -141,28 +143,29 @@ export function useMetadataDrafts(snapshot: ManagerSnapshot | null, operations: 
       const current = readbacks.current.size
         ? await readPreferenceState()
         : await window.ahkManager.getState();
-      if (
-        current.connection !== 'ready' ||
-        !current.snapshot ||
-        current.snapshot.readOnly ||
-        !current.snapshot.scripts.some((script) => script.id === id)
-      ) {
+      if (current.connection !== 'ready' || !current.snapshot || current.snapshot.readOnly) {
         throw new Error(text.preferenceReadbackFailed);
       }
       const draft = state.current[id];
       if (!draft) return;
-      const savedValue = JSON.stringify(draft.value);
-      const result = await window.ahkManager.saveMetadata(
-        id,
-        draft.value,
-        current.snapshot.revision,
-      );
+      const target = current.snapshot.scripts.find((script) => script.id === id);
+      if (!target) throw new Error(reason('StaleSelection'));
+      const merged = mergeMetadataDraft(draft, metadataOf(target));
+      if (!merged) {
+        showNotice({
+          title: text.metadataConflict,
+          message: text.metadataConflictHint,
+          warning: true,
+        });
+        return;
+      }
+      const result = await window.ahkManager.saveMetadata(id, merged, current.snapshot.revision);
       report(result);
       if (result.outcome === 'Confirmed')
         setDrafts((previous) => {
           const latest = previous[id];
-          if (!latest || JSON.stringify(latest.value) !== savedValue) return previous;
-          return { ...previous, [id]: { ...latest, base: savedValue, dirty: false } };
+          if (!latest || (!latest.dirty && latest !== draft)) return previous;
+          return { ...previous, [id]: confirmMetadataDraft(latest, draft, merged) };
         });
     });
   };

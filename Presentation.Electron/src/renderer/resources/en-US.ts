@@ -321,6 +321,9 @@ export const text = {
   startupInactive:
     'Automatic script startup is inactive while Manager does not start with Windows.',
   copied: 'Copied',
+  metadataConflict: 'This script changed while you were editing',
+  metadataConflictHint:
+    'A saved change and your draft edit the same field. Your draft is still here. Copy any edits you want to keep, then discard the draft to load the saved values.',
   collectionRemoved: 'The collection was removed. Your other changes were preserved.',
   transferStartup: 'Transfer startup from previous installation…',
   transferStartupHint:

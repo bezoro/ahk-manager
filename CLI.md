@@ -20,6 +20,8 @@ Live commands require an elevated administrator token in the same Windows user a
 
 `app.start` waits for the authenticated host and backend to become ready. If Manager is closed, it starts the root launcher without opening a window or running login startup. Other commands require a running host unless you explicitly pass `--start`. Use `app.show`, `app.hide`, and `app.preferences` for notification area actions. `app.quit` exits Manager while preserving independent scripts. `app.stopScriptsAndQuit` requests verified script shutdown before exit and may report partial success while Manager stays open.
 
+Use `startup.continuation` to inspect pending startup work. After a matching review, `startup.resume` returns `StartupHandoffRequired` and the offer in `result.offer`. Complete the handoff in Manager on the desktop.
+
 ## Install the latest stable release
 
 With Manager running, invoke `updates.installLatest` from an elevated shell. From a regular shell, add `--elevate` and approve the Windows UAC prompt for the same account and session. Manager checks the official stable releases and uses its normal update and restart flow. You can leave Manager in the notification area.
@@ -56,6 +58,8 @@ Each invocation writes one JSON response with the protocol, request ID, version,
 |    8 | Unknown                                         |
 
 A confirmed quit means the exact authenticated Manager process exited with code zero. For accepted updates, rollback, restart, or relocation, use the receipt and the command catalog’s read-only status and recovery commands to check the result. A timeout, disconnect, or lost reply can leave a result unknown. Inspect the current state before issuing another mutation.
+
+After the target version or data directory reopens, query `operations.get` to record its verified completion. Later queries can confirm that historical operation after another update or move while the matching source evidence is retained. When the history store is unwritable, the query can still confirm the current target. Query again while that target is active to retry recording its history. If the target changes before completion is recorded, its history can remain `Unknown`.
 
 ## Developing the CLI
 

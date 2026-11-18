@@ -634,3 +634,16 @@ test('a refused completion proof write leaves the relocated data intact and the 
   );
   assert.equal((await reopenedMove(relocated)(attempt.operationId)).outcome, 'Unknown');
 });
+
+test('empty legacy update preparations permit a move while plan-only dispatch stays unresolved', async (t) => {
+  for (const planned of [true, false]) {
+    const f = await fixture(t);
+    const dir = path.join(f.layout.updatesDirectory, 'operations', randomUUID());
+    await fs.mkdir(dir, { recursive: true });
+    if (planned) await fs.writeFile(path.join(dir, 'plan.json'), '{}');
+    const moving = prepareDataMove(f.layout, f.target, f.preparePrivate);
+    if (planned) await assert.rejects(moving, /unfinished update/);
+    else assert.equal((await moving).restartRequired, true);
+    assert.equal((await fs.stat(dir)).isDirectory(), true);
+  }
+});

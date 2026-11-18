@@ -63,9 +63,9 @@ export function useManagerActions(
     perform(() => window.ahkManager.operate(value, selection));
   };
 
-  const remove = (): void => {
-    if (selected && snapshot && !readonly && !busy && !drafts[selected.id]?.dirty) {
-      perform(() => window.ahkManager.removeScript(selected.id, snapshot.revision));
+  const remove = (id = selected?.id): void => {
+    if (id && snapshot && !readonly && !busy && !drafts[id]?.dirty) {
+      perform(() => window.ahkManager.removeScript(id, snapshot.revision));
     }
   };
 

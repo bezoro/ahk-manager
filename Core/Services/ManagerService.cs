@@ -27,7 +27,9 @@ public sealed partial class ManagerService : IManagerService
     DateTimeOffset? observedAt;
     bool loaded,
         disposed;
-    int refreshQueued;
+    readonly object refreshLock = new();
+    bool refreshRunning,
+        refreshRequested;
     public ManagerSnapshot Snapshot => Volatile.Read(ref snapshot);
     public event EventHandler<ManagerSnapshot>? Changed;
     public string DataRoot { get; }

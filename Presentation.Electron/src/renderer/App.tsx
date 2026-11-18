@@ -190,7 +190,7 @@ export function App(): React.ReactElement {
               onAction={actions.action}
               onCopy={operations.copy}
               onLocate={() => actions.fileAction('locate')}
-              onRemove={actions.remove}
+              onRemove={() => actions.remove()}
               onDelete={() => actions.fileAction('delete')}
             />
           )}
@@ -209,7 +209,7 @@ export function App(): React.ReactElement {
           onClose={() => library.setContext(null)}
           onAction={actions.action}
           onMetadata={library.showMetadata}
-          onRemove={actions.remove}
+          onRemove={() => actions.remove()}
         />
       )}
       <AppDialogs

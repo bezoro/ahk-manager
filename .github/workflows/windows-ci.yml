@@ -75,6 +75,8 @@ jobs:
     timeout-minutes: 40
     outputs:
       release-version: ${{ steps.release-metadata.outputs.version }}
+      candidate-name: ${{ steps.release-metadata.outputs.candidate-name }}
+      baseline-name: ${{ steps.release-metadata.outputs.baseline-name }}
     defaults:
       run:
         shell: pwsh
@@ -139,6 +141,9 @@ jobs:
           "AHK_RELEASE_NOTES_BASE64=$notes" >> $env:GITHUB_ENV
           "AHK_SOURCE_COMMIT=$($identity.commit)" >> $env:GITHUB_ENV
           "version=$($identity.version)" >> $env:GITHUB_OUTPUT
+          $candidatePrefix = if ($env:GITHUB_EVENT_NAME -ceq 'pull_request') { 'windows-portable-test' } else { 'windows-portable' }
+          "candidate-name=$candidatePrefix-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
+          "baseline-name=portable-regression-baseline-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
 
       - name: Check formatting and architecture boundaries
         if: ${{ !cancelled() && steps.frontend-dependencies.outcome == 'success' }}
@@ -381,7 +386,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-ci-evidence
+          name: windows-ci-evidence-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/ahk-manager-ci/*.log
             ${{ runner.temp }}/ahk-manager-ci/backend/**/*.json
@@ -415,7 +420,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-ui-evidence
+          name: windows-ui-evidence-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/ahk-manager-ci/presentation/*.png
             ${{ runner.temp }}/ahk-manager-ci/presentation/*.json
@@ -425,10 +430,10 @@ jobs:
           retention-days: 14
 
       - name: Upload the portable release family
-        if: always()
+        if: ${{ !cancelled() && steps.portable-verify.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ github.event_name == 'pull_request' && format('windows-portable-test-{0}', github.run_attempt) || 'windows-portable' }}
+          name: ${{ steps.release-metadata.outputs.candidate-name }}
           path: |
             ${{ runner.temp }}/ahk-manager-ci/portable/SHA256.txt
             ${{ runner.temp }}/ahk-manager-ci/portable/*Portable-x64.zip
@@ -440,7 +445,7 @@ jobs:
         if: ${{ !cancelled() && steps.portable-baseline.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: portable-regression-baseline-${{ github.run_attempt }}
+          name: ${{ steps.release-metadata.outputs.baseline-name }}
           path: |
             ${{ runner.temp }}/ahk-manager-ci/portable-baseline/package/*Portable-x64.zip
             ${{ runner.temp }}/ahk-manager-ci/portable-baseline/package/ahk-manager-portable-release.json
@@ -470,14 +475,14 @@ jobs:
       - name: Download the exact candidate release family
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: ${{ github.event_name == 'pull_request' && format('windows-portable-test-{0}', github.run_attempt) || 'windows-portable' }}
+          name: ${{ needs.windows-checks.outputs.candidate-name }}
           path: portable-updater-candidate
 
       - name: Download the separately packaged test baseline
         if: ${{ matrix.location != 'default' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: portable-regression-baseline-${{ github.run_attempt }}
+          name: ${{ needs.windows-checks.outputs.baseline-name }}
           path: portable-updater-baseline
 
       - name: Set up Node for published baseline policy verification
@@ -527,7 +532,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: portable-updater-${{ matrix.location }}
+          name: portable-updater-${{ matrix.location }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/portable-updater-evidence/**/*.json
             ${{ runner.temp }}/portable-updater-evidence/**/*.jsonl
@@ -568,7 +573,7 @@ jobs:
         if: ${{ steps.existing-release.outputs.published != 'true' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: windows-portable
+          name: ${{ needs.windows-checks.outputs.candidate-name }}
           path: release-artifacts
 
       - name: Publish immutable release assets

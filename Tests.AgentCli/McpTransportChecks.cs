@@ -98,6 +98,16 @@ internal static class McpTransportChecks
             "unknown protocol receives latest supported version"
         );
 
+        lines = await Exchange(
+            Invoke,
+            Initialize.Replace("2025-06-18", "2025-03-26", StringComparison.Ordinal)
+        );
+        Check(
+            lines[0].GetProperty("result").GetProperty("protocolVersion").GetString()
+                == "2025-11-25",
+            "a batching client can decide whether it supports the offered non-batching revision"
+        );
+
         calls.Clear();
         lines = await Exchange(
             Invoke,

@@ -82,17 +82,39 @@ internal static class SafeJsonFiles
         bool backup = true
     )
     {
+        await using var lease = OpenWriterLease(path);
+        var current = await ReadAsync(path, ct).ConfigureAwait(false);
+        if ((current is null ? null : Hash(current)) != expectedHash)
+            throw new ConcurrentWriteException();
+        await InstallAsync(path, bytes, current is not null, backup ? path + ".bak" : null, ct)
+            .ConfigureAwait(false);
+        return Hash(bytes);
+    }
+
+    internal static FileStream OpenWriterLease(string path)
+    {
         SafePath(path);
-        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
-        await using var lease = new FileStream(
-            path + ".write.lock",
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        string lockPath = path + ".write.lock";
+        SafePath(lockPath);
+        return new FileStream(
+            lockPath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
             FileShare.None
         );
-        var current = await ReadAsync(path, ct).ConfigureAwait(false);
-        if ((current is null ? null : Hash(current)) != expectedHash)
-            throw new ConcurrentWriteException();
+    }
+
+    // The caller holds the writer lease. File.Replace keeps the destination ACL
+    // and moves the original bytes to the backup without reading them into memory.
+    internal static async Task InstallAsync(
+        string path,
+        byte[] bytes,
+        bool replacing,
+        string? backupPath,
+        CancellationToken ct
+    )
+    {
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         bool owned = false;
         try
@@ -100,11 +122,13 @@ internal static class SafeJsonFiles
             await WriteNewAsync(temporary, bytes, ct).ConfigureAwait(false);
             owned = true;
             ct.ThrowIfCancellationRequested();
-            if (current is not null)
-                File.Replace(temporary, path, backup ? path + ".bak" : null);
+            SafePath(path);
+            if (backupPath is not null)
+                SafePath(backupPath);
+            if (replacing)
+                File.Replace(temporary, path, backupPath);
             else
                 File.Move(temporary, path);
-            return Hash(bytes);
         }
         finally
         {

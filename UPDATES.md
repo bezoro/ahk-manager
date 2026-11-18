@@ -34,7 +34,7 @@ Stable tags use `vX.Y.Z`. Conventional Commits select the highest increment sinc
 
 Previews use `X.Y.Z-test.<run>.<attempt>.<PR>`. Run and attempt order builds chronologically; the final identifier names the pull request. Calculation uses Git history and tags, excluding already-released changes shared with the PR head.
 
-The Windows build calculates its own version, notes and source commit for the current attempt. A retry does not reuse an earlier job's identity accidentally. The launcher, application, package inventory, manifest and tag must identify the same full version and source.
+The Windows build calculates its own version, notes and source commit for the current attempt. When only downstream checks are retried, they consume the successful producer's artifact names and the preview keeps that build attempt. A rerun that rebuilds the Windows package creates a new attempt identity. The launcher, application, package inventory, manifest and tag must identify the same full version and source.
 
 ## Trusted publication
 
@@ -45,6 +45,12 @@ Preview publication runs from trusted tooling on `main` after an explicitly requ
 A successful main validation can discover eligible PR builds that completed before the preview publisher became available. Their original immutable build identity is retained.
 
 Publication creates a draft, uploads and verifies the complete portable asset family, revalidates the tag/source identity, then publishes. Existing public tags and assets are never overwritten or extended. An incomplete draft resumes only when existing bytes match. A preview is marked as a prerelease and cannot replace GitHub's latest stable release.
+
+Before publishing a new Stable or Preview release, the publisher saves each verified asset name, size and SHA256 digest, including any signature, in a Git blob. A create-only tag named `portable-evidence/v<version>` retains that blob after CI artifacts expire. The record includes the source commit and version. On a retry, the publisher compares GitHub's uploaded asset digests with that record and refuses changes. Rebuilding the application is unnecessary. The evidence tag is separate from the version tag used by clients. Repository administrators can manage Git refs independently of release assets.
+
+Historical releases keep their original assets and tags. Without a digest record, the status check can recognize a GitHub-immutable release or compare an unsigned release with both original, approved files supplied to the check. A mutable historical release without complete independent evidence stops the automatic recheck. Preserve the original published bytes when investigating a historical release.
+
+A repository administrator can also enable GitHub immutable releases under **Settings → General → Releases**, or use `PUT /repos/{owner}/{repo}/immutable-releases` with repository Administration write access. This protects future published assets and their version tags. Disabling the setting affects future publications, and previously locked releases retain their protection. Existing mutable releases keep their original status. [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases) · [Repository settings API](https://docs.github.com/en/rest/repos/repos#enable-immutable-releases).
 
 ## Publisher signatures
 

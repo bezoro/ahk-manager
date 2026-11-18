@@ -12,6 +12,7 @@ Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Release-GitTags.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
 Import-Module (Join-Path $PSScriptRoot 'PortableRelease.psm1')
+Import-Module (Join-Path $PSScriptRoot 'Release-AssetEvidence.psm1')
 if (-not (Test-ReleaseVersion $Version)) { throw 'Invalid release version.' }
 $portableFiles = @()
 if (-not [string]::IsNullOrWhiteSpace($PortableArchivePath) -or -not [string]::IsNullOrWhiteSpace($PortableManifestPath)) {
@@ -57,6 +58,12 @@ foreach ($file in $portableFiles) {
     $assets = @($release.assets | Where-Object { $_.name -ceq $file.Name -and $_.state -ceq 'uploaded' })
     $digest = 'sha256:' + (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($assets.Count -ne 1 -or $assets[0].size -ne $file.Length -or $null -eq $assets[0].PSObject.Properties['digest'] -or $assets[0].digest -cne $digest) { throw 'The immutable published portable assets differ from the approved build.' }
+}
+$immutable = $release.PSObject.Properties['immutable']
+$recorded = Confirm-ReleaseAssetEvidence -Repository $Repository -Version $Version -Commit $Commit -Assets $release.assets -Request $request
+$serverProtected = $null -ne $immutable -and $immutable.Value -is [bool] -and $immutable.Value
+if (-not $recorded -and -not $serverProtected -and ($portableFiles.Count -eq 0 -or $assetNames.Contains('ahk-manager-portable-release.json.p7s'))) {
+    throw 'This mutable legacy release has no original digest record for its complete asset family. Its published assets were left untouched.'
 }
 if ((Get-ReleaseGitTagCommit -Repository $Repository -TagName $tag -Request $request) -cne $Commit.ToLowerInvariant()) { throw 'The Git tag changed during release status verification.' }
 return 'Published'

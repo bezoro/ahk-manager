@@ -12,7 +12,7 @@ $publisher = Join-Path $PSScriptRoot 'Publish-GitHubRelease.ps1'
 $publicationStatus = Join-Path $PSScriptRoot 'Get-ReleasePublicationStatus.ps1'
 $savedEnvironment = @{}
 foreach ($name in @('GITHUB_ACTIONS','GITHUB_EVENT_NAME','GITHUB_REF','GITHUB_REPOSITORY','GITHUB_SHA','GITHUB_TOKEN')) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
-$global:AhkReleaseToolingFixture = @{ Release = $null; Tag = $null; AnnotatedTags = @{}; TagCreateRaceCommit = $null; TagAfterReleaseGet = $null; PublicationRequest = $null; StatusCode = 0; FailManifestUpload = $false; InjectAssetOnFinalRead = $false; Calls = [Collections.Generic.List[string]]::new() }
+$global:AhkReleaseToolingFixture = @{ EvidenceRef = $null; EvidenceBlob = $null; Release = $null; Tag = $null; AnnotatedTags = @{}; TagCreateRaceCommit = $null; TagAfterReleaseGet = $null; PublicationRequest = $null; StatusCode = 0; FailManifestUpload = $false; InjectAssetOnFinalRead = $false; Calls = [Collections.Generic.List[string]]::new() }
 
 function Assert-Check([bool]$Value, [string]$Name) { if (-not $Value) { throw $Name }; $checks.Add($Name); Write-Host "PASS $Name" }
 function New-FixtureGitTag([string]$Sha, [string]$Type = 'commit') { return [pscustomobject]@{ ref = 'refs/tags/v1.2.99'; object = [pscustomobject]@{ type = $Type; sha = $Sha } } }
@@ -20,10 +20,14 @@ function Throw-FixtureHttpStatus([int]$StatusCode) {
     $response = [Net.Http.HttpResponseMessage]::new([Net.HttpStatusCode]$StatusCode)
     throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('Injected HTTP response.', $response)
 }
+. (Join-Path $PSScriptRoot 'test-support/ReleaseEvidenceFixture.ps1')
 function Invoke-RestMethod {
     param($Uri, $Method = 'Get', $Headers, $ContentType, $Body, $InFile)
     $fixture = $global:AhkReleaseToolingFixture
     $fixture.Calls.Add("$Method $Uri")
+    if ($Uri -match '/git/(?:ref/tags/portable-evidence/|blobs(?:/|$))' -or ($Method -ceq 'Post' -and $Uri.EndsWith('/git/refs') -and ($Body | ConvertFrom-Json).ref.StartsWith('refs/tags/portable-evidence/'))) {
+        return Invoke-ReleaseEvidenceFixture $fixture $Method $Uri $Body
+    }
     if ($Method -eq 'Get' -and $Uri -eq 'https://api.github.com/repos/bezoro/ahk-manager/git/ref/tags/v1.2.99') {
         if ($null -eq $fixture.Tag) { Throw-FixtureHttpStatus 404 }
         return $fixture.Tag
@@ -111,12 +115,12 @@ try {
     Assert-Check ($refused -and $global:AhkReleaseToolingFixture.Calls.Count -eq 0) 'pull requests cannot publish even with a supplied token'
 
     $fixture = $global:AhkReleaseToolingFixture
-    $fixture.Release = [pscustomobject]@{ tag_name = 'v1.2.99'; target_commitish = $commit; draft = $false; prerelease = $false; assets = @([pscustomobject]@{ name = [IO.Path]::GetFileName($archivePath); state = 'uploaded' }, [pscustomobject]@{ name = 'ahk-manager-portable-release.json'; state = 'uploaded' }) }
+    $fixture.Release = [pscustomobject]@{ immutable = $true; tag_name = 'v1.2.99'; target_commitish = $commit; draft = $false; prerelease = $false; assets = @([pscustomobject]@{ name = [IO.Path]::GetFileName($archivePath); state = 'uploaded' }, [pscustomobject]@{ name = 'ahk-manager-portable-release.json'; state = 'uploaded' }) }
     $completeRelease = $fixture.Release | ConvertTo-Json -Depth 5
     $fixture.Tag = New-FixtureGitTag $commit
     $before = $fixture.Calls.Count
     $status = & $publicationStatus -Repository $env:GITHUB_REPOSITORY -Version '1.2.99' -Commit $commit
-    Assert-Check ($status -ceq 'Published' -and $fixture.Calls.Count -eq $before + 3 -and $fixture.Calls[$before] -cmatch '^Get .*/git/ref/' -and $fixture.Calls[-1] -cmatch '^Get .*/git/ref/') 'published release status verifies the real Git ref identity and complete assets using only GET'
+    Assert-Check ($status -ceq 'Published' -and $fixture.Calls.Count -eq $before + 4 -and $fixture.Calls[$before] -cmatch '^Get .*/git/ref/' -and $fixture.Calls[-1] -cmatch '^Get .*/git/ref/') 'published release status verifies the real Git ref identity and complete assets using only GET'
 
     $fixture.Release.draft = $true
     $fixture.Release.assets = @()
@@ -179,7 +183,7 @@ try {
     $before = $fixture.Calls.Count
     $refused = $false
     try { & $publicationStatus -Repository $env:GITHUB_REPOSITORY -Version '1.2.99' -Commit $commit } catch { $refused = $true }
-    Assert-Check ($refused -and $fixture.Calls.Count -eq $before + 3 -and @($fixture.Calls.GetRange($before, 3) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'Git tag changes during the status query cannot produce a published no-op decision'
+    Assert-Check ($refused -and $fixture.Calls.Count -eq $before + 4 -and @($fixture.Calls.GetRange($before, 4) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'Git tag changes during the status query cannot produce a published no-op decision'
     $fixture.TagAfterReleaseGet = $null
 
     $outerTag = '1' * 40
@@ -191,7 +195,7 @@ try {
     }
     $before = $fixture.Calls.Count
     $status = & $publicationStatus -Repository $env:GITHUB_REPOSITORY -Version '1.2.99' -Commit $commit
-    Assert-Check ($status -ceq 'Published' -and $fixture.Calls.Count -eq $before + 7 -and @($fixture.Calls.GetRange($before, 7) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'annotated release tags are resolved and revalidated through bounded read-only requests'
+    Assert-Check ($status -ceq 'Published' -and $fixture.Calls.Count -eq $before + 8 -and @($fixture.Calls.GetRange($before, 8) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'annotated release tags are resolved and revalidated through bounded read-only requests'
 
     $annotationRefused = $true
     foreach ($problem in @('cycle', 'depth', 'wrong-object-type', 'wrong-annotated-sha')) {
@@ -231,6 +235,22 @@ try {
     $global:AhkReleaseToolingFixture.FailManifestUpload = $false
     & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit
     Assert-Check (-not $fixture.Release.draft -and $fixture.Release.assets.Count -eq 2 -and $fixture.Calls[-1] -match '^Patch' -and $fixture.PublicationRequest.draft -eq $false -and $fixture.PublicationRequest.make_latest -ceq 'legacy') 'draft receives both assets before publication with GitHub semantic-version latest selection'
+    $status = & $publicationStatus -Repository $env:GITHUB_REPOSITORY -Version '1.2.99' -Commit $commit
+    Assert-Check ($status -ceq 'Published') 'stable no-op verifies original digests without local build files'
+    $savedDigest = $fixture.Release.assets[0].digest
+    $fixture.Release.assets[0].digest = 'sha256:' + ('0' * 64)
+    $refused = $false
+    try { & $publicationStatus -Repository $env:GITHUB_REPOSITORY -Version '1.2.99' -Commit $commit } catch { $refused = $true }
+    Assert-Check $refused 'stable no-op rejects same-name and same-length replacement bytes'
+    $fixture.Release.assets[0].digest = $savedDigest
+    $savedRef = $fixture.EvidenceRef
+    $fixture.EvidenceRef = $null
+    $refused = $false
+    try { & $publicationStatus -Repository $env:GITHUB_REPOSITORY -Version '1.2.99' -Commit $commit } catch { $refused = $true }
+    Assert-Check $refused 'mutable historical release without original evidence fails closed'
+    $legacyStatus = & $publicationStatus -Repository $env:GITHUB_REPOSITORY -Version '1.2.99' -Commit $commit -PortableArchivePath $archivePath -PortableManifestPath $manifestPath
+    Assert-Check ($legacyStatus -ceq 'Published') 'an unsigned historical release can be verified against both original approved files'
+    $fixture.EvidenceRef = $savedRef
     $before = $global:AhkReleaseToolingFixture.Calls.Count
     & $publisher -PortableArchivePath $archivePath -PortableManifestPath $manifestPath -Repository $env:GITHUB_REPOSITORY -Commit $commit
     Assert-Check ($fixture.Calls.Count -eq $before + 3 -and @($fixture.Calls.GetRange($before, 3) | Where-Object { $_ -notmatch '^Get ' }).Count -eq 0) 'identical published release verifies its real Git ref without mutation'

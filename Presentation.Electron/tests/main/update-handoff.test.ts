@@ -317,3 +317,35 @@ test('a cancellation write failure does not invent a commit authorization', asyn
   await assert.rejects(fs.access(f.commit), { code: 'ENOENT' });
   await assert.rejects(fs.access(f.cancel), { code: 'ENOENT' });
 });
+
+test('failed initial plan publication leaves no operation and dispatches no helper', async (t) => {
+  const { store, application, contents, archivePath } = await portableFixture(t);
+  const operationId = randomUUID();
+  const rename = fs.rename;
+  t.mock.method(fs, 'rename', async (source: string, target: string) => {
+    if (path.basename(source).startsWith('.prepare-'))
+      throw Object.assign(new Error('fixture full volume'), { code: 'ENOSPC' });
+    return rename(source, target);
+  });
+  t.mock.method(childProcess, 'spawn', () => assert.fail('No helper should start'));
+  await assert.rejects(
+    prepareUpdate(
+      store,
+      operationId,
+      {
+        version: '1.6.0',
+        archivePath,
+        bytes: contents.length,
+        sha256: createHash('sha256').update(contents).digest('hex'),
+      },
+      application,
+      new Date().toISOString(),
+    ),
+    { code: 'ENOSPC' },
+  );
+  assert.deepEqual(await fs.readdir(path.join(store.root, 'operations')), []);
+  assert.equal(
+    (await fs.readdir(store.root)).some((name) => name.startsWith('.prepare-')),
+    false,
+  );
+});

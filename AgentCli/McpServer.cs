@@ -345,7 +345,8 @@ internal sealed class McpServer(
             || String(Property(client, "version")) is null
         )
             return null;
-        return requested is LatestProtocol or "2025-06-18" or "2025-03-26" or "2024-11-05"
+        // The 2025-03-26 revision requires JSON-RPC batch reception.
+        return requested is LatestProtocol or "2025-06-18" or "2024-11-05"
             ? requested
             : LatestProtocol;
     }

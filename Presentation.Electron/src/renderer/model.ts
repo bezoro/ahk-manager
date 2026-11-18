@@ -21,6 +21,8 @@ export const nextQuery = (
 ): ScriptQuery => ({ ...query, ...patch, version: (BigInt(query.version) + 1n).toString() });
 export const effectiveDescription = (script: ScriptSnapshot): string =>
   script.headerDescription?.trim() ? script.headerDescription : script.description;
+const scriptNameCollator = new Intl.Collator('en-US', { sensitivity: 'base', numeric: true });
+
 export function visibleScripts(snapshot: ManagerSnapshot, query: ScriptQuery): ScriptSnapshot[] {
   const search = query.search.trim().toLocaleLowerCase('en-US');
   const names = new Map(snapshot.collections.map((c) => [c.id, c.name]));
@@ -50,10 +52,7 @@ export function visibleScripts(snapshot: ManagerSnapshot, query: ScriptQuery): S
             : 0;
       return (
         first ||
-        a.friendlyName.localeCompare(b.friendlyName, 'en-US', {
-          sensitivity: 'base',
-          numeric: true,
-        }) ||
+        scriptNameCollator.compare(a.friendlyName, b.friendlyName) ||
         a.id.localeCompare(b.id)
       );
     });
@@ -74,6 +73,44 @@ export interface Draft {
   dirty: boolean;
   manualText: string;
 }
+// Hotkeys are ordered, so both their values and their order participate in the merge.
+function metadataChanges(base: ScriptMetadata, edited: ScriptMetadata): Partial<ScriptMetadata> {
+  return Object.fromEntries(
+    (Object.keys(base) as (keyof ScriptMetadata)[])
+      .filter((field) => JSON.stringify(base[field]) !== JSON.stringify(edited[field]))
+      .map((field) => [field, edited[field]]),
+  );
+}
+
+export function mergeMetadataDraft(draft: Draft, current: ScriptMetadata): ScriptMetadata | null {
+  const base = JSON.parse(draft.base) as ScriptMetadata;
+  const local = metadataChanges(base, draft.value);
+  const conflicts = (Object.keys(local) as (keyof ScriptMetadata)[]).some(
+    (field) =>
+      JSON.stringify(base[field]) !== JSON.stringify(current[field]) &&
+      JSON.stringify(local[field]) !== JSON.stringify(current[field]),
+  );
+  return conflicts ? null : { ...current, ...local };
+}
+
+export function confirmMetadataDraft(
+  latest: Draft,
+  submitted: Draft,
+  saved: ScriptMetadata,
+): Draft {
+  const value = { ...saved, ...metadataChanges(submitted.value, latest.value) };
+  const base = JSON.stringify(saved);
+  return {
+    value,
+    base,
+    dirty: JSON.stringify(value) !== base,
+    manualText:
+      JSON.stringify(value.manualHotkeys) === JSON.stringify(latest.value.manualHotkeys)
+        ? latest.manualText
+        : value.manualHotkeys.join('\n'),
+  };
+}
+
 export type RowPreference = 'runAtLogin' | 'runAsAdministrator';
 export function rebaseRowPreference(
   draft: Draft,
