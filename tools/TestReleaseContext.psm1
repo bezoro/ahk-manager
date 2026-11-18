@@ -33,7 +33,18 @@ function Get-TestReleaseContext {
     if ($pull.state -cne 'open' -or $null -eq $pull.head -or $null -eq $pull.head.repo -or $null -eq $pull.base -or $null -eq $pull.base.repo -or $pull.head.sha -cne $run.head_sha -or $pull.head.repo.id -ne $run.repository.id -or $pull.base.repo.id -ne $run.repository.id -or $pull.base.ref -cne 'main') { Stop-IneligibleTestRun 'The pull request changed during provenance inspection.' }
     $artifacts = & $Request "$base/actions/runs/$RunId/artifacts?per_page=100"
     if ($artifacts.total_count -gt 100) { throw 'The preview artifact listing exceeds its bound.' }
-    $artifactName = "windows-portable-test-$($run.run_attempt)"
+    $attempt = [int]$run.run_attempt
+    if ($attempt -gt 1) {
+        # A downstream-only retry reuses the latest successful producer job.
+        $jobs = & $Request "$base/actions/runs/$RunId/jobs?filter=all&per_page=100"
+        if ($jobs.total_count -gt 100 -or $jobs.jobs.Count -ne $jobs.total_count) { throw 'The preview job listing exceeds its bound or is incomplete.' }
+        $builds = @($jobs.jobs | Where-Object { $_.name -ceq 'Build and isolated tests (Windows x64)' } | Sort-Object { [int]$_.run_attempt } -Descending)
+        if (-not $builds.Count) { Stop-IneligibleTestRun 'The package producer job is missing.' }
+        $build = $builds[0]
+        if ($build.run_id -ne $RunId -or $build.head_sha -cne $run.head_sha -or $build.conclusion -cne 'success' -or $build.run_attempt -lt 1 -or $build.run_attempt -gt $attempt -or @($builds | Where-Object run_attempt -EQ $build.run_attempt).Count -ne 1) { Stop-IneligibleTestRun 'The latest package producer must be an unambiguous successful build of this source.' }
+        $attempt = [int]$build.run_attempt
+    }
+    $artifactName = "windows-portable-test-$attempt"
     $packages = @($artifacts.artifacts | Where-Object { $_.name -ceq $artifactName })
     if ($packages.Count -ne 1 -or $packages[0].expired -ne $false -or $packages[0].id -le 0 -or $packages[0].size_in_bytes -le 0 -or $packages[0].size_in_bytes -gt 2GB) { Stop-IneligibleTestRun 'Exactly one current, bounded portable package artifact is required.' }
     $artifact = $packages[0]
@@ -41,7 +52,8 @@ function Get-TestReleaseContext {
     return [pscustomobject]@{
         RunId = $RunId
         RunNumber = [int]$run.run_number
-        Attempt = [int]$run.run_attempt
+        Attempt = $attempt
+        ValidationAttempt = [int]$run.run_attempt
         PullRequest = [int]$pull.number
         Commit = $run.head_sha
         ArtifactId = [long]$artifact.id

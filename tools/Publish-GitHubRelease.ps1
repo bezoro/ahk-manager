@@ -14,6 +14,7 @@ Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Release-GitTags.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Release-Versions.psm1')
 Import-Module (Join-Path $PSScriptRoot 'PortableRelease.psm1')
+Import-Module (Join-Path $PSScriptRoot 'Release-AssetEvidence.psm1')
 $portableIdentity = Read-PortableReleaseManifest -ManifestPath $PortableManifestPath -ArchivePath $PortableArchivePath -ExpectedCommit $Commit.ToLowerInvariant()
 $manifest = $portableIdentity
 $releaseChannel = Get-ReleaseVersionChannel $manifest.Version
@@ -118,11 +119,14 @@ foreach ($file in $releaseFiles) {
     if ($assets.Count -ne 1 -or $assets[0].size -ne $file.Length -or $null -eq $assets[0].PSObject.Properties['digest'] -or $assets[0].digest -cne $digest) { throw 'An uploaded asset changed before publication; the release remains a draft.' }
 }
 if (-not $release.draft) { Write-Host "Release $tag was published concurrently; verified assets were preserved without further changes."; return }
+# These remote digests have just been checked against the original local bytes,
+# including the signature if present. Retain them independently of release assets.
+$null = Confirm-ReleaseAssetEvidence -Repository $Repository -Version $manifest.version -Commit $Commit -Assets $release.assets -Request $request -Create
 $actual = Get-ReleaseGitTagCommit -Repository $Repository -TagName $tag -Request $request
 if ($null -eq $actual -or $actual -cne $Commit) { throw 'The release tag changed before publication; the release remains a draft.' }
 if ($Channel -ceq 'test') {
     $currentContext = Get-TestReleaseContext -Repository $Repository -RunId $TestRunId -Request $readContext
-    if ($currentContext.Commit -cne $testContext.Commit -or $currentContext.Attempt -ne $testContext.Attempt -or $currentContext.ArtifactId -ne $testContext.ArtifactId -or $currentContext.ArtifactDigest -cne $testContext.ArtifactDigest) { throw 'The test run changed before publication; its release remains a draft.' }
+    if ($currentContext.Commit -cne $testContext.Commit -or $currentContext.ValidationAttempt -ne $testContext.ValidationAttempt -or $currentContext.Attempt -ne $testContext.Attempt -or $currentContext.ArtifactId -ne $testContext.ArtifactId -or $currentContext.ArtifactDigest -cne $testContext.ArtifactDigest) { throw 'The test run changed before publication; its release remains a draft.' }
 }
 $latest = if ($isPrerelease) { 'false' } else { 'legacy' }
 $published = Invoke-RestMethod -Method Patch -Uri "$base/$($release.id)" -Headers $headers -ContentType 'application/json' -Body (@{ draft = $false; prerelease = $isPrerelease; make_latest = $latest } | ConvertTo-Json)
