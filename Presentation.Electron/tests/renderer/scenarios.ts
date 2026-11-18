@@ -878,6 +878,65 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
     );
   });
   await check(
+    'focused row owns keyboard menu and catalog removal despite another selection',
+    async () => {
+      const [first, second] = host.snapshot!.scripts;
+      const grid = document.querySelector<HTMLElement>('[role="grid"]')!;
+      const row = document.getElementById('script-' + second!.id)!;
+      const name = row.querySelector<HTMLButtonElement>('.row-select')!;
+      const focusSecond = async () => {
+        selectScript(first!.id);
+        await tick();
+        name.focus();
+        assert(
+          document.activeElement === name &&
+            grid.getAttribute('aria-activedescendant') === 'script-' + first!.id,
+          'Fixture needs distinct selected and focused rows',
+        );
+      };
+      await focusSecond();
+      await window.fixtureHarness.clearCalls();
+      name.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'F10',
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await until(() => !!document.querySelector('.script-context'), 'Keyboard menu did not open');
+      const menu = document.querySelector<HTMLElement>('.script-context')!;
+      assert(
+        row.getAttribute('aria-selected') === 'true' && menu.contains(document.activeElement),
+        'Menu did not select the focused row and take focus',
+      );
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+      await tick();
+      assert(
+        document.activeElement === grid && !document.querySelector('.script-context'),
+        'Escape did not restore grid focus',
+      );
+      await focusSecond();
+      name.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }),
+      );
+      await untilCall('removeScript');
+      const requests = (await window.fixtureHarness.calls()).filter(
+        (call) => call.method === 'removeScript',
+      );
+      assert(
+        requests.length === 1 &&
+          requests[0]!.args[0] === second!.id &&
+          requests[0]!.args[1] === host.snapshot!.revision,
+        'Delete did not request confirmation for the focused script and revision',
+      );
+      selectScript(first!.id);
+      await tick();
+    },
+  );
+  await check(
     'preferences use true system option and preserve draft until explicit save',
     async () => {
       await window.fixtureHarness.clearCalls();
@@ -2535,6 +2594,77 @@ export async function runScenarios(): Promise<AssertionRecord[]> {
       await window.fixtureHarness.resetResponses();
     },
   );
+  await check('draft save merges a CLI edit and keeps a conflicting draft available', async () => {
+    const original = host.snapshot!.scripts[0]!;
+    const other = host.snapshot!.scripts[1]!;
+    const withRow = (row: ScriptSnapshot, revision: string): HostState => ({
+      ...host,
+      snapshot: { ...host.snapshot!, scripts: [row, other], revision },
+    });
+    await window.fixtureHarness.setState(host);
+    await tick();
+    selectScript(original.id);
+    await tick();
+    const panel = document.querySelector('.inspector')!;
+    const name = panel.querySelector<HTMLInputElement>('#draft-name')!;
+    const keys = panel.querySelector<HTMLTextAreaElement>('#draft-hotkeys')!;
+    edit(name, 'Local name');
+    await tick();
+    const external = {
+      ...original,
+      hotkeys: [{ ...original.hotkeys[0]!, chord: '^k', normalizedChord: '^k' }],
+    };
+    const revision = '9007199254742101';
+    await window.fixtureHarness.setState(withRow(external, revision));
+    await tick();
+    await window.fixtureHarness.clearCalls();
+    await window.fixtureHarness.setResponse('saveMetadata', { pending: true });
+    button(text.save, panel).click();
+    await untilCall('saveMetadata');
+    const write = (await window.fixtureHarness.calls()).find(
+      (call) => call.method === 'saveMetadata',
+    )!;
+    const value = write.args[1] as { friendlyName: string; manualHotkeys: string[] };
+    assert(
+      write.args[0] === original.id &&
+        write.args[2] === revision &&
+        value.friendlyName === 'Local name' &&
+        value.manualHotkeys.join() === '^k',
+      'Merged write must retain the external hotkey and latest revision',
+    );
+    const saved = { ...external, friendlyName: value.friendlyName };
+    await window.fixtureHarness.setState(withRow(saved, '9007199254742102'));
+    await window.fixtureHarness.resolveResponse('saveMetadata', {
+      value: { outcome: 'Confirmed', code: 'None', detail: null, correlationId: null },
+    });
+    await until(
+      () => keys.value === '^k' && button(text.discard, panel).disabled,
+      'Saved draft did not adopt the merged metadata',
+    );
+    edit(name, 'Second local name');
+    await tick();
+    await window.fixtureHarness.setState(
+      withRow({ ...saved, friendlyName: 'Changed by CLI' }, '9007199254742103'),
+    );
+    await tick();
+    await window.fixtureHarness.clearCalls();
+    button(text.save, panel).click();
+    await until(
+      () => document.body.innerText.includes(text.metadataConflict),
+      'Conflict notice missing',
+    );
+    assert(
+      !(await window.fixtureHarness.calls()).some((call) => call.method === 'saveMetadata') &&
+        name.value === 'Second local name' &&
+        !button(text.discard, panel).disabled,
+      'Conflicting save dispatched or discarded edits',
+    );
+    button(text.discard, panel).click();
+    await until(() => name.value === 'Changed by CLI', 'Discard did not load authoritative name');
+    await window.fixtureHarness.resetResponses();
+    await window.fixtureHarness.setState(host);
+    await tick();
+  });
   await check(
     'cancel/failure preserve preference and draft while Partial/Unknown read authority without retry',
     async () => {

@@ -47,18 +47,20 @@ export function ScriptList({
   function navigate(event: React.KeyboardEvent<HTMLTableElement>): void {
     if (event.target instanceof HTMLElement && event.target.closest('input,[role="checkbox"]'))
       return;
-    const index = rows.findIndex((row) => row.id === selectedId);
+    const focusedRow =
+      event.target instanceof HTMLElement
+        ? event.target.closest<HTMLTableRowElement>('tr[data-script-id]')
+        : null;
+    const targetId = focusedRow?.dataset.scriptId ?? selectedId;
+    const index = rows.findIndex((row) => row.id === targetId);
     let next = index;
     if (event.key === 'ArrowDown') next = Math.min(rows.length - 1, index + 1);
     else if (event.key === 'ArrowUp') next = Math.max(0, index - 1);
     else if (event.key === 'Home') next = 0;
     else if (event.key === 'End') next = rows.length - 1;
-    else if (
-      (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) &&
-      selectedId
-    ) {
-      const bounds = viewport.current?.getBoundingClientRect();
-      if (bounds) onContext(selectedId, bounds.x + 30, bounds.y + 50);
+    else if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && targetId) {
+      const bounds = (focusedRow ?? viewport.current)?.getBoundingClientRect();
+      if (bounds) onContext(targetId, bounds.x + 30, bounds.y + (focusedRow ? bounds.height : 50));
       event.preventDefault();
       return;
     } else return;
@@ -151,6 +153,7 @@ export function ScriptList({
             <tr
               key={script.id}
               id={'script-' + script.id}
+              data-script-id={script.id}
               aria-selected={selectedId === script.id}
               aria-rowindex={range.start + index + 2}
               className={'script-row ' + (selectedId === script.id ? 'selected' : '')}

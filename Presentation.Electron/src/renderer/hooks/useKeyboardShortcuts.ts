@@ -44,7 +44,13 @@ export function useKeyboardShortcuts(
         actions.add();
       } else if (event.key === 'Delete' && !editing && library.page === 'scripts') {
         event.preventDefault();
-        actions.remove();
+        const row =
+          event.target instanceof HTMLElement
+            ? event.target.closest<HTMLTableRowElement>('[role="grid"] tr[data-script-id]')
+            : null;
+        const id = row?.dataset.scriptId;
+        if (id) library.select(id);
+        actions.remove(id);
       } else if (event.key === 'Escape') library.setContext(null);
     }
     window.addEventListener('keydown', key);

@@ -12,9 +12,11 @@ import {
   brandPalette,
   changeDraft,
   changeManualDraft,
+  confirmMetadataDraft,
   defaultQuery,
   effectiveDescription,
   filterActivity,
+  mergeMetadataDraft,
   metadataOf,
   newDraft,
   nextQuery,
@@ -51,6 +53,33 @@ test('confirmed row preference rebases only its value/base, preserving dirty man
     rebased.value.runAsAdministrator,
     true,
     'later full metadata save retains row choice',
+  );
+});
+test('metadata merge preserves independent and identical edits and detects ordered hotkey conflicts', () => {
+  const original = newDraft(script('row'));
+  const edited = changeManualDraft(original, '^a\n^b\n');
+  const remote = { ...original.value, friendlyName: 'CLI edit' };
+  const merged = mergeMetadataDraft(edited, remote)!;
+  assert.deepEqual(merged, { ...remote, manualHotkeys: ['^a', '^b'] });
+  assert.deepEqual(mergeMetadataDraft(edited, merged), merged);
+  assert.equal(mergeMetadataDraft(edited, { ...remote, manualHotkeys: ['^b', '^a'] }), null);
+  const stillEditing = changeDraft(edited, { description: 'Typed during save' });
+  const confirmed = confirmMetadataDraft(stillEditing, edited, merged);
+  assert.equal(confirmed.base, JSON.stringify(merged));
+  assert.equal(confirmed.value.friendlyName, 'CLI edit');
+  assert.equal(confirmed.value.description, 'Typed during save');
+  assert.equal(confirmed.manualText, '^a\n^b\n');
+  assert.equal(confirmed.dirty, true);
+});
+test('script name ordering uses numeric base comparison then stable script id', () => {
+  const rows = [
+    script('c', { friendlyName: 'script 10' }),
+    script('b', { friendlyName: 'Script 2' }),
+    script('a', { friendlyName: 'SCRÍPT 2' }),
+  ];
+  assert.deepEqual(
+    visibleScripts(snapshot(rows), defaultQuery()).map((row) => row.id),
+    ['a', 'b', 'c'],
   );
 });
 test('clean row preferences stay clean and legacy null is changed only by an explicit chosen field', () => {
