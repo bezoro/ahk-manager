@@ -86,6 +86,7 @@ export class UpdateService {
   private publish(patch: Partial<UpdateState> = {}): UpdateState {
     this.state = { ...this.state, ...patch };
     const versions = new Map<string, UpdateRelease>();
+    const localAlternatives: UpdateRelease[] = [];
     for (const cached of this.local.filter((item) =>
       versionAllowedInChannel(item.version, this.state.channel),
     ))
@@ -101,7 +102,20 @@ export class UpdateService {
       });
     for (const release of this.remote.filter((item) =>
       versionAllowedInChannel(item.version, this.state.channel),
-    ))
+    )) {
+      const cached =
+        !release.metadataOnly &&
+        this.local.some(
+          (item) =>
+            item.version === release.version &&
+            item.sha256 === release.sha256 &&
+            item.bytes === release.bytes,
+        );
+      const local = versions.get(release.version);
+      if (local && !cached) {
+        if (local.installed) continue;
+        localAlternatives.push(local);
+      }
       versions.set(release.version, {
         id: release.id,
         version: release.version,
@@ -110,14 +124,9 @@ export class UpdateService {
         commit: release.commit || null,
         installed: release.version === this.boundary.version,
         canInstall: release.version !== this.boundary.version,
-        cached: this.local.some(
-          (item) =>
-            item.version === release.version &&
-            !release.metadataOnly &&
-            item.sha256 === release.sha256 &&
-            item.bytes === release.bytes,
-        ),
+        cached,
       });
+    }
     if (!versions.has(this.boundary.version))
       versions.set(this.boundary.version, {
         id: 'installed',
@@ -129,7 +138,7 @@ export class UpdateService {
         canInstall: false,
         cached: false,
       });
-    this.state.releases = [...versions.values()]
+    this.state.releases = [...versions.values(), ...localAlternatives]
       .sort((a, b) => compareVersions(b.version, a.version))
       .slice(0, 1000);
     const enteringTests =
