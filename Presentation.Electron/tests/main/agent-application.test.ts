@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
+import type { StartupContinuationOffer } from '../../src/shared/contracts.js';
 import type { AgentReply, AgentRequest } from '../../src/main/agent-transport.js';
 import { createCommandLog } from '../../src/main/logging/create-command-log.js';
 import type { CommandLog, CommandLogSnapshot } from '../../src/main/logging/command-log.js';
@@ -34,9 +35,14 @@ async function waitFor<T>(read: () => T | undefined | Promise<T | undefined>): P
 }
 
 interface FixturePorts {
+  startupOffer?: StartupContinuationOffer;
   savePlacement?(): Promise<void>;
   scheduleShutdown?(callback: () => void, milliseconds: number): () => void;
   captureCommands?: boolean;
+  activateDuringUpdateSetup?: boolean;
+  connectDocument?: boolean;
+  exitOnClose?: boolean;
+  refuseFirstProfile?: boolean;
   dataMoveFailure?: Error;
   createUpdates?(
     boundary: Pick<UpdateBoundary, 'preflight' | 'confirm' | 'changed'>,
@@ -81,12 +87,16 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
   let menu: Array<{ label?: string; click?: () => void }> = [];
   let dispatch: ((request: AgentRequest, alive: () => boolean) => Promise<AgentReply>) | undefined;
   let state = runningSnapshot();
+  if (ports.exitOnClose) state.settings.closeBehavior = 'Exit';
+  let backendStarts = 0;
+  let profileAttempts = 0;
   const done = { outcome: 'Confirmed', code: 'None', detail: null, correlationId: null };
   class Backend extends EventEmitter {
     authorityMode = 'Administrator';
     ready = false;
     exited = false;
     start() {
+      backendStarts++;
       this.ready = true;
     }
     async shutdown() {
@@ -95,7 +105,10 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
       events.push('backend.shutdown');
     }
     async request(action: string, data: { selection?: unknown; confirmed?: boolean }) {
+      if (action === 'initializeProfile' && ++profileAttempts === 1 && ports.refuseFirstProfile)
+        return { ...done, outcome: 'Failed', code: 'PendingOperation' };
       if (action === 'refresh' || action === 'load') return structuredClone(state);
+      if (action === 'startupContinuation' && ports.startupOffer) return ports.startupOffer;
       if (action === 'saveSettings') await ports.savePlacement?.();
       if (action === 'prepare') {
         const script = state.scripts[0]!;
@@ -125,8 +138,16 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
       return done;
     }
   }
+  type IpcHandler = (event: unknown, envelope?: unknown) => unknown;
+  const ipc = new Map<string, IpcHandler>();
+  const documentTokens: string[] = [];
+  let currentWindow: Window | undefined;
   class Window extends EventEmitter {
-    readonly webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {} });
+    readonly webContents = Object.assign(new EventEmitter(), {
+      setWindowOpenHandler() {},
+      isDestroyed: () => false,
+      mainFrame: { url: '', processId: 1, routingId: 0, isDestroyed: () => false, send() {} },
+    });
     private visible = false;
     isDestroyed() {
       return false;
@@ -144,7 +165,21 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
     getBounds() {
       return state.settings.window;
     }
-    async loadURL() {}
+    async loadURL(url: string) {
+      if (!ports.connectDocument) return;
+      this.webContents.emit('did-start-navigation', {}, url, false, true);
+      this.webContents.mainFrame = {
+        ...this.webContents.mainFrame,
+        routingId: this.webContents.mainFrame.routingId + 1,
+        url,
+      };
+      const event = { sender: this.webContents, senderFrame: this.webContents.mainFrame };
+      const connect = ipc.get('manager:connect');
+      assert.ok(connect, 'Document loaded before its IPC handlers were registered');
+      const { token } = (await connect(event)) as { token: string };
+      await ipc.get('manager:documentReady')!(event, { token, body: {} });
+      documentTokens.push(token);
+    }
     show() {
       this.visible = true;
       events.push('window.show');
@@ -194,7 +229,10 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
     electron: {
       app,
       Tray,
-      ipcMain: { handle() {}, on() {} },
+      ipcMain: {
+        handle: (name: string, handler: IpcHandler) => ipc.set(name, handler),
+        on: (name: string, handler: IpcHandler) => ipc.set(name, handler),
+      },
       clipboard: { writeText() {} },
       dialog: {
         showMessageBox: async (_window: Window, options: { type: string }) => {
@@ -235,7 +273,8 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
     './desktop/main-window.js': {
       createMainWindow: () => {
         events.push('window.create');
-        return new Window();
+        currentWindow = new Window();
+        return currentWindow;
       },
     },
     './desktop/window-diagnostics.js': { createWindowDiagnostics: () => ({ initialReady() {} }) },
@@ -279,12 +318,18 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
     './updates/application-updates.js': {
       createApplicationUpdates: async (
         boundary: Pick<UpdateBoundary, 'preflight' | 'confirm' | 'changed'>,
-      ) => ({
-        service: ports.createUpdates
-          ? await ports.createUpdates(boundary, store)
-          : { busy: false, snapshot: {} },
-        store,
-      }),
+      ) => {
+        if (ports.activateDuringUpdateSetup) {
+          app.emit('second-instance', {}, ['--foreground']);
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        return {
+          service: ports.createUpdates
+            ? await ports.createUpdates(boundary, store)
+            : { busy: false, snapshot: {} },
+          store,
+        };
+      },
     },
   };
   const esbuild = requireFixture('esbuild') as typeof import('esbuild');
@@ -389,11 +434,25 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
       throw new Error(events.join(', '));
     if (!dispatch) return;
     const status = await request('app.status');
-    return (status.result as { ready: boolean }).ready ? status : undefined;
+    const result = status.result as { ready: boolean; connection: string };
+    return (ports.refuseFirstProfile ? result.connection === 'failed' : result.ready)
+      ? status
+      : undefined;
   });
-  if (!busyLogonMarker) assert.equal(events.includes('window.create'), false);
+  if (!busyLogonMarker && !ports.activateDuringUpdateSetup)
+    assert.equal(events.includes('window.create'), false);
   return {
     events,
+    documentTokens,
+    window: () => currentWindow!,
+    backendCounts: () => ({ starts: backendStarts, profiles: profileAttempts }),
+    documentState: (token: string) => {
+      const sender = currentWindow!.webContents;
+      return ipc.get('manager:getState')!(
+        { sender, senderFrame: sender.mainFrame },
+        { token, body: {} },
+      );
+    },
     layout,
     request,
     exitLogs,
@@ -405,6 +464,52 @@ async function fixture(t: TestContext, busyLogonMarker = false, ports: FixturePo
     menu: () => menu,
   };
 }
+
+test('foreground activation during update setup waits for document IPC', async (t) => {
+  const f = await fixture(t, false, { activateDuringUpdateSetup: true, connectDocument: true });
+  await waitFor(() => f.events.find((event) => event === 'window.show'));
+  assert.equal(f.documentTokens.length, 1);
+  assert.ok(await f.documentState(f.documentTokens[0]!));
+});
+
+test('tray activation reloads a crashed renderer with a fresh document lease', async (t) => {
+  const f = await fixture(t, false, { connectDocument: true });
+  const activate = () => f.menu().find((item) => item.label === tText.tray.open)!.click!();
+  activate();
+  const first = await waitFor(() => f.documentTokens[0]);
+  await waitFor(() => f.events.find((event) => event === 'window.show'));
+  f.window().webContents.emit('render-process-gone');
+  await assert.rejects(async () => f.documentState(first), /Stale IPC document/);
+  activate();
+  activate();
+  const second = await waitFor(() => f.documentTokens[1]);
+  assert.notEqual(second, first);
+  assert.ok(await f.documentState(second));
+  await assert.rejects(async () => f.documentState(first), /Stale IPC document/);
+  assert.equal(f.documentTokens.length, 2);
+  assert.equal(f.events.filter((event) => event === 'window.create').length, 1);
+});
+
+test('retry after profile refusal initializes the original backend again', async (t) => {
+  const f = await fixture(t, false, { refuseFirstProfile: true });
+  const result = await f.request('app.retryBackend');
+  assert.equal(result.outcome, 'Confirmed', JSON.stringify(result));
+  assert.deepEqual(f.backendCounts(), { starts: 1, profiles: 2 });
+});
+
+test('closing with Exit saves placement exactly once in shutdown', async (t) => {
+  let saves = 0;
+  const f = await fixture(t, false, {
+    exitOnClose: true,
+    savePlacement: async () => {
+      saves++;
+    },
+  });
+  await f.request('app.show');
+  f.window().emit('close', { preventDefault() {} });
+  await waitFor(() => f.events.find((event) => event === 'app.quit'));
+  assert.equal(saves, 1);
+});
 
 test('windowless tray stop and exit asks for real consent before stopping through the backend', async (t) => {
   const f = await fixture(t);
@@ -732,4 +837,31 @@ test('installLatest returns a durable receipt with the wire ID and dispatches th
   assert.equal(service?.snapshot.channel, 'test');
   assert.equal(f.events.includes('script.stop'), false);
   assert.equal(f.events.includes('window.create'), false);
+});
+
+test('startup.resume returns the reviewed desktop handoff and consumes its confirmation', async (t) => {
+  const offer = {
+    operationId: randomUUID(),
+    scriptNames: ['Fixture'],
+    canResume: true,
+    reason: 'Ready',
+  };
+  const f = await fixture(t, false, { startupOffer: offer });
+  const command = 'startup.resume';
+  const args = { operationId: offer.operationId };
+  const preview = await f.request('commands.preview', { command, arguments: args });
+  assert.equal(preview.outcome, 'Confirmed');
+  const { confirmationToken, target } = preview.result as {
+    confirmationToken: string;
+    target: unknown;
+  };
+  assert.deepEqual(target, offer);
+  const response = await f.request(command, { ...args, confirmationToken });
+  assert.equal(response.outcome, 'Failed');
+  assert.equal(response.code, 'StartupHandoffRequired');
+  assert.deepEqual(response.result, { offer });
+  assert.equal(
+    (await f.request(command, { ...args, confirmationToken })).code,
+    'ConfirmationRequired',
+  );
 });
