@@ -182,6 +182,10 @@ async function assertUpdatesSettled(dataDirectory: string): Promise<void> {
     const entry = await fs.lstat(operation);
     if (!entry.isDirectory() || entry.isSymbolicLink())
       throw fail('The update recovery history could not be verified.');
+    // Earlier versions created an empty operation before writing its plan. The helper
+    // requires that plan to start. Leave any other incomplete evidence untouched.
+    assertStoragePath(operation);
+    if ((await fs.readdir(operation)).length === 0) continue;
     const outcomePath = path.join(operation, 'outcome.json');
     if (await dataDirectoryExists(outcomePath)) {
       const outcome = readStorageJson(outcomePath, 65536);

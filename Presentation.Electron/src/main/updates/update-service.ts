@@ -39,6 +39,7 @@ export interface UpdateBoundary {
   confirm(release: UpdateRelease): Promise<boolean>;
   apply(operationId: string, target: CachedPackage): Promise<void>;
   changed(state: UpdateState): void;
+  verifyPublisher?(target: CachedPackage): Promise<void>;
   recovery?(): Promise<string | null>;
 }
 export type PinnedStableUpdate = Readonly<RemoteUpdateRelease & { manifestText: string }>;
@@ -112,8 +113,9 @@ export class UpdateService {
         cached: this.local.some(
           (item) =>
             item.version === release.version &&
-            (release.metadataOnly ||
-              (item.sha256 === release.sha256 && item.bytes === release.bytes)),
+            !release.metadataOnly &&
+            item.sha256 === release.sha256 &&
+            item.bytes === release.bytes,
         ),
       });
     if (!versions.has(this.boundary.version))
@@ -208,6 +210,7 @@ export class UpdateService {
     this.publish({ phase: 'checking', error: null, progress: null, downloadCancellation: null });
     try {
       this.local = await this.boundary.store.cached();
+      this.remote = [];
       this.remote = await this.boundary.releases(this.state.channel);
       const recovery = (await this.boundary.recovery?.()) ?? null;
       return this.publish({
@@ -322,7 +325,6 @@ export class UpdateService {
     pinned?: PinnedStableUpdate,
   ): Promise<UpdateState> {
     const id = choice.id;
-    const expectedManifest = pinned?.manifestText;
     this.installing = true;
     try {
       if (!(await this.boundary.preflight(operationId, 'begin')))
@@ -344,22 +346,7 @@ export class UpdateService {
         this.publish({ progress: 50 });
       }
       let remote = pinned ?? this.remote.find((item) => item.id === id);
-      let target = this.local.find(
-        (item) =>
-          item.version === choice.version &&
-          (!remote ||
-            remote.metadataOnly ||
-            (item.sha256 === remote.sha256 && item.bytes === remote.bytes)),
-      );
-      if (target) {
-        try {
-          await this.boundary.store.verify(target, expectedManifest);
-        } catch (error) {
-          if (!remote) throw error;
-          target = undefined;
-        }
-      }
-      if (!target && remote?.metadataOnly) {
+      if (remote?.metadataOnly) {
         if (!this.boundary.resolve)
           throw new Error('Check for updates before installing this version.');
         const resolved = await this.boundary.resolve(id);
@@ -373,6 +360,21 @@ export class UpdateService {
           throw new Error("This version's identity changed. Check for updates again.");
         remote = resolved;
         this.remote = this.remote.map((item) => (item.id === id ? resolved : item));
+      }
+      const expectedManifest = remote?.manifestText;
+      let target = this.local.find(
+        (item) =>
+          item.version === choice.version &&
+          (!remote || (item.sha256 === remote.sha256 && item.bytes === remote.bytes)),
+      );
+      if (target) {
+        try {
+          await this.boundary.store.verify(target, expectedManifest);
+          await this.boundary.verifyPublisher?.(target);
+        } catch (error) {
+          if (!remote) throw error;
+          target = undefined;
+        }
       }
       if (!target) {
         if (!remote)

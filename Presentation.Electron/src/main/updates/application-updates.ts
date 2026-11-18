@@ -80,6 +80,7 @@ export async function createApplicationUpdates(
     version: app.getVersion(),
     store,
     preserveCurrent,
+    verifyPublisher: (target) => verifyCachedPortablePackageSignature(target.archivePath),
     releases: (channel) => client.releases(channel),
     stableReleases: () => new GitHubUpdateClient(fetcher, deployment).releases('stable'),
     resolve: (id) => client.resolve(id),

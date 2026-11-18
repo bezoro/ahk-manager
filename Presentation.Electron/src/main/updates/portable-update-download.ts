@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { RemoteUpdateRelease } from './github-updates.js';
@@ -33,22 +32,20 @@ export async function downloadPortableRelease(
   const deadline = AbortSignal.timeout(30 * 60 * 1000);
   const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
   signal.throwIfAborted();
-  const root = path.join(options.store.root, 'downloads');
-  await options.store.safeDirectory(root, true);
-  signal.throwIfAborted();
-  const directory = await fs.mkdtemp(path.join(root, 'portable-'));
+  const stage = await options.store.beginPortableDownload();
+  const directory = stage.directory;
   const archive = path.join(directory, 'archive.zip');
   const manifest = path.join(directory, portableManifestFile);
   const signature = path.join(directory, portableSignatureFile);
   let completed = false;
   try {
     signal.throwIfAborted();
-    await options.store.writeNew(manifest, release.manifestText);
+    await stage.write(portableManifestFile, release.manifestText);
     signal.throwIfAborted();
     if (release.signatureAssetId !== undefined) {
       const bytes = await readUpdateAsset(options.fetcher, release.signatureAssetId, 65536, signal);
       signal.throwIfAborted();
-      await options.store.writeNew(signature, bytes);
+      await stage.write(portableSignatureFile, bytes);
       signal.throwIfAborted();
     }
     // Publisher verification happens before fetching the much larger archive.
@@ -65,7 +62,7 @@ export async function downloadPortableRelease(
     let file: import('node:fs/promises').FileHandle;
     try {
       signal.throwIfAborted();
-      file = await fs.open(archive, 'wx', 0o600);
+      file = await stage.open('archive.zip');
     } catch (error) {
       await response.body!.cancel().catch(() => {});
       throw error;
